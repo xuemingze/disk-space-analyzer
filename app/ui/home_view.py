@@ -591,14 +591,21 @@ class HomeView(QWidget):
 
     def trigger_ai_auto_process(self):
         """AI 自动处理：智能生成分类规划并在确认后安全后台归档"""
+        if not self.current_scan_result or not self.current_scan_result.get("redundant_files"):
+            QMessageBox.warning(self, "提示", "请先勾选盘符并完成一次有效扫描！")
+            return
+
         table = self.get_active_table()
         checked_paths = table.get_checked_paths()
         
+        redundant_files = self.current_scan_result.get("redundant_files", [])
         target_files = []
         if checked_paths:
-            target_files = [f for f in self.current_scan_result.get("redundant_files", []) if f["path"] in checked_paths]
+            target_files = [f for f in redundant_files if f["path"] in checked_paths]
         else:
-            target_files = [f for f in self.current_scan_result.get("redundant_files", []) if f.get("is_recommended", False)]
+            target_files = [f for f in redundant_files if f.get("is_recommended", False)]
+            if not target_files:
+                target_files = redundant_files[:80]
 
         if not target_files:
             QMessageBox.warning(self, "提示", "未发现可供自动归档处理的冗余文件！")
