@@ -32,12 +32,14 @@ from app.utils.logger import app_logger
 class AIWorker(QThread):
     recommend_done = Signal(list)
     report_done = Signal(str)
+    classify_done = Signal(list)
     failed = Signal(str)
 
-    def __init__(self, action: str, data: Any, parent=None):
+    def __init__(self, action: str, data: Any, parent=None, **kwargs):
         super().__init__(parent)
         self.action = action
         self.data = data
+        self.kwargs = kwargs
 
     def run(self):
         try:
@@ -56,6 +58,13 @@ class AIWorker(QThread):
                     base_url, api_key, model, self.data
                 )
                 self.report_done.emit(report_md)
+            elif self.action == "classify":
+                dest_root = self.kwargs.get("destination_root", "D:/归档备份")
+                classified = AIService.classify_files_with_ai(
+                    base_url, api_key, model, self.data, dest_root,
+                    weights={"work_ratio": 0.6, "personal_ratio": 0.4}
+                )
+                self.classify_done.emit(classified)
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -231,10 +240,15 @@ class HomeView(QWidget):
         self.chart_widget = SpaceDistributionChartWidget()
         self.tabs.addTab(self.chart_widget, "📊 空间全景图与类型分布 (阶段一即显)")
         
-        self.redundant_table = FileDataGridWidget(is_selectable=True)
-        self.redundant_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
-        self.redundant_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
-        self.tabs.addTab(self.redundant_table, "📋 冗余与可释放文件明细 (阶段二/三)")
+        self.duplicate_table = FileDataGridWidget(is_selectable=True)
+        self.duplicate_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
+        self.duplicate_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
+        self.tabs.addTab(self.duplicate_table, "📋 重复文件明细 (哈希确认)")
+        
+        self.releasable_table = FileDataGridWidget(is_selectable=True)
+        self.releasable_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
+        self.releasable_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
+        self.tabs.addTab(self.releasable_table, "🗑️ 可释放文件明细 (规则识别)")
         
         self.top100_table = FileDataGridWidget(is_selectable=True)
         self.top100_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
@@ -372,9 +386,14 @@ class HomeView(QWidget):
             self.custom_paths_list.takeItem(self.custom_paths_list.row(curr_item))
 
     def get_active_table(self) -> FileDataGridWidget:
-        if self.tabs.currentIndex() == 2:
+        idx = self.tabs.currentIndex()
+        if idx == 1:
+            return self.duplicate_table
+        elif idx == 2:
+            return self.releasable_table
+        elif idx == 3:
             return self.top100_table
-        return self.redundant_table
+        return self.duplicate_table
 
     def open_task_manager(self):
         dlg = TaskManagerDialog(self)
@@ -508,13 +527,20 @@ class HomeView(QWidget):
             dup_waste_str=format_size(result["duplicate_wasted_bytes"]),
             dup_groups_count=result["duplicate_groups_count"]
         )
-        self.redundant_table.populate_data(result.get("redundant_files", []), result["total_bytes"])
+        all_redundant = result.get("redundant_files", [])
+        duplicate_files = [f for f in all_redundant if f.get("is_duplicate")]
+        releasable_files = [f for f in all_redundant if not f.get("is_duplicate")]
+        
+        self.duplicate_table.populate_data(duplicate_files, result["total_bytes"])
+        self.releasable_table.populate_data(releasable_files, result["total_bytes"])
 
         report_preview = AIService._generate_fallback_report(result)
         self.report_text_edit.setPlainText(report_preview)
 
-        if result.get("redundant_files"):
+        if duplicate_files:
             self.tabs.setCurrentIndex(1)
+        elif releasable_files:
+            self.tabs.setCurrentIndex(2)
 
         if self.current_task_id:
             global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
@@ -548,7 +574,8 @@ class HomeView(QWidget):
             return
         dlg = MigrationDialog(selected_paths=paths, parent=self)
         if dlg.exec():
-            self.redundant_table.remove_paths(paths)
+            self.duplicate_table.remove_paths(paths)
+            self.releasable_table.remove_paths(paths)
             self.top100_table.remove_paths(paths)
 
     def execute_migration_selected(self):
@@ -567,7 +594,8 @@ class HomeView(QWidget):
 
         llm_cfg = app_config.get("llm", default={})
         if not llm_cfg.get("api_key") or not llm_cfg.get("base_url"):
-            self.redundant_table.select_recommended_only()
+            self.duplicate_table.select_recommended_only()
+            self.releasable_table.select_recommended_only()
             QMessageBox.information(self, "智能推荐", "已根据本地安全启发式规则完成推荐勾选！")
             return
 
@@ -583,10 +611,12 @@ class HomeView(QWidget):
         self.btn_select_rec.setEnabled(True)
         self.phase_label.setText("AI 智能分析完成")
         if recommended_paths:
-            self.redundant_table.select_ai_recommended_paths(recommended_paths)
+            self.duplicate_table.select_ai_recommended_paths(recommended_paths)
+            self.releasable_table.select_ai_recommended_paths(recommended_paths)
             QMessageBox.information(self, "仅选推荐就绪", f"大模型已甄别并勾选了 {len(recommended_paths)} 个推荐清理项！\n未执行任何删除/归档，您可继续修改勾选。")
         else:
-            self.redundant_table.select_recommended_only()
+            self.duplicate_table.select_recommended_only()
+            self.releasable_table.select_recommended_only()
             QMessageBox.information(self, "智能推荐", "已根据本地安全启发式规则完成推荐勾选！")
 
     def trigger_ai_auto_process(self):
@@ -612,29 +642,33 @@ class HomeView(QWidget):
             return
 
         dest_root = self.archive_input.text().strip() or "D:/归档备份"
-        llm_cfg = app_config.get("llm", default={})
+        
+        self.btn_ai_auto.setEnabled(False)
+        self.phase_label.setText("AI 正在深度分析文件特征并生成归档规划...")
 
-        classified_results = AIService.classify_files_with_ai(
-            base_url=llm_cfg.get("base_url", ""),
-            api_key=llm_cfg.get("api_key", ""),
-            model=llm_cfg.get("model", ""),
-            file_items=target_files,
-            destination_root=dest_root,
-            weights={"work_ratio": 0.6, "personal_ratio": 0.4}
-        )
-
-        dlg = OrganizePreviewDialog(
-            classification_items=classified_results,
-            destination_root=dest_root,
-            parent=self
-        )
-        if dlg.exec():
-            processed_paths = [
-                sub["original_path"]
-                for g in classified_results
-                for sub in g.get("sub_items", [])
-            ]
-            table.remove_paths(processed_paths)
+        self.ai_worker = AIWorker("classify", target_files, destination_root=dest_root)
+        
+        def on_classify_done(classified_results):
+            self.btn_ai_auto.setEnabled(True)
+            self.phase_label.setText("AI 智能规划已就绪")
+            dlg = OrganizePreviewDialog(
+                classification_items=classified_results,
+                destination_root=dest_root,
+                parent=self
+            )
+            if dlg.exec():
+                processed_paths = [
+                    sub["original_path"]
+                    for g in classified_results
+                    for sub in g.get("sub_items", [])
+                ]
+                self.duplicate_table.remove_paths(processed_paths)
+                self.releasable_table.remove_paths(processed_paths)
+                self.top100_table.remove_paths(processed_paths)
+                
+        self.ai_worker.classify_done.connect(on_classify_done)
+        self.ai_worker.failed.connect(self.on_ai_failed)
+        self.ai_worker.start()
 
     def generate_ai_report(self):
         if not self.current_scan_result:

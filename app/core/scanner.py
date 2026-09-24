@@ -103,7 +103,8 @@ class DirectoryScanTask(BaseScanTask):
                                         
                                         finfo = {
                                             "name": entry.name, "path": entry.path, "size": f_size,
-                                            "category": category, "mtime": mtime, "ext": Path(entry.name).suffix.lower()
+                                            "category": category, "mtime": mtime, "ext": Path(entry.name).suffix.lower(),
+                                            "scan_root": root_path
                                         }
                                         
                                         if len(top_heap) < 100:
@@ -308,6 +309,7 @@ class AggregateTask(BaseScanTask):
                     redundant_list.append({
                         "name": finfo["name"], "path": fpath, "size": finfo["size"],
                         "category": finfo["category"], "ext": finfo["ext"], "mtime": finfo["mtime"],
+                        "scan_root": finfo.get("scan_root", ""),
                         "tag": tag, "reason": reason, "is_duplicate": is_duplicate,
                         "duplicate_group_id": dup_info["group_id"] if dup_info else "",
                         "is_duplicate_copy": is_duplicate_copy, "is_recommended": is_recommended,

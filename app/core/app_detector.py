@@ -478,13 +478,15 @@ class AppDetector:
                     "name": it.get("name", it_p.name),
                     "size": int(it.get("size", 0)),
                     "relative_path": str(rel_to_root),
-                    "target_path": str(target_file_path)
+                    "target_path": str(target_file_path),
+                    "scan_root": it.get("scan_root", "")
                 })
 
             group_unit = {
                 "group_id": f"GRP_{abs(hash(group_key)) % 1000000:06d}",
                 "name": root_p.name or group_key,
                 "original_root": gdata["root_path"],
+                "scan_root": items_in_group[0].get("scan_root", "") if items_in_group else "",
                 "target_root": str(target_base_dir),
                 "is_directory_group": gdata["is_directory_group"],
                 "is_symlink": is_link,

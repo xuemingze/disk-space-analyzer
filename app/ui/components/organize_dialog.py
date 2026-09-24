@@ -99,7 +99,7 @@ class OrganizePreviewDialog(QDialog):
             "目录 / 文件单元", "所属 App / 工具", "建议归档分类", "目标规划路径",
             "识别依据 / 特征", "数量 / 大小", "置信度", "安全等级"
         ])
-        self.tree.setAlternatingRowColors(True)
+        self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.itemChanged.connect(self.on_tree_item_changed)
         
@@ -164,100 +164,127 @@ class OrganizePreviewDialog(QDialog):
         layout.addLayout(btn_bar)
 
     def populate_tree(self):
-        """装填目录树结构"""
+        """装填目录树结构 (按原根路径完整层级)"""
         self._is_updating_checks = True
         self.tree.clear()
 
+        node_map = {}
+        dir_stats = {}
+
+        folder_bg = QBrush(QColor("#E3F2FD"))
+        folder_fg = QBrush(QColor("#000000"))
+        file_bg = QBrush(QColor("#FFFFFF"))
+        file_fg = QBrush(QColor("#000000"))
+
         for group in self.classification_items:
-            # 判断是否为整体目录单元
-            is_dir = group.get("is_directory_group", True)
-            group_name = group.get("name", "")
             orig_root = group.get("original_root", "")
-            target_root = group.get("target_root", "")
-            app_name = group.get("app_name", "未识别工具/待分类")
-            category = group.get("suggested_category", "未识别工具/待分类")
-            rationale = group.get("rationale", "-")
-            conf = float(group.get("confidence", 0.8))
-            risk = group.get("risk_level", "低风险")
-            require_conf = group.get("require_confirmation", False)
+            scan_root = group.get("scan_root", "")
             sub_items = group.get("sub_items", [])
-            total_size = group.get("total_size", 0)
-            file_count = group.get("file_count", len(sub_items))
-
-            # 创建父节点 (Top Level Tree Item)
-            parent_item = QTreeWidgetItem(self.tree)
-            parent_item.setFlags(parent_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
             
-            # 默认勾选策略：若不需要人工确认且置信度>=0.7，则默认勾选
+            risk = group.get("risk_level", "低风险")
+            risk_color = QColor("#10B981") if "低风险" in risk else (QColor("#F59E0B") if "中风险" in risk else QColor("#EF4444"))
+            
+            conf = float(group.get("confidence", 0.8))
+            require_conf = group.get("require_confirmation", False)
             default_checked = (not require_conf) and (conf >= 0.7) and ("低风险" in risk)
-            parent_item.setCheckState(0, Qt.Checked if default_checked else Qt.Unchecked)
 
-            # 0. 目录名称 (带图标与提示)
-            icon_prefix = "📁 " if is_dir else "📄 "
-            parent_item.setText(0, f"{icon_prefix}{group_name}")
-            parent_item.setToolTip(0, f"原根路径: {orig_root}")
-            parent_item.setData(0, Qt.UserRole, {"type": "group", "data": group})
+            from pathlib import Path
+            if not scan_root:
+                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\"
 
-            # 1. 所属 App / 工具
-            parent_item.setText(1, app_name)
-            parent_item.setForeground(1, QBrush(QColor("#38BDF8")))
-            font = parent_item.font(1)
-            font.setBold(True)
-            parent_item.setFont(1, font)
-
-            # 2. 建议归档分类
-            parent_item.setText(2, category)
-            parent_item.setForeground(2, QBrush(QColor("#A7F3D0")))
-
-            # 3. 目标规划路径
-            parent_item.setText(3, target_root)
-            parent_item.setToolTip(3, f"目标路径: {target_root}")
-
-            # 4. 依据 / 特征
-            parent_item.setText(4, rationale)
-            parent_item.setToolTip(4, rationale)
-
-            # 5. 数量 / 大小
-            size_str = f"{file_count} 项 ({format_size(total_size)})" if is_dir else format_size(total_size)
-            parent_item.setText(5, size_str)
-            parent_item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
-
-            # 6. 置信度
-            parent_item.setText(6, f"{conf * 100:.0f}%")
-            parent_item.setTextAlignment(6, Qt.AlignCenter)
-
-            # 7. 安全等级
-            parent_item.setText(7, risk)
-            parent_item.setTextAlignment(7, Qt.AlignCenter)
-            if "低风险" in risk:
-                parent_item.setForeground(7, QBrush(QColor("#10B981")))
-            elif "中风险" in risk:
-                parent_item.setForeground(7, QBrush(QColor("#F59E0B")))
-            else:
-                parent_item.setForeground(7, QBrush(QColor("#EF4444")))
-
-            # 添加子节点（展开可查每个具体文件的相对层级与目标路径）
             for sub in sub_items:
-                child_item = QTreeWidgetItem(parent_item)
-                child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable)
-                child_item.setCheckState(0, Qt.Checked if default_checked else Qt.Unchecked)
+                orig_path = sub.get("original_path", "")
+                if not orig_path: continue
+                
+                p = Path(orig_path)
+                parts = []
+                curr = p
+                
+                while str(curr) != str(curr.anchor) and str(curr) != scan_root and str(curr) != curr.parent.name:
+                    parts.append(curr)
+                    if str(curr) == scan_root or str(curr) == str(curr.parent):
+                        break
+                    curr = curr.parent
+                if str(curr) not in [str(pt) for pt in parts]:
+                    parts.append(curr)
+                
+                parts.reverse()
 
-                rel_p = sub.get("relative_path", sub.get("name", ""))
-                child_item.setText(0, f"  └ {rel_p}")
-                child_item.setToolTip(0, f"原绝对路径: {sub.get('original_path')}")
-                child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "group": group})
+                parent_item = self.tree.invisibleRootItem()
+                
+                for idx, pt in enumerate(parts):
+                    pt_str = str(pt)
+                    is_file = (idx == len(parts) - 1 and p.is_file() if p.exists() else idx == len(parts) - 1)
+                    
+                    if pt_str not in node_map:
+                        item = QTreeWidgetItem(parent_item)
+                        item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+                        item.setCheckState(0, Qt.Checked if default_checked else Qt.Unchecked)
+                        
+                        icon_prefix = "📄 " if is_file else "📁 "
+                        display_name = pt.name if pt.name else str(pt)
+                        if display_name.endswith("\") or display_name.endswith("/"):
+                            display_name = display_name[:-1]
+                        if not display_name:
+                            display_name = str(pt)
+                            
+                        item.setText(0, f"{icon_prefix}{display_name}")
+                        item.setToolTip(0, pt_str)
+                        
+                        for col in range(8):
+                            item.setBackground(col, file_bg if is_file else folder_bg)
+                            item.setForeground(col, file_fg if is_file else folder_fg)
+                        
+                        node_map[pt_str] = item
+                        if not is_file:
+                            dir_stats[pt_str] = {"size": 0, "count": 0, "group_data": None}
+                    
+                    parent_item = node_map[pt_str]
+                    
+                    if not is_file:
+                        dir_stats[pt_str]["size"] += sub.get("size", 0)
+                        dir_stats[pt_str]["count"] += 1
+                        
+                        if pt_str == orig_root:
+                            dir_stats[pt_str]["group_data"] = group
+                            parent_item.setData(0, Qt.UserRole, {"type": "group", "data": group})
+                            
+                            parent_item.setText(1, group.get("app_name", ""))
+                            font = parent_item.font(1)
+                            font.setBold(True)
+                            parent_item.setFont(1, font)
+                            
+                            parent_item.setText(2, group.get("suggested_category", ""))
+                            parent_item.setText(3, group.get("target_root", ""))
+                            parent_item.setText(4, group.get("rationale", ""))
+                            parent_item.setText(6, f"{conf * 100:.0f}%")
+                            parent_item.setTextAlignment(6, Qt.AlignCenter)
+                            
+                            parent_item.setText(7, risk)
+                            parent_item.setTextAlignment(7, Qt.AlignCenter)
+                            parent_item.setForeground(7, QBrush(risk_color))
 
-                child_item.setText(1, "-")
-                child_item.setText(2, category)
-                child_item.setText(3, sub.get("target_path", ""))
-                child_item.setToolTip(3, f"目标文件: {sub.get('target_path')}")
-                child_item.setText(4, "包含在目录单元中")
-                child_item.setText(5, format_size(sub.get("size", 0)))
-                child_item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
-                child_item.setText(6, "-")
-                child_item.setText(7, risk)
-                child_item.setForeground(7, parent_item.foreground(7))
+                    if is_file:
+                        parent_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "group": group})
+                        parent_item.setText(1, "-")
+                        parent_item.setText(2, group.get("suggested_category", ""))
+                        parent_item.setText(3, sub.get("target_path", ""))
+                        parent_item.setText(4, "包含在目录单元中")
+                        parent_item.setText(5, format_size(sub.get("size", 0)))
+                        parent_item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
+                        parent_item.setText(6, "-")
+                        parent_item.setTextAlignment(6, Qt.AlignCenter)
+                        parent_item.setText(7, risk)
+                        parent_item.setTextAlignment(7, Qt.AlignCenter)
+                        parent_item.setForeground(7, QBrush(risk_color))
 
+        for pt_str, stats in dir_stats.items():
+            item = node_map.get(pt_str)
+            if item:
+                size_str = f"{stats['count']} 项 ({format_size(stats['size'])})"
+                item.setText(5, size_str)
+                item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
+                
         self._is_updating_checks = False
         self.tree.expandToDepth(0) # 默认展开第一层顶级目录
 
@@ -305,25 +332,37 @@ class OrganizePreviewDialog(QDialog):
             check_state = Qt.Checked if bool(state) else Qt.Unchecked
 
         self._is_updating_checks = True
+        
+        def recurse_check(item):
+            item.setCheckState(0, check_state)
+            for j in range(item.childCount()):
+                recurse_check(item.child(j))
+                
         for i in range(self.tree.topLevelItemCount()):
-            top = self.tree.topLevelItem(i)
-            top.setCheckState(0, check_state)
-            for j in range(top.childCount()):
-                top.child(j).setCheckState(0, check_state)
+            recurse_check(self.tree.topLevelItem(i))
+            
         self._is_updating_checks = False
 
     def _select_safe_only(self):
         self._is_updating_checks = True
-        for i in range(self.tree.topLevelItemCount()):
-            top = self.tree.topLevelItem(i)
-            u_data = top.data(0, Qt.UserRole) or {}
-            g_info = u_data.get("data", {})
+        
+        def recurse_safe(item, parent_safe=False):
+            u_data = item.data(0, Qt.UserRole) or {}
+            g_info = u_data.get("data", {}) if u_data.get("type") == "group" else u_data.get("group", {})
             
-            is_safe = (not g_info.get("require_confirmation", False)) and (g_info.get("confidence", 0) >= 0.7) and ("低风险" in g_info.get("risk_level", ""))
-            target_state = Qt.Checked if is_safe else Qt.Unchecked
-            top.setCheckState(0, target_state)
-            for j in range(top.childCount()):
-                top.child(j).setCheckState(0, target_state)
+            is_safe = parent_safe
+            if u_data.get("type") == "group" and g_info:
+                is_safe = (not g_info.get("require_confirmation", False)) and (g_info.get("confidence", 0) >= 0.7) and ("低风险" in g_info.get("risk_level", ""))
+            
+            if u_data.get("type") == "file":
+                item.setCheckState(0, Qt.Checked if is_safe else Qt.Unchecked)
+                
+            for j in range(item.childCount()):
+                recurse_safe(item.child(j), is_safe)
+                
+        for i in range(self.tree.topLevelItemCount()):
+            recurse_safe(self.tree.topLevelItem(i))
+            
         self._is_updating_checks = False
 
     def execute_archive(self):
@@ -331,33 +370,25 @@ class OrganizePreviewDialog(QDialog):
         selected_file_items = []
         selected_groups_count = 0
 
-        for i in range(self.tree.topLevelItemCount()):
-            top = self.tree.topLevelItem(i)
-            top_state = top.checkState(0)
-            u_data = top.data(0, Qt.UserRole) or {}
-            group_data = u_data.get("data", {})
-
-            if top_state == Qt.Checked:
-                # 整个目录单元完全勾选 -> 整体归档其所有子项并保持相对路径
-                selected_groups_count += 1
-                for sub in group_data.get("sub_items", []):
+        def recurse_collect(item):
+            state = item.checkState(0)
+            u_data = item.data(0, Qt.UserRole) or {}
+            
+            if u_data.get("type") == "file" and state == Qt.Checked:
+                sub_info = u_data.get("data", {})
+                group_data = u_data.get("group", {})
+                if sub_info:
                     selected_file_items.append({
-                        "path": sub["original_path"],
-                        "target_category": group_data.get("suggested_category"),
-                        "custom_target": sub.get("target_path")
+                        "path": sub_info.get("original_path", ""),
+                        "target_category": group_data.get("suggested_category", ""),
+                        "custom_target": sub_info.get("target_path", "")
                     })
-            elif top_state == Qt.PartiallyChecked:
-                # 部分勾选 -> 仅归档被勾选的子项
-                for j in range(top.childCount()):
-                    child = top.child(j)
-                    if child.checkState(0) == Qt.Checked:
-                        c_data = child.data(0, Qt.UserRole) or {}
-                        sub_info = c_data.get("data", {})
-                        selected_file_items.append({
-                            "path": sub_info["original_path"],
-                            "target_category": group_data.get("suggested_category"),
-                            "custom_target": sub_info.get("target_path")
-                        })
+            
+            for j in range(item.childCount()):
+                recurse_collect(item.child(j))
+
+        for i in range(self.tree.topLevelItemCount()):
+            recurse_collect(self.tree.topLevelItem(i))
 
         if not selected_file_items:
             QMessageBox.warning(self, "提示", "您尚未勾选任何需要归档的目录或文件！")
