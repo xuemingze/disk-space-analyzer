@@ -751,11 +751,19 @@ class HomeView(QWidget):
             
         to_recycle = (reply == QMessageBox.Yes)
         
-        del_worker = DeleteWorker(checked_paths, to_recycle_bin=to_recycle)
-        del_worker.run()
+        self.del_worker = DeleteWorker(checked_paths, to_recycle_bin=to_recycle)
         
-        table.remove_paths(checked_paths)
-        QMessageBox.information(self, "清理完成", f"已完成 {len(checked_paths)} 个文件的清理操作！")
+        self.btn_cleanup.setEnabled(False)
+        self.phase_label.setText("🗑️ 正在后台清理文件...")
+        
+        def on_del_finished(ok, summary):
+            self.btn_cleanup.setEnabled(True)
+            self.phase_label.setText("✅ 清理任务已完成")
+            table.remove_paths(checked_paths)
+            QMessageBox.information(self, "清理完成", f"已成功清理 {summary['success_count']} 个文件！")
+            
+        self.del_worker.finished_signal.connect(on_del_finished)
+        self.del_worker.start()
 
     def export_markdown_report(self):
         if not self.current_scan_result:
