@@ -127,3 +127,63 @@ class SpaceDistributionChartWidget(QWidget):
 
         self.figure.tight_layout()
         self.canvas.draw()
+
+from PySide6.QtWidgets import QSplitter, QTextBrowser
+
+class SpacePanoramaWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.chart_widget = SpaceDistributionChartWidget()
+        
+        self.ai_report_view = QTextBrowser()
+        self.ai_report_view.setOpenExternalLinks(False)
+        self.ai_report_view.setStyleSheet("""
+            QTextBrowser {
+                background-color: #1E293B;
+                color: #CBD5E1;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 10px;
+                font-size: 13px;
+                line-height: 1.5;
+            }
+        """)
+        self.ai_report_view.setHtml("<div style='color:#94A3B8; text-align:center; padding: 20px;'>暂无有效 AI 分析数据。请先执行 AI 智能深度分析。</div>")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.chart_widget)
+        
+        ai_container = QWidget()
+        ai_layout = QVBoxLayout(ai_container)
+        ai_layout.setContentsMargins(0, 10, 0, 0)
+        
+        title = QLabel("🤖 报告中的关键观察与说明")
+        title.setStyleSheet("font-weight: bold; font-size: 14px; color: #E2E8F0;")
+        ai_layout.addWidget(title)
+        ai_layout.addWidget(self.ai_report_view)
+        
+        splitter.addWidget(ai_container)
+        splitter.setSizes([400, 300])
+        
+        layout.addWidget(splitter)
+        
+    def render_empty_chart(self):
+        self.chart_widget.render_empty_chart()
+        
+    def update_chart(self, stats):
+        self.chart_widget.update_chart(stats)
+        
+    def update_ai_insights(self, report_text: str, report_id: str, scan_task_id: str):
+        if not report_text:
+            self.ai_report_view.setHtml("<div style='color:#94A3B8; text-align:center; padding: 20px;'>暂无有效 AI 分析数据，或报告已失效。</div>")
+            return
+            
+        header = f"关联信息 - 报告 ID: {report_id} | 扫描任务 ID: {scan_task_id} | 数据来源: AI 深度分析报告\n\n"
+        self.ai_report_view.setMarkdown(header + report_text)
+        
+    def clear_ai_insights(self):
+        self.ai_report_view.setHtml("<div style='color:#94A3B8; text-align:center; padding: 20px;'>暂无有效 AI 分析数据。请重新生成报告。</div>")
+

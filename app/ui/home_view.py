@@ -20,7 +20,9 @@ from app.core.ai_service import AIService
 from app.core.reporter import ReportExporter
 from app.core.task_manager import global_task_manager, TaskType, TaskStatus
 from app.ui.components.stat_cards import StatCardsRow
-from app.ui.components.chart_widget import SpaceDistributionChartWidget
+from app.ui.components.chart_widget import SpaceDistributionChartWidget, SpacePanoramaWidget
+from app.ui.components.ai_insight_wrapper import create_ai_insight_wrapper
+from app.core.ai_parser import AIReportParser
 from app.ui.components.data_table import FileDataGridWidget
 from app.ui.components.migration_dialog import MigrationDialog
 from app.ui.components.task_manager_widget import TaskManagerDialog
@@ -261,13 +263,14 @@ class HomeView(QWidget):
         # 3. 核心内容标签页
         self.tabs = QTabWidget()
         
-        self.chart_widget = SpaceDistributionChartWidget()
+        self.chart_widget = SpacePanoramaWidget()
         self.tabs.addTab(self.chart_widget, "📊 空间全景图与类型分布 (阶段一即显)")
         
         self.duplicate_table = FileDataGridWidget(is_selectable=True)
         self.duplicate_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.duplicate_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
-        self.tabs.addTab(self.duplicate_table, "📋 重复文件明细 (哈希确认)")
+        self.duplicate_wrapper = create_ai_insight_wrapper(self.duplicate_table, "🤖 报告中的冗余分析")
+        self.tabs.addTab(self.duplicate_wrapper, "📋 重复文件明细 (哈希确认)")
         
         self.releasable_table = FileDataGridWidget(is_selectable=True)
         self.releasable_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
@@ -277,7 +280,8 @@ class HomeView(QWidget):
         self.top100_table = FileDataGridWidget(is_selectable=True)
         self.top100_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.top100_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
-        self.tabs.addTab(self.top100_table, "🏆 全局 Top 100 超大文件 (阶段一即显)")
+        self.top100_wrapper = create_ai_insight_wrapper(self.top100_table, "🤖 报告中的大文件观察")
+        self.tabs.addTab(self.top100_wrapper, "🏆 全局 Top 100 超大文件 (阶段一即显)")
         
         self.rollback_tab = RollbackWidget()
         self.tabs.addTab(self.rollback_tab, "🔙 归档快照与安全回滚 (安全审计)")
@@ -502,6 +506,9 @@ class HomeView(QWidget):
         self.progress_bar.setValue(0)
         self.phase_label.setText("正在准备启动扫描...")
         self.speed_label.setText("")
+        self.chart_widget.clear_ai_insights()
+        self.duplicate_wrapper.ai_panel.setMarkdown("**🤖 报告中的冗余分析**\n\n暂无有效 AI 分析数据。")
+        self.top100_wrapper.ai_panel.setMarkdown("**🤖 报告中的大文件观察**\n\n暂无有效 AI 分析数据。")
 
         concurrency = app_config.get("perf_options", "concurrency", default=4)
         hash_algo = app_config.get("hash_algorithm", default="md5")
@@ -611,6 +618,9 @@ class HomeView(QWidget):
         self.current_scan_result = result
         self.phase_label.setText(f"🎉 全流程扫描完成 (总耗时 {result['total_elapsed_seconds']}s)")
         self.speed_label.setText("")
+        self.chart_widget.clear_ai_insights()
+        self.duplicate_wrapper.ai_panel.setMarkdown("**🤖 报告中的冗余分析**\n\n暂无有效 AI 分析数据。")
+        self.top100_wrapper.ai_panel.setMarkdown("**🤖 报告中的大文件观察**\n\n暂无有效 AI 分析数据。")
 
         self.stat_cards.update_stats(
             total_bytes_str=format_size(result["total_bytes"]),
@@ -845,6 +855,13 @@ class HomeView(QWidget):
             cat_list = ai_response.structured_data["chart_categories"]
             cat_stats = { item["category"]: {"bytes": item["bytes"], "percent": item.get("percent", 0.0)} for item in cat_list }
             self.chart_widget.update_chart(cat_stats)
+        self.chart_widget.update_ai_insights(ai_response.final_text, ai_response.report_id, scan_id)
+        
+        sections = AIReportParser.extract_sections(ai_response.final_text)
+        self.duplicate_wrapper.ai_panel.setMarkdown("**🤖 报告中的冗余分析**\n\n" + (sections.get("redundant_files") or "报告未提供该项分析。\n") + f"\n\n*来源: 报告 ID {ai_response.report_id}*")
+        self.top100_wrapper.ai_panel.setMarkdown("**🤖 报告中的大文件观察**\n\n" + (sections.get("large_files") or "报告未提供该项分析。\n") + f"\n\n*来源: 报告 ID {ai_response.report_id}*")
+        from app.core.events import event_bus
+        event_bus.publish_report_updated(ai_response.report_id, scan_id)
             
         self.tabs.setCurrentIndex(3)
 
@@ -911,6 +928,9 @@ class HomeView(QWidget):
     def on_home_archive_finished(self, all_success: bool, summary: dict):
         self.btn_archive.setEnabled(True)
         self.speed_label.setText("")
+        self.chart_widget.clear_ai_insights()
+        self.duplicate_wrapper.ai_panel.setMarkdown("**🤖 报告中的冗余分析**\n\n暂无有效 AI 分析数据。")
+        self.top100_wrapper.ai_panel.setMarkdown("**🤖 报告中的大文件观察**\n\n暂无有效 AI 分析数据。")
         self.phase_label.setText("✅ 归档任务已完成")
         
         table = self.get_active_table()
@@ -1102,4 +1122,9 @@ class HomeView(QWidget):
         self.selection_stat_label.setText(f"增量刷新: {changed_count} 个文件已{action_name}")
 
     def on_global_report_updated(self, report_id: str, scan_task_id: str):
-        pass # 预留
+        if not self.current_scan_result:
+            return
+        if self.current_scan_result.get("report_id") != report_id:
+            self.chart_widget.clear_ai_insights()
+        self.duplicate_wrapper.ai_panel.setMarkdown("**🤖 报告中的冗余分析**\n\n暂无有效 AI 分析数据。")
+        self.top100_wrapper.ai_panel.setMarkdown("**🤖 报告中的大文件观察**\n\n暂无有效 AI 分析数据。")
