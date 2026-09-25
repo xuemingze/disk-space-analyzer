@@ -41,6 +41,17 @@ class AIWorker(QThread):
         self.action = action
         self.data = data
         self.kwargs = kwargs
+        self._is_paused = False
+
+    def pause(self):
+        self._is_paused = True
+
+    def resume(self):
+        self._is_paused = False
+
+    def cancel(self):
+        self.terminate()
+        self.wait()
 
     def run(self):
         try:
@@ -281,22 +292,49 @@ class HomeView(QWidget):
         self.gen_ai_report_btn = QPushButton("🤖 重新生成 AI 深度分析报告")
         self.gen_ai_report_btn.setProperty("class", "SecondaryButton")
         self.gen_ai_report_btn.clicked.connect(self.generate_ai_report)
+
+        self.pause_ai_report_btn = QPushButton("⏸️ 暂停")
+        self.pause_ai_report_btn.setProperty("class", "SecondaryButton")
+        self.pause_ai_report_btn.setEnabled(False)
+        self.pause_ai_report_btn.clicked.connect(self.toggle_pause_ai_report)
+
+        self.stop_ai_report_btn = QPushButton("⏹️ 停止")
+        self.stop_ai_report_btn.setProperty("class", "DangerButton")
+        self.stop_ai_report_btn.setEnabled(False)
+        self.stop_ai_report_btn.clicked.connect(self.stop_ai_report)
         
         self.export_report_btn = QPushButton("📑 导出 Markdown 报告 (.md)")
         self.export_report_btn.setProperty("class", "SuccessButton")
         self.export_report_btn.clicked.connect(self.export_markdown_report)
         
         report_top_bar.addWidget(self.gen_ai_report_btn)
+        report_top_bar.addWidget(self.pause_ai_report_btn)
+        report_top_bar.addWidget(self.stop_ai_report_btn)
         report_top_bar.addStretch()
         report_top_bar.addWidget(self.export_report_btn)
+        
+        from PySide6.QtWidgets import QSplitter
+        report_splitter = QSplitter(Qt.Vertical)
         
         self.report_text_edit = QTextEdit()
         self.report_text_edit.setReadOnly(True)
         self.report_text_edit.setPlaceholderText("扫描完成后，此处将渲染基于 AI 大模型的磁盘全景深度分析与治理报告...")
         
+        self.ai_log_edit = QTextEdit()
+        self.ai_log_edit.setReadOnly(True)
+        self.ai_log_edit.setPlaceholderText("AI 请求与执行日志将会显示在这里...")
+        self.ai_log_edit.setStyleSheet("background-color: #0F172A; color: #38BDF8; font-family: Consolas, monospace; font-size: 11px;")
+        
+        report_splitter.addWidget(self.report_text_edit)
+        report_splitter.addWidget(self.ai_log_edit)
+        report_splitter.setStretchFactor(0, 3)
+        report_splitter.setStretchFactor(1, 1)
+
         report_layout.addLayout(report_top_bar)
-        report_layout.addWidget(self.report_text_edit)
+        report_layout.addWidget(report_splitter)
         self.tabs.addTab(report_widget, "📑 AI 深度分析报告预览")
+        
+        self._setup_gui_logger()
 
         main_layout.addWidget(self.tabs, 1)
 
@@ -360,6 +398,41 @@ class HomeView(QWidget):
         bottom_layout.addWidget(self.btn_cleanup)
 
         main_layout.addWidget(bottom_bar)
+
+
+    def _setup_gui_logger(self):
+        import logging
+        from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+        class GuiLogHandler(logging.Handler):
+            def __init__(self, text_edit):
+                super().__init__()
+                self.text_edit = text_edit
+                self.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%H:%M:%S"))
+
+            def emit(self, record):
+                msg = self.format(record)
+                QMetaObject.invokeMethod(self.text_edit, "append", Qt.QueuedConnection, Q_ARG(str, msg))
+                
+        self.gui_log_handler = GuiLogHandler(self.ai_log_edit)
+        app_logger.addHandler(self.gui_log_handler)
+
+    def toggle_pause_ai_report(self):
+        if not getattr(self, "ai_worker", None) or not self.ai_worker.isRunning():
+            return
+        if self.pause_ai_report_btn.text().startswith("⏸️"):
+            self.ai_worker.pause()
+            self.pause_ai_report_btn.setText("▶️ 恢复")
+            self.report_text_edit.append("\n[已暂停]")
+        else:
+            self.ai_worker.resume()
+            self.pause_ai_report_btn.setText("⏸️ 暂停")
+            self.report_text_edit.append("\n[已恢复]")
+
+    def stop_ai_report(self):
+        if getattr(self, "ai_worker", None) and self.ai_worker.isRunning():
+            self.ai_worker.cancel()
+            self.report_text_edit.append("\n[已取消 AI 生成任务]")
+            self.on_ai_failed("已手动停止任务")
 
     def get_available_drives(self) -> List[str]:
         drives = []
@@ -740,6 +813,10 @@ class HomeView(QWidget):
             return
 
         self.gen_ai_report_btn.setEnabled(False)
+        self.pause_ai_report_btn.setEnabled(True)
+        self.pause_ai_report_btn.setText("⏸️ 暂停")
+        self.stop_ai_report_btn.setEnabled(True)
+        
         self.report_text_edit.setPlainText("🤖 分析中: 正在调用大模型生成全景深度分析与治理报告，请稍候...")
         
         self.ai_worker = AIWorker("report", self.current_scan_result)
@@ -750,6 +827,8 @@ class HomeView(QWidget):
 
     def on_ai_report_done(self, ai_response):
         self.gen_ai_report_btn.setEnabled(True)
+        self.pause_ai_report_btn.setEnabled(False)
+        self.stop_ai_report_btn.setEnabled(False)
         if self.current_task_id:
             global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
         # 添加任务关联信息
@@ -772,6 +851,8 @@ class HomeView(QWidget):
     def on_ai_failed(self, err: str):
         self.btn_select_rec.setEnabled(True)
         self.gen_ai_report_btn.setEnabled(True)
+        self.pause_ai_report_btn.setEnabled(False)
+        self.stop_ai_report_btn.setEnabled(False)
         self.phase_label.setText("AI 请求异常")
         if self.current_task_id:
             global_task_manager.set_task_status(self.current_task_id, TaskStatus.FAILED, str(err))

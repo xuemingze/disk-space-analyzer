@@ -64,7 +64,7 @@ class AIService:
             max_retries = app_config.get("llm", "max_retries", default=2)
             
         conn_timeout = app_config.get("llm", "conn_timeout", default=10)
-        read_timeout = app_config.get("llm", "read_timeout", default=90)
+        read_timeout = app_config.get("llm", "read_timeout", default=300)
         # 允许调用方覆盖超时设置
         if "timeout" not in kwargs:
             kwargs["timeout"] = (conn_timeout, read_timeout)
