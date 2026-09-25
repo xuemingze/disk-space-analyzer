@@ -296,7 +296,7 @@ class AIService:
             if not clean_str:
                 return False, "未找到 JSON 内容", None
             try:
-                parsed = json.loads(clean_str)
+                parsed = json.loads(clean_str, strict=False)
                 return True, "", parsed
             except Exception as e:
                 return False, f"JSON 解析失败: {e}", None
@@ -310,7 +310,7 @@ class AIService:
             ai_resp = cls._parse_ai_response(result.get("data", {}))
             clean_str = cls._clean_json_response(ai_resp.final_text or "")
             try:
-                parsed = json.loads(clean_str)
+                parsed = json.loads(clean_str, strict=False)
             except Exception:
                 parsed = None
             
@@ -453,7 +453,7 @@ class AIService:
                     if not clean_str:
                         return False, "未找到 JSON 内容", None
                     try:
-                        parsed = json.loads(clean_str)
+                        parsed = json.loads(clean_str, strict=False)
                         return True, "", parsed
                     except Exception as e:
                         return False, f"JSON 解析失败: {e}", None
@@ -465,7 +465,7 @@ class AIService:
                         ai_resp = cls._parse_ai_response(result.get("data", {}))
                         clean_str = cls._clean_json_response(ai_resp.final_text or "")
                         try:
-                            parsed = json.loads(clean_str)
+                            parsed = json.loads(clean_str, strict=False)
                         except Exception:
                             parsed = None
                     if parsed and "groups" in parsed and isinstance(parsed["groups"], list):
@@ -557,7 +557,7 @@ class AIService:
             if not clean_str:
                 return False, "未找到 JSON 内容", None
             try:
-                parsed = json.loads(clean_str)
+                parsed = json.loads(clean_str, strict=False)
                 return True, "", parsed
             except Exception as e:
                 return False, f"JSON 解析失败: {e}", None
@@ -572,7 +572,7 @@ class AIService:
             ai_resp = cls._parse_ai_response(result.get("data", {}))
             clean_str = cls._clean_json_response(ai_resp.final_text or "")
             try:
-                parsed = json.loads(clean_str)
+                parsed = json.loads(clean_str, strict=False)
             except Exception:
                 parsed = None
         if parsed and "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
@@ -602,6 +602,7 @@ class AIService:
             "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据与冗余文件列表，"
             "进行深度分析，并严格以 JSON 格式输出结果。\n"
             "输出 JSON 格式要求: {\"markdown_report\": \"完整的 Markdown 格式报告文本\", \"chart_categories\": [{\"category\": \"分类名称\", \"bytes\": \"占用字节数(整数)\", \"percent\": \"占比(浮点数)\"}]}\n"
+            "注意：在 JSON 中，markdown_report 字符串中的所有换行符必须严格转义为 \\n，严禁出现真实换行符。不能使用未转义的多行字符串。\n"
             "报告必须包含：\n"
             "1. 磁盘现状与健康度评估(0-100分与等级)\n"
             "2. 空间构成与类型特征\n"
@@ -652,7 +653,7 @@ class AIService:
                 return False, "未找到 JSON 内容", None
                 
             try:
-                parsed = json.loads(clean_str)
+                parsed = json.loads(clean_str, strict=False)
                 if "markdown_report" not in parsed:
                     return False, "缺少 markdown_report 字段", None
                 
@@ -676,7 +677,7 @@ class AIService:
             ai_resp = cls._parse_ai_response(result.get("data", {}))
             clean_str = cls._clean_json_response(ai_resp.final_text or "")
             try:
-                parsed = json.loads(clean_str)
+                parsed = json.loads(clean_str, strict=False)
                 if isinstance(parsed, dict) and "markdown_report" in parsed:
                     ai_resp.structured_data = parsed
                     ai_resp.final_text = parsed.get("markdown_report", "")
