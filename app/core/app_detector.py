@@ -499,7 +499,8 @@ class AppDetector:
                 "require_confirmation": require_conf,
                 "file_count": file_count,
                 "total_size": total_size,
-                "sub_items": sub_items_detail
+                "sub_items": sub_items_detail,
+                "source": "离线规则"
             }
             grouped_results.append(group_unit)
 

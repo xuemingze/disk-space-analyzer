@@ -94,10 +94,10 @@ class OrganizePreviewDialog(QDialog):
 
         # 3. 核心目录树表格 (QTreeWidget)
         self.tree = QTreeWidget()
-        self.tree.setColumnCount(8)
+        self.tree.setColumnCount(10)
         self.tree.setHeaderLabels([
             "目录 / 文件单元", "所属 App / 工具", "建议归档分类", "目标规划路径",
-            "识别依据 / 特征", "数量 / 大小", "置信度", "安全等级"
+            "识别依据 / 特征", "数量 / 大小", "置信度", "安全等级", "操作", "任务与报告关联"
         ])
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -105,17 +105,20 @@ class OrganizePreviewDialog(QDialog):
         
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.Interactive)
-        self.tree.setColumnWidth(0, 260)
+        self.tree.setColumnWidth(0, 240)
         header.setSectionResizeMode(1, QHeaderView.Interactive)
-        self.tree.setColumnWidth(1, 150)
+        self.tree.setColumnWidth(1, 140)
         header.setSectionResizeMode(2, QHeaderView.Interactive)
-        self.tree.setColumnWidth(2, 140)
+        self.tree.setColumnWidth(2, 120)
         header.setSectionResizeMode(3, QHeaderView.Interactive)
-        self.tree.setColumnWidth(3, 180)
+        self.tree.setColumnWidth(3, 160)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.Interactive)
+        self.tree.setColumnWidth(9, 120)
 
         layout.addWidget(self.tree, 1)
 
@@ -190,7 +193,7 @@ class OrganizePreviewDialog(QDialog):
 
             from pathlib import Path
             if not scan_root:
-                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\"
+                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\\"
 
             for sub in sub_items:
                 orig_path = sub.get("original_path", "")
@@ -223,7 +226,7 @@ class OrganizePreviewDialog(QDialog):
                         
                         icon_prefix = "📄 " if is_file else "📁 "
                         display_name = pt.name if pt.name else str(pt)
-                        if display_name.endswith("\") or display_name.endswith("/"):
+                        if display_name.endswith("\\") or display_name.endswith("/"):
                             display_name = display_name[:-1]
                         if not display_name:
                             display_name = str(pt)
@@ -249,9 +252,15 @@ class OrganizePreviewDialog(QDialog):
                             dir_stats[pt_str]["group_data"] = group
                             parent_item.setData(0, Qt.UserRole, {"type": "group", "data": group})
                             
-                            parent_item.setText(1, group.get("app_name", ""))
+                            app_name = group.get("app_name", "")
+                            source = group.get("source", "离线规则")
+                            parent_item.setText(1, f"{app_name} [{source}]")
                             font = parent_item.font(1)
                             font.setBold(True)
+                            if source == "AI":
+                                parent_item.setForeground(1, QBrush(QColor("#38BDF8")))
+                            else:
+                                parent_item.setForeground(1, QBrush(QColor("#94A3B8")))
                             parent_item.setFont(1, font)
                             
                             parent_item.setText(2, group.get("suggested_category", ""))
@@ -263,6 +272,13 @@ class OrganizePreviewDialog(QDialog):
                             parent_item.setText(7, risk)
                             parent_item.setTextAlignment(7, Qt.AlignCenter)
                             parent_item.setForeground(7, QBrush(risk_color))
+                            
+                            action = group.get("action", "")
+                            parent_item.setText(8, action)
+                            parent_item.setTextAlignment(8, Qt.AlignCenter)
+                            
+                            task_info = f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}"
+                            parent_item.setText(9, task_info)
 
                     if is_file:
                         parent_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "group": group})
@@ -277,6 +293,13 @@ class OrganizePreviewDialog(QDialog):
                         parent_item.setText(7, risk)
                         parent_item.setTextAlignment(7, Qt.AlignCenter)
                         parent_item.setForeground(7, QBrush(risk_color))
+                        
+                        action = group.get("action", "")
+                        parent_item.setText(8, action)
+                        parent_item.setTextAlignment(8, Qt.AlignCenter)
+                        
+                        task_info = f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}"
+                        parent_item.setText(9, task_info)
 
         for pt_str, stats in dir_stats.items():
             item = node_map.get(pt_str)
@@ -433,6 +456,7 @@ class OrganizePreviewDialog(QDialog):
         self.btn_execute.setEnabled(True)
         self.btn_cancel.setEnabled(True)
         self.last_manifest_path = summary.get("manifest_path", "")
+        self.last_summary = summary
 
         msg = (
             f"🎉 智能目录归档已全部完成！\n"

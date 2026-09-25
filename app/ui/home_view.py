@@ -65,6 +65,13 @@ class AIWorker(QThread):
                     weights={"work_ratio": 0.6, "personal_ratio": 0.4}
                 )
                 self.classify_done.emit(classified)
+            elif self.action == "process_report":
+                dest_root = self.data.get("dest_root", "D:/归档备份")
+                report_path = self.data.get("report_path", "")
+                classified = AIService.process_report_with_ai(
+                    base_url, api_key, model, report_path, dest_root
+                )
+                self.classify_done.emit(classified)
         except Exception as e:
             self.failed.emit(str(e))
 
@@ -416,13 +423,15 @@ class HomeView(QWidget):
 
         concurrency = app_config.get("perf_options", "concurrency", default=4)
         hash_algo = app_config.get("hash_algorithm", default="md5")
+        ignore_folders = app_config.get("ignore_folders", default=[])
 
         self.scan_worker = ScanWorker(
             target_paths=targets,
             enable_duplicate_detection=self.chk_dup_detect.isChecked(),
             hash_algorithm=hash_algo,
             skip_system_protected=self.chk_skip_system.isChecked(),
-            concurrency=concurrency
+            concurrency=concurrency,
+            ignore_folders=ignore_folders
         )
         
         task_item = global_task_manager.create_task(
@@ -431,6 +440,7 @@ class HomeView(QWidget):
             worker=self.scan_worker
         )
         self.current_task_id = task_item.task_id
+        self.scan_worker.task_id = self.current_task_id
 
         self.scan_worker.progress_updated.connect(self.on_scan_progress)
         self.scan_worker.phase_changed.connect(self.on_scan_phase_changed)
@@ -534,8 +544,9 @@ class HomeView(QWidget):
         self.duplicate_table.populate_data(duplicate_files, result["total_bytes"])
         self.releasable_table.populate_data(releasable_files, result["total_bytes"])
 
-        report_preview = AIService._generate_fallback_report(result)
-        self.report_text_edit.setPlainText(report_preview)
+        # 自动触发 AI 分析
+        self.report_text_edit.setPlainText("⏳ 等待分析: 正在准备后台分析任务...")
+        self.generate_ai_report(auto_triggered=True)
 
         if duplicate_files:
             self.tabs.setCurrentIndex(1)
@@ -545,13 +556,20 @@ class HomeView(QWidget):
         if self.current_task_id:
             global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
 
-        QMessageBox.information(
-            self, "扫描全量完成",
+        msg = (
             f"空间全景深度扫描已全部完成！\n"
             f"索引文件: {result['total_files']:,} 个 ({format_size(result['total_bytes'])})\n"
+        )
+        skipped = result.get("skipped_ignored_count", 0)
+        if skipped > 0:
+            msg += f"跳过忽略目录: {skipped} 个\n"
+            
+        msg += (
             f"确认重复副本: {result['duplicate_groups_count']} 组 ({format_size(result['duplicate_wasted_bytes'])})\n"
             f"可释放空间预估: {format_size(result['reclaimable_bytes'] + result['duplicate_wasted_bytes'])}"
         )
+        
+        QMessageBox.information(self, "扫描全量完成", msg)
 
     def on_scan_error(self, err_msg: str):
         self.on_scan_stopped()
@@ -620,35 +638,50 @@ class HomeView(QWidget):
             QMessageBox.information(self, "智能推荐", "已根据本地安全启发式规则完成推荐勾选！")
 
     def trigger_ai_auto_process(self):
-        """AI 自动处理：智能生成分类规划并在确认后安全后台归档"""
-        if not self.current_scan_result or not self.current_scan_result.get("redundant_files"):
-            QMessageBox.warning(self, "提示", "请先勾选盘符并完成一次有效扫描！")
+        """AI 自动处理：读取深度分析报告，让大模型根据报告建议生成执行清单"""
+        if not self.current_scan_result:
+            QMessageBox.warning(self, "提示", "请先完成一次有效扫描！")
             return
 
-        table = self.get_active_table()
-        checked_paths = table.get_checked_paths()
+        report_content = self.report_text_edit.toPlainText().strip()
+        if not report_content or not report_content.startswith("✅ 分析成功"):
+            QMessageBox.warning(self, "提示", "当前没有有效的 AI 深度分析报告！请先在报告面板等待分析完成或重试。")
+            return
+
+        # Check task ID linkage
+        scan_id = self.current_scan_result.get('task_id', 'Unknown')
+        if f"扫描任务ID: {scan_id}" not in report_content:
+            QMessageBox.warning(self, "提示", "当前显示的报告与最近一次扫描任务不匹配，请重新生成报告。")
+            return
+
+        # Export report to .md
+        import uuid
+        report_id = str(uuid.uuid4())[:8]
+        report_filename = f"AI深度分析报告_{report_id}.md"
+        export_dir = Path("D:/归档备份") if Path("D:/").exists() else Path.home() / "DiskAnalyzerArchive"
+        export_path = export_dir / report_filename
         
-        redundant_files = self.current_scan_result.get("redundant_files", [])
-        target_files = []
-        if checked_paths:
-            target_files = [f for f in redundant_files if f["path"] in checked_paths]
-        else:
-            target_files = [f for f in redundant_files if f.get("is_recommended", False)]
-            if not target_files:
-                target_files = redundant_files[:80]
-
-        if not target_files:
-            QMessageBox.warning(self, "提示", "未发现可供自动归档处理的冗余文件！")
+        try:
+            export_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(export_path, "w", encoding="utf-8") as f:
+                f.write(report_content)
+        except Exception as e:
+            QMessageBox.critical(self, "报告导出失败", f"无法导出 Markdown 报告: {e}")
             return
-
+            
         dest_root = self.archive_input.text().strip() or "D:/归档备份"
-        
-        self.btn_ai_auto.setEnabled(False)
-        self.phase_label.setText("AI 正在深度分析文件特征并生成归档规划...")
 
-        self.ai_worker = AIWorker("classify", target_files, destination_root=dest_root)
+        self.btn_ai_auto.setEnabled(False)
+        self.phase_label.setText(f"🤖 正在提交报告 (ID: {report_id}) 给 AI 提取执行计划...")
+
+        self.ai_worker = AIWorker("process_report", {"report_path": str(export_path), "report_id": report_id, "scan_id": scan_id, "dest_root": dest_root})
         
-        def on_classify_done(classified_results):
+        def on_process_report_done(classified_results):
+            # 注入报告关联信息
+            for g in classified_results:
+                g["report_id"] = report_id
+                g["task_id"] = scan_id
+                
             self.btn_ai_auto.setEnabled(True)
             self.phase_label.setText("AI 智能规划已就绪")
             dlg = OrganizePreviewDialog(
@@ -657,26 +690,40 @@ class HomeView(QWidget):
                 parent=self
             )
             if dlg.exec():
+                summary = getattr(dlg, 'last_summary', {})
                 processed_paths = [
-                    sub["original_path"]
-                    for g in classified_results
-                    for sub in g.get("sub_items", [])
+                    item["original_path"] 
+                    for item in summary.get("items", []) 
+                    if "original_path" in item
                 ]
-                self.duplicate_table.remove_paths(processed_paths)
-                self.releasable_table.remove_paths(processed_paths)
-                self.top100_table.remove_paths(processed_paths)
+                if processed_paths:
+                    self.duplicate_table.remove_paths(processed_paths)
+                    self.releasable_table.remove_paths(processed_paths)
+                    self.top100_table.remove_paths(processed_paths)
+
+        def on_process_failed(err):
+            self.btn_ai_auto.setEnabled(True)
+            self.phase_label.setText("AI 提取执行计划失败")
+            QMessageBox.critical(self, "提取失败", f"AI 读取报告并生成执行清单失败:\n{err}")
                 
-        self.ai_worker.classify_done.connect(on_classify_done)
-        self.ai_worker.failed.connect(self.on_ai_failed)
+        self.ai_worker.classify_done.connect(on_process_report_done)
+        self.ai_worker.failed.connect(on_process_failed)
         self.ai_worker.start()
 
-    def generate_ai_report(self):
+    def generate_ai_report(self, auto_triggered=False):
         if not self.current_scan_result:
-            QMessageBox.warning(self, "提示", "请先执行扫描！")
+            if not auto_triggered:
+                QMessageBox.warning(self, "提示", "请先执行扫描！")
+            return
+
+        # Check AI config
+        llm_cfg = app_config.get("llm", default={})
+        if not (llm_cfg.get("api_key") and llm_cfg.get("base_url") and llm_cfg.get("model")):
+            self.report_text_edit.setPlainText("⚠️ AI 不可用\n\n大模型未正确配置，无法自动生成深度分析报告。\n请在设置中配置 API Key 后，点击上方“重新生成 AI 深度分析报告”进行重试。")
             return
 
         self.gen_ai_report_btn.setEnabled(False)
-        self.report_text_edit.setPlainText("🤖 正在调用大模型生成全景深度分析与治理报告，请稍候...")
+        self.report_text_edit.setPlainText("🤖 分析中: 正在调用大模型生成全景深度分析与治理报告，请稍候...")
         
         self.ai_worker = AIWorker("report", self.current_scan_result)
         self.ai_worker.report_done.connect(self.on_ai_report_done)
@@ -685,14 +732,17 @@ class HomeView(QWidget):
 
     def on_ai_report_done(self, report_md: str):
         self.gen_ai_report_btn.setEnabled(True)
-        self.report_text_edit.setPlainText(report_md)
+        # 添加任务关联信息
+        scan_id = self.current_scan_result.get('task_id', 'Unknown')
+        report_text = f"✅ 分析成功\n扫描任务ID: {scan_id}\n生成时间: {self.current_scan_result.get('timestamp', 'N/A')}\n\n" + report_md
+        self.report_text_edit.setPlainText(report_text)
         self.tabs.setCurrentIndex(3)
 
     def on_ai_failed(self, err: str):
         self.btn_select_rec.setEnabled(True)
         self.gen_ai_report_btn.setEnabled(True)
         self.phase_label.setText("AI 请求异常")
-        QMessageBox.warning(self, "AI 接口请求异常", f"调用大模型失败: {err}\n已自动切换为本地分析模式。")
+        self.report_text_edit.setPlainText(f"❌ 请求失败或响应解析失败\n\n调用大模型失败: {err}\n\n请检查网络连接或 API Key 设置，并点击上方“重新生成 AI 深度分析报告”重试。")
 
     def execute_archive_selected_async(self):
         """一键快速归档 (完全在后台 Worker 中执行，杜绝主线程卡死)"""

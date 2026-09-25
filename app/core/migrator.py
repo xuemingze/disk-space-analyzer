@@ -112,33 +112,66 @@ class AppFileMigratorWorker(QThread):
                         if f.lower().endswith(".lnk"):
                             found_links.append(os.path.join(r, f))
 
+        source_mappings = {}
         for src in source_paths:
-            src_lower = src.lower()
-            for lnk in found_links:
-                try:
-                    # 使用轻量级 powershell 获取 target
-                    # 为提高速度，批量检测或过滤
+            base_name = os.path.basename(src)
+            target_file = dest_path / base_name
+            source_mappings[src.lower()] = (src, str(target_file))
+
+        link_targets = {}
+        if found_links:
+            ps_script = f"""
+$wsh = New-Object -ComObject WScript.Shell
+$links = @(
+{', '.join([f"'{p.replace('`', '``').replace(chr(39), chr(39)+chr(39))}'" for p in found_links])}
+)
+foreach ($lnk in $links) {{
+    try {{
+        if (Test-Path $lnk) {{
+            $sc = $wsh.CreateShortcut($lnk)
+            Write-Output ($lnk + "|" + $sc.TargetPath)
+        }}
+    }} catch {{}}
+}}
+"""
+            try:
+                import subprocess
+                res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True)
+                for line in res.stdout.splitlines():
+                    if "|" in line:
+                        lnk_path, target_path = line.split("|", 1)
+                        if lnk_path and target_path:
+                            link_targets[lnk_path] = target_path
+            except Exception:
+                pass
+
+        for lnk, target in link_targets.items():
+            target_lower = target.lower()
+            for src_lower, (src_orig, dest_orig) in source_mappings.items():
+                if target_lower == src_lower or target_lower.startswith(src_lower + "\\"):
+                    rel_path = target[len(src_orig):].lstrip("\\/")
+                    new_target = os.path.join(dest_orig, rel_path) if rel_path else dest_orig
                     audit_result["shortcuts"].append({
-                        "source": src,
+                        "source": src_orig,
                         "shortcut_path": lnk,
                         "name": os.path.basename(lnk),
+                        "original_target": target,
+                        "new_target": new_target,
                         "safe_to_update": True
                     })
-                except Exception:
-                    pass
 
         # 截取最多 50 个主要快捷方式
         audit_result["shortcuts"] = audit_result["shortcuts"][:50]
 
         # 4. 扫描注册表项
-        for src in source_paths:
-            reg_items = cls._find_registry_references(src)
+        for src_lower, (src_orig, dest_orig) in source_mappings.items():
+            reg_items = cls._find_registry_references(src_orig, dest_orig)
             audit_result["registry_items"].extend(reg_items)
 
         return audit_result
 
     @classmethod
-    def _find_registry_references(cls, target_path: str) -> List[Dict[str, Any]]:
+    def _find_registry_references(cls, target_path: str, dest_path: str) -> List[Dict[str, Any]]:
         """检索注册表中包含 target_path 的键值"""
         results = []
         target_lower = target_path.lower()
@@ -157,8 +190,20 @@ class AppFileMigratorWorker(QThread):
                 cls._recurse_reg_search(hkey_root, sub_path, root_name, target_lower, results, max_depth=3)
             except Exception:
                 pass
+                
+        for reg in results:
+            val = reg["value_data"]
+            idx = val.lower().find(target_lower)
+            if idx != -1:
+                orig_substr = val[idx:idx+len(target_path)]
+                reg["matched_path"] = orig_substr
+                reg["new_target"] = val[:idx] + dest_path + val[idx+len(target_path):]
+            else:
+                reg["matched_path"] = val
+                reg["new_target"] = dest_path
 
         return results
+
 
     @classmethod
     def _recurse_reg_search(cls, hkey_root, sub_path: str, root_name: str, target_lower: str, results: list, max_depth: int):
@@ -311,6 +356,20 @@ class AppFileMigratorWorker(QThread):
                 summary["failed_count"] += 1
                 summary["errors"].append({"path": src, "error": str(e)})
                 self.log_signal.emit(f"❌ 迁移失败: {str(e)}", "error")
+                
+                self.log_signal.emit("⚠️ 遇到错误，开始执行自动回滚以恢复系统状态...", "warn")
+                try:
+                    with open(manifest_file, "w", encoding="utf-8") as f:
+                        import json
+                        json.dump(manifest, f, indent=2, ensure_ascii=False)
+                    rb_success, rb_msg = self.rollback_manifest(str(manifest_file))
+                    if rb_success:
+                        self.log_signal.emit("✅ 自动回滚已执行", "success")
+                    else:
+                        self.log_signal.emit(f"❌ 自动回滚未能完全成功: {rb_msg}", "error")
+                except Exception as rb_e:
+                    self.log_signal.emit(f"❌ 自动回滚异常: {rb_e}", "error")
+                break
 
         # 保存回滚 Manifest
         try:
@@ -327,22 +386,7 @@ class AppFileMigratorWorker(QThread):
         self.finished_signal.emit(summary["failed_count"] == 0, summary)
 
     def _sync_shortcuts_with_backup(self, old_path: str, new_path: str, backup_list: list) -> int:
-        shortcut_dirs = [
-            os.path.join(os.environ.get("USERPROFILE", ""), "Desktop"),
-            os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "Desktop"),
-            os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs"),
-            os.path.join(os.environ.get("ALLUSERSPROFILE", r"C:\ProgramData"), r"Microsoft\Windows\Start Menu\Programs")
-        ]
-
-        found_links = []
-        for sdir in shortcut_dirs:
-            if os.path.exists(sdir):
-                for r, _, files in os.walk(sdir):
-                    for f in files:
-                        if f.lower().endswith(".lnk"):
-                            found_links.append(os.path.join(r, f))
-
-        if not found_links:
+        if not self.selected_shortcuts:
             return 0
 
         old_p_esc = old_path.replace("'", "''").replace('"', '`"').lower()
@@ -354,7 +398,7 @@ class AppFileMigratorWorker(QThread):
 $wsh = New-Object -ComObject WScript.Shell
 $updated = 0
 $links = @(
-{', '.join([f"'{p.replace('`', '``').replace('\'', '\'\'')}'" for p in found_links])}
+{', '.join([f"'{p.replace('`', '``').replace(chr(39), chr(39)+chr(39))}'" for p in self.selected_shortcuts])}
 )
 
 foreach ($lnk in $links) {{
@@ -379,87 +423,71 @@ foreach ($lnk in $links) {{
 Write-Output "TOTAL_FIXED: $updated"
 """
         try:
-            res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True)
+            import subprocess
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_script], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
             for line in res.stdout.splitlines():
                 if line.startswith("BACKUP_LNK|"):
                     parts = line.split("|")
                     if len(parts) >= 4:
                         backup_list.append({
-                            "shortcut_path": parts[1],
+                            "shortcut": parts[1],
                             "original_target": parts[2],
                             "original_working_dir": parts[3]
                         })
-                        updated_count += 1
+                elif line.startswith("TOTAL_FIXED:"):
+                    updated_count = int(line.split(":")[1].strip())
         except Exception as e:
-            app_logger.error(f"快捷方式同步异常: {e}")
-
+            pass
+            
         return updated_count
 
     def _sync_registry_with_backup(self, old_path: str, new_path: str, backup_list: list) -> int:
-        old_lower = old_path.lower()
+        if not self.selected_reg_keys:
+            return 0
+            
         updated_count = 0
+        old_lower = old_path.lower()
+        
+        import winreg
+        reg_roots_map = {
+            "HKCU": winreg.HKEY_CURRENT_USER,
+            "HKCU_ENV": winreg.HKEY_CURRENT_USER,
+            "HKCU_UNINSTALL": winreg.HKEY_CURRENT_USER,
+            "HKCU_APPPATHS": winreg.HKEY_CURRENT_USER,
+            "HKLM_APPPATHS": winreg.HKEY_LOCAL_MACHINE,
+            "HKLM_UNINSTALL": winreg.HKEY_LOCAL_MACHINE,
+            "HKLM": winreg.HKEY_LOCAL_MACHINE,
+        }
 
-        reg_roots = [
-            (winreg.HKEY_CURRENT_USER, r"Software", "HKCU"),
-            (winreg.HKEY_CURRENT_USER, r"Environment", "HKCU_ENV"),
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Uninstall", "HKCU_UNINSTALL"),
-            (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\App Paths", "HKCU_APPPATHS"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\App Paths", "HKLM_APPPATHS"),
-            (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\Uninstall", "HKLM_UNINSTALL")
-        ]
-
-        for hkey_root, sub_path, root_name in reg_roots:
+        for reg in self.selected_reg_keys:
+            root_name = reg["root"]
+            sub_path = reg["key_path"]
+            v_name = reg["value_name"]
+            
+            hkey_root = reg_roots_map.get(root_name, winreg.HKEY_CURRENT_USER)
+            
             try:
-                count = self._recurse_reg_update(hkey_root, sub_path, root_name, old_path, new_path, backup_list, max_depth=3)
-                updated_count += count
-            except Exception:
+                with winreg.OpenKey(hkey_root, sub_path, 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
+                    v_data, v_type = winreg.QueryValueEx(key, v_name)
+                    if v_type in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) and isinstance(v_data, str):
+                        if old_lower in v_data.lower():
+                            backup_list.append({
+                                "root": root_name,
+                                "key_path": sub_path,
+                                "value_name": v_name,
+                                "original_data": v_data,
+                                "value_type": v_type
+                            })
+                            new_data = v_data.replace(old_path, new_path)
+                            winreg.SetValueEx(key, v_name, 0, v_type, new_data)
+                            updated_count += 1
+            except Exception as e:
                 pass
-
+                
         return updated_count
 
     def _recurse_reg_update(self, hkey_root, sub_path: str, root_name: str, old_str: str, new_str: str, backup_list: list, max_depth: int) -> int:
-        if max_depth <= 0:
-            return 0
-
-        updated = 0
-        old_lower = old_str.lower()
-
-        try:
-            with winreg.OpenKey(hkey_root, sub_path, 0, winreg.KEY_READ | winreg.KEY_WRITE) as key:
-                info = winreg.QueryInfoKey(key)
-                num_values = info[1]
-                num_subkeys = info[0]
-
-                for i in range(num_values):
-                    try:
-                        v_name, v_data, v_type = winreg.EnumValue(key, i)
-                        if v_type in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) and isinstance(v_data, str):
-                            if old_lower in v_data.lower():
-                                # 备份原值
-                                backup_list.append({
-                                    "root": root_name,
-                                    "key_path": sub_path,
-                                    "value_name": v_name,
-                                    "original_data": v_data,
-                                    "value_type": v_type
-                                })
-                                new_data = v_data.replace(old_str, new_str)
-                                winreg.SetValueEx(key, v_name, 0, v_type, new_data)
-                                updated += 1
-                    except Exception:
-                        pass
-
-                for j in range(num_subkeys):
-                    try:
-                        subkey_name = winreg.EnumKey(key, j)
-                        child_path = f"{sub_path}\\{subkey_name}"
-                        updated += self._recurse_reg_update(hkey_root, child_path, root_name, old_str, new_str, backup_list, max_depth - 1)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        return updated
+        return 0
 
     @classmethod
     def rollback_manifest(cls, manifest_path: str) -> Tuple[bool, str]:

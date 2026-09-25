@@ -14,11 +14,6 @@ from app.utils.logger import app_logger
 
 
 def main():
-    # 启用高 DPI 适配
-    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
     app.setApplicationName("空间全景深度分析与冗余文件扫描")

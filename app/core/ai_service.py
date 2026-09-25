@@ -21,28 +21,96 @@ class AIService:
     """
 
     @staticmethod
-    def _normalize_base_url(base_url: str) -> str:
+    def _normalize_base_url(base_url: str, is_models_endpoint: bool = False) -> str:
         url = base_url.strip().rstrip("/")
         if not url.startswith("http://") and not url.startswith("https://"):
             url = "https://" + url
-        return url
+            
+        if url.endswith("/v1/chat/completions"):
+            url = url[:-17]  # len("/chat/completions") == 17
+        elif url.endswith("/v1/models"):
+            url = url[:-7]   # len("/models") == 7
+        elif not url.endswith("/v1"):
+            url = url + "/v1"
+                
+        if is_models_endpoint:
+            return url + "/models"
+        return url + "/chat/completions"
+
+    @staticmethod
+    def _execute_with_retry(method: str, url: str, kwargs: dict, max_retries: int = None, task_desc: str = ""):
+        import time
+        import uuid
+        import requests
+        from app.config import app_config
+        
+        if max_retries is None:
+            max_retries = app_config.get("llm", "max_retries", default=2)
+            
+        conn_timeout = app_config.get("llm", "conn_timeout", default=10)
+        read_timeout = app_config.get("llm", "read_timeout", default=90)
+        # 允许调用方覆盖超时设置
+        if "timeout" not in kwargs:
+            kwargs["timeout"] = (conn_timeout, read_timeout)
+        
+        task_id = str(uuid.uuid4())[:8]
+        model_name = kwargs.get('json', {}).get('model', 'N/A')
+        app_logger.info(f"[AI-TASK-{task_id}] {task_desc}发起 {method.upper()} 请求: {url} | Model: {model_name} | Timeout: {conn_timeout}s/{read_timeout}s")
+        
+        last_err = None
+        for attempt in range(max_retries + 1):
+            start_time = time.time()
+            try:
+                if method.lower() == "get":
+                    resp = requests.get(url, **kwargs)
+                else:
+                    resp = requests.post(url, **kwargs)
+                    
+                elapsed = time.time() - start_time
+                app_logger.info(f"[AI-TASK-{task_id}] 尝试 {attempt+1}/{max_retries+1} 耗时: {elapsed:.2f}s, HTTP 状态: {resp.status_code}")
+                
+                if resp.status_code == 200:
+                    return True, {"data": resp.json(), "task_id": task_id, "elapsed": elapsed}
+                elif resp.status_code in (400, 401, 403, 404, 422):
+                    last_err = f"不可重试错误 (HTTP {resp.status_code}): {resp.text[:200]}"
+                    break # Don't retry
+                elif resp.status_code == 429:
+                    last_err = f"触发服务端限流 (HTTP 429)"
+                else:
+                    last_err = f"服务端异常响应 (HTTP {resp.status_code}): {resp.text[:200]}"
+                    
+            except requests.exceptions.ConnectTimeout:
+                elapsed = time.time() - start_time
+                last_err = f"连接超时 (耗时 > {elapsed:.2f}s)"
+            except requests.exceptions.ReadTimeout:
+                elapsed = time.time() - start_time
+                last_err = f"读取响应超时 (耗时 > {elapsed:.2f}s)"
+            except requests.exceptions.RequestException as e:
+                last_err = f"网络请求异常: {str(e)}"
+            except Exception as e:
+                last_err = str(e)
+                
+            if attempt < max_retries:
+                backoff = min(2 ** attempt, 16)
+                app_logger.warning(f"[AI-TASK-{task_id}] 第 {attempt+1} 次请求失败: {last_err}，等待 {backoff} 秒后重试...")
+                time.sleep(backoff)
+                
+        app_logger.error(f"[AI-TASK-{task_id}] 最终请求失败: {last_err}")
+        return False, {"error": last_err, "task_id": task_id}
 
     @classmethod
     def fetch_models(cls, base_url: str, api_key: str, timeout: int = 12) -> Tuple[bool, List[str], str]:
-        normalized_url = cls._normalize_base_url(base_url)
-        endpoint = f"{normalized_url}/models"
-        
+        endpoint = cls._normalize_base_url(base_url, is_models_endpoint=True)
         headers = {"Content-Type": "application/json"}
         if api_key.strip():
             headers["Authorization"] = f"Bearer {api_key.strip()}"
 
+        success, result = cls._execute_with_retry("get", endpoint, {"headers": headers, "timeout": timeout}, max_retries=1)
+        if not success:
+            return False, [], result
+            
         try:
-            app_logger.info(f"正在拉取模型列表: {endpoint}")
-            resp = requests.get(endpoint, headers=headers, timeout=timeout)
-            if resp.status_code != 200:
-                return False, [], f"HTTP {resp.status_code}: {resp.text[:200]}"
-                
-            data = resp.json()
+            data = result
             model_list = []
             if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
                 for item in data["data"]:
@@ -56,34 +124,170 @@ class AIService:
                         model_list.append(item["id"])
                     elif isinstance(item, str):
                         model_list.append(item)
-                        
-            model_list = sorted(list(set(model_list)))
+            
             if not model_list:
-                return False, [], "响应中未发现有效模型列表"
-            return True, model_list, "获取模型列表成功"
+                return False, [], "响应中未发现有效模型列表字段"
+                
+            return True, model_list, "获取成功"
         except Exception as e:
-            return False, [], f"请求异常: {str(e)}"
+            return False, [], f"解析模型列表异常: {e}"
 
     @classmethod
     def test_connection(cls, base_url: str, api_key: str, model: str, timeout: int = 15) -> Tuple[bool, str]:
-        normalized_url = cls._normalize_base_url(base_url)
-        endpoint = f"{normalized_url}/chat/completions"
+        endpoint = cls._normalize_base_url(base_url)
+        headers = {"Content-Type": "application/json"}
+        if api_key.strip():
+            headers["Authorization"] = f"Bearer {api_key.strip()}"
+            
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 5
+        }
+        
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload, "timeout": timeout}, max_retries=0)
+        if success:
+            return True, "API 连通测试通过！模型响应正常。"
+        return False, result
+
+    @staticmethod
+    def _clean_json_response(content: str) -> str:
+        """从大模型混杂的输出中提取并清理干净的 JSON 字符串"""
+        import re
+        text = content.strip()
+        
+        # 移除 <think>...</think> 标签 (DeepSeek 等)
+        text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+        
+        # 如果模型包裹了 ```json ... ```，提取其中内容
+        match = re.search(r'```(?:json)?\s*(.*?)\s*```', text, flags=re.DOTALL)
+        if match:
+            return match.group(1).strip()
+            
+        # 如果没有包裹，尝试寻找最外层的 {} 或 []
+        match = re.search(r'(\{.*\}|\[.*\])', text, flags=re.DOTALL)
+        if match:
+            return match.group(1).strip()
+            
+        return text
+
+    @classmethod
+    def process_report_with_ai(
+        cls,
+        base_url: str,
+        api_key: str,
+        model: str,
+        report_path: str,
+        destination_root: str
+    ) -> List[Dict[str, Any]]:
+        """基于生成的 Markdown 报告内容，提取归档与清理的执行清单"""
+        if not api_key or not base_url or not model:
+            raise ValueError("AI 模型未配置。")
+            
+        with open(report_path, "r", encoding="utf-8") as f:
+            report_md = f.read()
+            
+        system_prompt = (
+            "你是一个自动化执行引擎。请阅读用户提供的《磁盘空间全景深度分析与治理报告》，从中提取【核心执行清单】表格中的建议操作数据。\n"
+            "严禁自行推测或使用系统内置规则，只能使用报告中出现的文件路径和分类建议。\n"
+            "请严格以 JSON 格式输出:\n"
+            "{\"groups\": [{\"original_root\": \"最外层归档原子路径\", \"app_name\": \"软件/工具名\", \"suggested_category\": \"归档分类\", \"action\": \"清理/归档\", \"rationale\": \"依据\", \"confidence\": 0.95, \"risk_level\": \"低风险\", \"require_confirmation\": false, \"sub_items\": [{\"original_path\": \"文件绝对路径\", \"name\": \"文件名\"}]}]}"
+        )
+        
+        endpoint = cls._normalize_base_url(base_url)
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key.strip()}"
         }
         payload = {
             "model": model.strip(),
-            "messages": [{"role": "user", "content": "请回复 pong"}],
-            "max_tokens": 10
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"目标报告内容:\n{report_md}"}
+            ],
+            "temperature": 0.1
         }
+        if "gpt" in model.lower() or "deepseek" in model.lower():
+            payload["response_format"] = {"type": "json_object"}
+
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="处理报告")
+        if not success:
+            raise RuntimeError(f"AI 提取执行清单失败: {result.get('error')}")
+            
+        content_str = result["data"]["choices"][0]["message"]["content"]
+        clean_str = cls._clean_json_response(content_str)
+        if not clean_str:
+            raise RuntimeError("AI 返回空响应或未找到 JSON")
+            
         try:
-            resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
-            if resp.status_code == 200:
-                return True, "API 连通测试通过！"
-            return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
+            parsed = json.loads(clean_str)
         except Exception as e:
-            return False, f"连通测试失败: {str(e)}"
+            raise RuntimeError(f"AI 响应 JSON 解析失败: {e}\n响应内容片段: {content_str[:200]}")
+            
+        grouped_units = []
+        if "groups" in parsed and isinstance(parsed["groups"], list):
+            import hashlib
+            dest_root_p = Path(destination_root)
+            for g in parsed["groups"]:
+                orig_root = g.get("original_root", "").strip()
+                cat_name = g.get("suggested_category", "").strip()
+                action = g.get("action", "").strip()
+                
+                if not orig_root or not cat_name:
+                    raise RuntimeError(f"解析失败: AI 返回的分组数据缺失必要的路径(original_root)或类别(suggested_category)。数据: {g}")
+                    
+                root_p = Path(orig_root)
+                
+                # Determine target root
+                if root_p.is_dir():
+                    new_target_base = dest_root_p / cat_name / root_p.name
+                else:
+                    new_target_base = dest_root_p / cat_name
+                    
+                sub_items_detail = []
+                for sub in g.get("sub_items", []):
+                    sub_p = sub.get("original_path", "").strip()
+                    if not sub_p:
+                        raise RuntimeError(f"解析失败: AI 返回的子项缺失 original_path。数据: {sub}")
+                        
+                    sub_path_obj = Path(sub_p)
+                    try:
+                        rel_path = sub_path_obj.relative_to(root_p) if root_p.is_dir() else Path(sub_path_obj.name)
+                    except ValueError:
+                        rel_path = Path(sub_path_obj.name)
+                        
+                    target_file_path = new_target_base / rel_path if root_p.is_dir() else (new_target_base / sub_path_obj.name)
+                    
+                    sub_items_detail.append({
+                        "original_path": sub_p,
+                        "name": sub.get("name", sub_path_obj.name),
+                        "size": 0,
+                        "relative_path": str(rel_path),
+                        "target_path": str(target_file_path),
+                        "scan_root": ""
+                    })
+                    
+                group_unit = {
+                    "group_id": f"GRP_{abs(hash(orig_root)) % 1000000:06d}",
+                    "name": root_p.name or orig_root,
+                    "original_root": orig_root,
+                    "scan_root": "",
+                    "target_root": str(new_target_base),
+                    "is_directory_group": root_p.is_dir(),
+                    "is_symlink": False,
+                    "symlink_target": "",
+                    "app_name": g.get("app_name", "Unknown"),
+                    "suggested_category": cat_name,
+                    "action": action,
+                    "risk_level": g.get("risk_level", "未知"),
+                    "confidence": g.get("confidence", 0.0),
+                    "rationale": g.get("rationale", "AI 根据报告生成"),
+                    "sub_items": sub_items_detail,
+                    "source": "AI (按报告)"
+                }
+                grouped_units.append(group_unit)
+                
+        return grouped_units
 
     @classmethod
     def classify_files_with_ai(
@@ -108,7 +312,7 @@ class AIService:
         # 2. 若配置了大模型，向 LLM 提交目录组特征进行深度 App 签名甄别与分类精炼
         if api_key and base_url and model and grouped_units:
             normalized_url = cls._normalize_base_url(base_url)
-            endpoint = f"{normalized_url}/chat/completions"
+            endpoint = normalized_url
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {api_key.strip()}"
@@ -143,15 +347,27 @@ class AIService:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"待分类目录聚合单元:\n{json.dumps(group_summaries, ensure_ascii=False, indent=2)}"}
                 ],
-                "response_format": {"type": "json_object"} if "gpt" in model.lower() or "deepseek" in model.lower() else None,
                 "temperature": 0.2
             }
+            if "gpt" in model.lower() or "deepseek" in model.lower():
+                payload["response_format"] = {"type": "json_object"}
 
             try:
-                resp = requests.post(endpoint, headers=headers, json=payload, timeout=35)
-                if resp.status_code == 200:
-                    content = resp.json()["choices"][0]["message"]["content"]
-                    parsed = json.loads(content)
+                success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload})
+                if success:
+                    content_str = result["data"]["choices"][0]["message"]["content"]
+                    
+                    # Clean markdown code blocks
+                    clean_str = content_str.strip()
+                    if clean_str.startswith("```json"):
+                        clean_str = clean_str[7:]
+                    elif clean_str.startswith("```"):
+                        clean_str = clean_str[3:]
+                    if clean_str.endswith("```"):
+                        clean_str = clean_str[:-3]
+                    clean_str = clean_str.strip()
+                    
+                    parsed = json.loads(clean_str)
                     if "groups" in parsed and isinstance(parsed["groups"], list):
                         res_map = {item["original_root"]: item for item in parsed["groups"] if "original_root" in item}
                         
@@ -168,6 +384,7 @@ class AIService:
                                 g["confidence"] = float(r.get("confidence", g["confidence"]))
                                 g["risk_level"] = r.get("risk_level", g["risk_level"])
                                 g["require_confirmation"] = bool(r.get("require_confirmation", g["require_confirmation"]))
+                                g["source"] = "AI"
                                 
                                 # 更新目标根路径与子项目标路径
                                 root_p = Path(orig_root)
@@ -214,7 +431,7 @@ class AIService:
         )
 
         normalized_url = cls._normalize_base_url(base_url)
-        endpoint = f"{normalized_url}/chat/completions"
+        endpoint = normalized_url
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key.strip()}"
@@ -225,20 +442,26 @@ class AIService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"待分析文件清单:\n{json.dumps(summary_items, ensure_ascii=False, indent=2)}"}
             ],
-            "response_format": {"type": "json_object"} if "gpt" in model.lower() or "deepseek" in model.lower() else None,
             "temperature": 0.2
         }
+        if "gpt" in model.lower() or "deepseek" in model.lower():
+            payload["response_format"] = {"type": "json_object"}
 
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="智能推荐")
+        if not success:
+            app_logger.error(f"AI 冗余文件分析调用失败: {result.get('error')}")
+            return []
+            
+        content = result["data"]["choices"][0]["message"]["content"]
+        
+        # Clean markdown code blocks
+        clean_str = cls._clean_json_response(content)
         try:
-            resp = requests.post(endpoint, headers=headers, json=payload, timeout=30)
-            if resp.status_code == 200:
-                result_json = resp.json()
-                content = result_json["choices"][0]["message"]["content"]
-                parsed = json.loads(content)
-                if "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
-                    return parsed["recommended_paths"]
+            parsed = json.loads(clean_str)
+            if "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
+                return parsed["recommended_paths"]
         except Exception as e:
-            app_logger.error(f"AI 冗余文件分析调用失败: {e}")
+            app_logger.error(f"AI 解析冗余推荐响应失败: {e}")
 
         return []
 
@@ -250,49 +473,60 @@ class AIService:
         model: str,
         scan_summary: Dict[str, Any]
     ) -> str:
-        if api_key and base_url and model:
-            normalized_url = cls._normalize_base_url(base_url)
-            endpoint = f"{normalized_url}/chat/completions"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key.strip()}"
-            }
+        if not (api_key and base_url and model):
+            raise ValueError("AI 模型未配置：缺少 base_url、api_key 或 model。")
+
+        normalized_url = cls._normalize_base_url(base_url)
+        endpoint = normalized_url
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key.strip()}"
+        }
+        
+        system_prompt = (
+            "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据与冗余文件列表，"
+            "生成一份结构完整、数据详实、排版优美的 Markdown 格式《磁盘空间全景深度分析与治理报告》。\n"
+            "必须包含：\n"
+            "1. 磁盘现状与健康度评估(0-100分与等级)\n"
+            "2. 空间构成与类型特征\n"
+            "3. 大文件与冗余分布\n"
+            "4. 重复文件浪费分析\n"
+            "5. 分级治理与清理优化建议\n"
+            "6. 【核心执行清单】：必须输出一个 Markdown 表格，列出推荐处理的文件，表头必须包含：文件名、文件大小(GiB)、类别、路径摘要、原始绝对路径、风险等级、建议操作(如归档/清理/保留)、分析建议。"
+        )
+
+        redundant_samples = scan_summary.get("redundant_files", [])
+        if len(redundant_samples) > 100:
+            redundant_samples = [f for f in redundant_samples if f.get("is_recommended")] or redundant_samples[:100]
+
+        condensed = {
+            "total_files": scan_summary.get("total_files"),
+            "total_bytes": scan_summary.get("total_bytes"),
+            "category_stats": scan_summary.get("category_stats"),
+            "top_10_large_files": scan_summary.get("top_100_files", [])[:10],
+            "redundant_files": redundant_samples,
+            "duplicate_groups_count": scan_summary.get("duplicate_groups_count"),
+            "duplicate_wasted_bytes": scan_summary.get("duplicate_wasted_bytes"),
+            "reclaimable_bytes": scan_summary.get("reclaimable_bytes"),
+            "target_paths": scan_summary.get("target_paths")
+        }
+
+        payload = {
+            "model": model.strip(),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"扫描统计数据如下:\n{json.dumps(condensed, ensure_ascii=False, indent=2)}"}
+            ],
+            "temperature": 0.5
+        }
+
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="生成报告")
+        if not success:
+            app_logger.error(f"AI 生成报告失败: {result.get('error')}")
+            raise RuntimeError(f"AI 生成报告失败: {result.get('error')}")
             
-            system_prompt = (
-                "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据，"
-                "生成一份结构完整、数据详实、排版优美的 Markdown 格式《磁盘空间全景深度分析与治理报告》。"
-                "包含：1.磁盘现状与健康度评估(0-100分与等级)；2.空间构成与类型特征；3.大文件与冗余分布；4.重复文件浪费分析；5.分级治理与清理优化建议。"
-            )
-
-            condensed = {
-                "total_files": scan_summary.get("total_files"),
-                "total_bytes": scan_summary.get("total_bytes"),
-                "category_stats": scan_summary.get("category_stats"),
-                "top_10_large_files": scan_summary.get("top_100_files", [])[:10],
-                "duplicate_groups_count": scan_summary.get("duplicate_groups_count"),
-                "duplicate_wasted_bytes": scan_summary.get("duplicate_wasted_bytes"),
-                "reclaimable_bytes": scan_summary.get("reclaimable_bytes"),
-                "target_paths": scan_summary.get("target_paths")
-            }
-
-            payload = {
-                "model": model.strip(),
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"扫描统计数据如下:\n{json.dumps(condensed, ensure_ascii=False, indent=2)}"}
-                ],
-                "temperature": 0.5
-            }
-
-            try:
-                resp = requests.post(endpoint, headers=headers, json=payload, timeout=40)
-                if resp.status_code == 200:
-                    res_json = resp.json()
-                    return res_json["choices"][0]["message"]["content"]
-            except Exception as e:
-                app_logger.error(f"AI 生成报告失败，使用离线模板: {e}")
-
-        return cls._generate_fallback_report(scan_summary)
+        content = result["data"]["choices"][0]["message"]["content"]
+        return content
 
     @classmethod
     def _generate_fallback_report(cls, summary: Dict[str, Any]) -> str:

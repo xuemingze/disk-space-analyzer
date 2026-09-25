@@ -327,4 +327,43 @@ QGroupBox::title {
     subcontrol-position: top left;
     padding: 0 8px;
 }
+
+/* 列表 QListWidget */
+QListWidget {
+    background-color: #0F172A;
+    color: #F8FAFC;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 6px;
+    selection-background-color: #1E3A8A;
+    selection-color: #FFFFFF;
+    outline: none;
+}
+
+QListWidget::item {
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-bottom: 2px;
+}
+
+QListWidget::item:hover {
+    background-color: #1E293B;
+    color: #38BDF8;
+}
+
+QListWidget::item:selected {
+    background-color: #1E3A8A;
+    color: #FFFFFF;
+    border: 1px solid #38BDF8;
+}
+
+/* 滚动区域 QScrollArea */
+QScrollArea {
+    background-color: transparent;
+    border: none;
+}
+QScrollArea > QWidget > QWidget {
+    background-color: transparent;
+}
 """

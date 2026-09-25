@@ -54,11 +54,22 @@ class DirectoryScanTask(BaseScanTask):
     progress_updated = Signal(str, object, object)
     finished_ok = Signal(dict)
 
-    def __init__(self, target_paths, skip_system_protected, enable_duplicate_detection, parent=None):
+    def __init__(self, target_paths, skip_system_protected, enable_duplicate_detection, ignore_folders=None, parent=None):
         super().__init__(parent)
         self.target_paths = target_paths
         self.skip_system_protected = skip_system_protected
         self.enable_duplicate_detection = enable_duplicate_detection
+        import os
+        self.ignore_folders = [os.path.normcase(os.path.normpath(p)) for p in (ignore_folders or []) if p.strip()]
+
+    def _is_ignored(self, current_dir: str) -> bool:
+        import os
+        if not self.ignore_folders: return False
+        c_norm = os.path.normcase(os.path.normpath(current_dir))
+        for ig in self.ignore_folders:
+            if c_norm == ig or c_norm.startswith(ig + os.sep):
+                return True
+        return False
 
     def run(self):
         try:
@@ -80,6 +91,10 @@ class DirectoryScanTask(BaseScanTask):
                 while stack and self.check_pause_cancel():
                     curr_dir = stack.pop()
                     if self.skip_system_protected and is_system_critical_path(curr_dir):
+                        continue
+                    if self._is_ignored(curr_dir):
+                        if not hasattr(self, 'skipped_ignored_count'): self.skipped_ignored_count = 0
+                        self.skipped_ignored_count += 1
                         continue
                     try:
                         with os.scandir(curr_dir) as it:
@@ -135,6 +150,7 @@ class DirectoryScanTask(BaseScanTask):
 
             self.finished_ok.emit({
                 "elapsed_seconds": p1_duration,
+                "skipped_ignored_count": getattr(self, 'skipped_ignored_count', 0),
                 "total_files": total_files,
                 "total_bytes": total_bytes,
                 "category_stats": {
@@ -355,13 +371,14 @@ class ScanWorker(QObject):
     phase_changed = Signal(str)
     scan_error = Signal(str)
 
-    def __init__(self, target_paths, enable_duplicate_detection=True, hash_algorithm="md5", skip_system_protected=True, concurrency=4, task_id=None, parent=None):
+    def __init__(self, target_paths, enable_duplicate_detection=True, hash_algorithm="md5", skip_system_protected=True, concurrency=4, ignore_folders=None, task_id=None, parent=None):
         super().__init__(parent)
         self.target_paths = target_paths
         self.enable_duplicate_detection = enable_duplicate_detection
         self.hash_algorithm = hash_algorithm
         self.skip_system_protected = skip_system_protected
         self.concurrency = concurrency
+        self.ignore_folders = ignore_folders if ignore_folders is not None else app_config.get("ignore_folders", default=[])
         self.task_id = task_id
         
         self.current_task: Optional[BaseScanTask] = None
@@ -396,7 +413,21 @@ class ScanWorker(QObject):
         self.total_start_time = time.time()
         self.phase_changed.emit("阶段 1/3: 正在快速遍历目录与统计空间结构 (os.scandir 高速索引)...")
         
-        self.current_task = DirectoryScanTask(self.target_paths, self.skip_system_protected, self.enable_duplicate_detection)
+        # 核心修复：扫描启动前，重新严格解析当前生效配置，避免复用旧快照
+        from app.config import app_config
+        from app.utils.logger import app_logger
+        ignore_folders, source = app_config.get_with_source("ignore_folders", default=[])
+        self.ignore_folders = ignore_folders
+        
+        app_logger.info(f"[ScanWorker] 启动扫描，目标路径: {self.target_paths}")
+        app_logger.info(f"[ScanWorker] 加载忽略路径列表: {len(self.ignore_folders)} 条 (配置来源: {source})")
+        
+        self.current_task = DirectoryScanTask(
+            self.target_paths, 
+            self.skip_system_protected, 
+            self.enable_duplicate_detection,
+            ignore_folders=self.ignore_folders
+        )
         self.current_task.progress_updated.connect(self.progress_updated)
         self.current_task.finished_ok.connect(self._on_phase1_finished)
         self.current_task.error.connect(self._on_error)
@@ -444,6 +475,10 @@ class ScanWorker(QObject):
         self._is_running = False
         result["category_stats"] = self.phase1_cache.get("category_stats", {})
         result["top_100_files"] = self.phase1_cache.get("top_100_files", [])
+        result["skipped_ignored_count"] = self.phase1_cache.get("skipped_ignored_count", 0)
+        result["task_id"] = getattr(self, "task_id", "Unknown") or "Unknown"
+        import datetime
+        result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         self.current_task = None
         self.phase1_cache.clear() # 释放内存

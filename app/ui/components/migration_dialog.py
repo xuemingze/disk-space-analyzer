@@ -69,15 +69,21 @@ class MigrationDialog(QDialog):
 
         self.audit_summary_label = QLabel("正在扫描目标磁盘可用容量与潜在冲突...")
         self.audit_summary_label.setStyleSheet("color: #E2E8F0; font-size: 12px; font-weight: bold;")
-        audit_layout.addWidget(self.audit_summary_label)
-
-        # 快捷方式与注册表选择表
+        audit_layout.addWidget(self.audit_summary_label)        # 快捷方式与注册表选择表
         self.assoc_table = QTableWidget()
-        self.assoc_table.setColumnCount(4)
-        self.assoc_table.setHorizontalHeaderLabels(["同步", "类型", "关联项路径 / 键值", "安全评级"])
+        self.assoc_table.setColumnCount(6)
+        self.assoc_table.setHorizontalHeaderLabels([
+            "同步", "类型", "关联项路径 / 键值", "引用的原路径", "目标迁移路径", "安全评级"
+        ])
         self.assoc_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.assoc_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self.assoc_table.setColumnWidth(0, 50)
+        self.assoc_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.assoc_table.setColumnWidth(1, 100)
+        self.assoc_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.assoc_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.assoc_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.assoc_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.assoc_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.assoc_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.assoc_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
@@ -195,15 +201,33 @@ class MigrationDialog(QDialog):
         for sc in shortcuts:
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            chk.setCheckState(Qt.Checked)
+            chk.setCheckState(Qt.Checked if sc.get("safe_to_update", True) else Qt.Unchecked)
             self.assoc_table.setItem(row, 0, chk)
             
             self.assoc_table.setItem(row, 1, QTableWidgetItem("快捷方式 (.lnk)"))
-            self.assoc_table.setItem(row, 2, QTableWidgetItem(sc["shortcut_path"]))
+            self.assoc_table.setItem(row, 2, QTableWidgetItem(sc.get("shortcut_path", "")))
+            self.assoc_table.setItem(row, 3, QTableWidgetItem(sc.get("original_target", "")))
+            self.assoc_table.setItem(row, 4, QTableWidgetItem(sc.get("new_target", "")))
             
-            safe_item = QTableWidgetItem("安全更新")
-            safe_item.setForeground(Qt.green)
-            self.assoc_table.setItem(row, 3, safe_item)
+            safe_item = QTableWidgetItem("安全更新" if sc.get("safe_to_update", True) else "需人工确认")
+            safe_item.setForeground(Qt.green if sc.get("safe_to_update", True) else Qt.red)
+            self.assoc_table.setItem(row, 5, safe_item)
+            row += 1
+
+        for reg in reg_items:
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            chk.setCheckState(Qt.Checked if reg.get("safe_to_update", True) else Qt.Unchecked)
+            self.assoc_table.setItem(row, 0, chk)
+            
+            self.assoc_table.setItem(row, 1, QTableWidgetItem(f"注册表 ({reg.get('root', '')})"))
+            self.assoc_table.setItem(row, 2, QTableWidgetItem(f"{reg.get('key_path', '')} -> {reg.get('value_name', '')}"))
+            self.assoc_table.setItem(row, 3, QTableWidgetItem(reg.get("matched_path", "")))
+            self.assoc_table.setItem(row, 4, QTableWidgetItem(reg.get("new_target", "")))
+            
+            safe_item = QTableWidgetItem("安全更新" if reg.get("safe_to_update", True) else "需人工确认")
+            safe_item.setForeground(Qt.green if reg.get("safe_to_update", True) else Qt.red)
+            self.assoc_table.setItem(row, 5, safe_item)
             row += 1
 
         for reg in reg_items:
@@ -236,6 +260,25 @@ class MigrationDialog(QDialog):
             QMessageBox.critical(self, "空间不足", "目标磁盘剩余空间不足以容纳所选迁移数据！")
             return
 
+        selected_shortcuts = []
+        selected_reg_keys = []
+        
+        for row in range(self.assoc_table.rowCount()):
+            chk = self.assoc_table.item(row, 0)
+            if chk and chk.checkState() == Qt.Checked:
+                type_str = self.assoc_table.item(row, 1).text()
+                path_str = self.assoc_table.item(row, 2).text()
+                if "快捷方式" in type_str:
+                    selected_shortcuts.append(path_str)
+                elif "注册表" in type_str:
+                    root_name = type_str.split("(")[1].split(")")[0]
+                    key_path, value_name = path_str.split(" -> ")
+                    selected_reg_keys.append({
+                        "root": root_name,
+                        "key_path": key_path.strip(),
+                        "value_name": value_name.strip()
+                    })
+
         self.start_btn.setEnabled(False)
         self.cancel_btn.setEnabled(True)
         self.close_btn.setEnabled(False)
@@ -246,7 +289,9 @@ class MigrationDialog(QDialog):
             destination_dir=dest,
             create_junction=self.chk_junction.isChecked(),
             sync_shortcuts=self.chk_shortcuts.isChecked(),
-            sync_registry=self.chk_registry.isChecked()
+            sync_registry=self.chk_registry.isChecked(),
+            selected_shortcuts=selected_shortcuts,
+            selected_reg_keys=selected_reg_keys
         )
         self.worker.progress_signal.connect(lambda cur, tot: self.progress_bar.setValue(cur))
         self.worker.log_signal.connect(self.append_log)
