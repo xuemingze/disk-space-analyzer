@@ -125,7 +125,10 @@ class SpaceDistributionChartWidget(QWidget):
                 va='center', ha='left', color='#F8FAFC', fontsize=9
             )
 
-        self.figure.tight_layout()
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            self.figure.tight_layout()
         self.canvas.draw()
 
 from PySide6.QtWidgets import QSplitter, QTextBrowser
