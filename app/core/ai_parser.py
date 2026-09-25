@@ -20,16 +20,16 @@ class AIReportParser:
         lines = markdown_text.splitlines()
         current_section = None
         
-        # Regex patterns to tolerate spaces, emojis, and punctuation
-        p_core = re.compile(r'^\*\*\s*(?:.*?)\s*核心问题\s*(?:.*?)\s*\*\*', re.IGNORECASE)
-        p_obs = re.compile(r'^\*\*\s*(?:.*?)\s*关键观察\s*(?:.*?)\s*\*\*', re.IGNORECASE)
-        p_hotspots = re.compile(r'^#+\s+(?:.*?)\s*冗余分布热点.*', re.IGNORECASE)
-        p_waste = re.compile(r'^#+\s+(?:.*?)\s*重复文件浪费分析.*', re.IGNORECASE)
-        p_warn = re.compile(r'^\*\*\s*(?:.*?)\s*严禁误删警告\s*(?:.*?)\s*\*\*', re.IGNORECASE)
-        p_top10 = re.compile(r'^#+\s+(?:.*?)\s*Top\s*10\s*大文件分析.*', re.IGNORECASE)
+        # Regex patterns to tolerate spaces, emojis, and punctuation, updated based on the real report structure
+        p_core = re.compile(r'^(#+\s+.*?(磁盘现状与健康度评估|总结与建议).*|^\*\*\s*.*?核心问题.*?\*\*)', re.IGNORECASE)
+        p_obs = re.compile(r'^(#+\s+.*?(空间构成与类型特征|核心执行清单).*|^\*\*\s*.*?关键观察.*?\*\*)', re.IGNORECASE)
+        p_top10 = re.compile(r'^#+\s+.*?(TOP\s*10\s*大文件).*', re.IGNORECASE)
+        p_hotspots = re.compile(r'^#+\s+.*?(大文件与冗余分布|冗余文件分布特征|冗余分布热点).*', re.IGNORECASE)
+        p_waste = re.compile(r'^#+\s+.*?(重复文件浪费分析).*', re.IGNORECASE)
+        p_warn = re.compile(r'^(#+\s+.*?(分级治理与清理优化建议|不建议清理|风险).*|^\*\*\s*.*?严禁误删警告.*?\*\*)', re.IGNORECASE)
         
-        # A generic header or bold line to stop extraction
-        p_stop = re.compile(r'^(#+\s+|\*\*\s*[^\*]+\s*\*\*$)')
+        # A generic H1/H2 header or bold line to stop extraction, so it doesn't truncate at H3/H4 sub-sections
+        p_stop = re.compile(r'^(#{1,2}\s+|\*\*\s*[^\*]+\s*\*\*$)')
         
         for line in lines:
             line_stripped = line.strip()
@@ -46,14 +46,14 @@ class AIReportParser:
             elif p_obs.match(line_stripped):
                 current_section = "panorama_key_observations"
                 matched_new = True
+            elif p_top10.match(line_stripped):
+                current_section = "top10_analysis"
+                matched_new = True
             elif p_hotspots.match(line_stripped):
                 current_section = "panorama_redundant_hotspots"
                 matched_new = True
             elif p_waste.match(line_stripped):
                 current_section = "duplicate_waste"
-                matched_new = True
-            elif p_top10.match(line_stripped):
-                current_section = "top10_analysis"
                 matched_new = True
             elif p_warn.match(line_stripped):
                 # Warning can appear multiple times. We assign it to both duplicate and top10 if empty, or just append
