@@ -1,6 +1,9 @@
+import json
 import time
 import threading
+import os
 from enum import Enum
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 from PySide6.QtCore import QObject, Signal
 
@@ -23,7 +26,6 @@ class TaskStatus(str, Enum):
     FAILED = "失败"
 
 class TaskItem:
-    """单个后台任务数据实体（支持状态机控制）"""
     def __init__(self, task_id: str, name: str, task_type: TaskType, worker: Any = None):
         self.task_id = task_id
         self.name = name
@@ -49,8 +51,57 @@ class TaskItem:
         if len(self.logs) > 500:
             self.logs.pop(0)
 
+    def to_dict(self) -> dict:
+        return {
+            "task_id": self.task_id,
+            "name": self.name,
+            "task_type": self.task_type.value,
+            "status": self.status.value,
+            "current_phase": self.current_phase,
+            "progress_percent": self.progress_percent,
+            "processed_count": self.processed_count,
+            "total_count": self.total_count,
+            "processed_bytes": self.processed_bytes,
+            "total_bytes": self.total_bytes,
+            "current_speed": self.current_speed,
+            "eta_seconds": self.eta_seconds,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "error_message": self.error_message,
+            "logs": self.logs
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict):
+        try:
+            t_type = TaskType(data.get("task_type", TaskType.SCAN.value))
+        except ValueError:
+            t_type = TaskType.SCAN
+        item = cls(data.get("task_id", ""), data.get("name", "Unknown"), t_type)
+        try:
+            item.status = TaskStatus(data.get("status", TaskStatus.FAILED.value))
+        except ValueError:
+            item.status = TaskStatus.FAILED
+        
+        if item.status in (TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.PAUSING, TaskStatus.PAUSED, TaskStatus.CANCELLING):
+            item.status = TaskStatus.FAILED
+            item.error_message = "任务异常中断 (程序关闭或崩溃)"
+            
+        item.current_phase = data.get("current_phase", "")
+        item.progress_percent = data.get("progress_percent", 0.0)
+        item.processed_count = data.get("processed_count", 0)
+        item.total_count = data.get("total_count", 0)
+        item.processed_bytes = data.get("processed_bytes", 0)
+        item.total_bytes = data.get("total_bytes", 0)
+        item.current_speed = data.get("current_speed", "0 B/s")
+        item.eta_seconds = data.get("eta_seconds", 0)
+        item.start_time = data.get("start_time", time.time())
+        item.end_time = data.get("end_time")
+        item.error_message = data.get("error_message")
+        item.logs = data.get("logs", [])
+        return item
+
 class TaskManager(QObject):
-    """统一后台任务协调与严格状态机生命周期管理中心"""
     task_added = Signal(TaskItem)
     task_updated = Signal(TaskItem)
     task_finished = Signal(TaskItem)
@@ -58,6 +109,7 @@ class TaskManager(QObject):
 
     _instance = None
     _lock = threading.Lock()
+    _HISTORY_FILE = Path.home() / ".disk_space_analyzer" / "task_history.json"
 
     def __new__(cls):
         with cls._lock:
@@ -73,6 +125,27 @@ class TaskManager(QObject):
         self._tasks: Dict[str, TaskItem] = {}
         self._task_lock = threading.Lock()
         self._initialized = True
+        self._HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        self._load_history()
+
+    def _load_history(self):
+        if not self._HISTORY_FILE.exists():
+            return
+        try:
+            with open(self._HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for k, v in data.items():
+                    self._tasks[k] = TaskItem.from_dict(v)
+        except Exception:
+            pass
+
+    def _save_history(self):
+        try:
+            data = {k: v.to_dict() for k, v in self._tasks.items()}
+            with open(self._HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def create_task(self, name: str, task_type: TaskType, worker: Any = None) -> TaskItem:
         task_id = f"TASK_{int(time.time()*1000)}"
@@ -80,6 +153,7 @@ class TaskManager(QObject):
         item.status = TaskStatus.QUEUED
         with self._task_lock:
             self._tasks[task_id] = item
+            self._save_history()
         self.task_added.emit(item)
         return item
 
@@ -122,15 +196,14 @@ class TaskManager(QObject):
         with self._task_lock:
             item = self._tasks.get(task_id)
             if not item: return
-            # 避免重复结束状态转换
             if item.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED):
                 return
             item.status = status
             if error_msg: item.error_message = error_msg
             if status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED):
                 item.end_time = time.time()
-                # 释放资源引用
                 item.worker = None
+            self._save_history()
 
         self.task_updated.emit(item)
         if status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED):
@@ -145,6 +218,7 @@ class TaskManager(QObject):
             if item.worker and hasattr(item.worker, "pause"):
                 item.worker.pause()
             item.status = TaskStatus.PAUSED
+            self._save_history()
             self.task_updated.emit(item)
 
     def resume_task(self, task_id: str):
@@ -155,6 +229,7 @@ class TaskManager(QObject):
             item.status = TaskStatus.RUNNING
             if item.worker and hasattr(item.worker, "resume"):
                 item.worker.resume()
+            self._save_history()
             self.task_updated.emit(item)
 
     def cancel_task(self, task_id: str):
@@ -168,6 +243,7 @@ class TaskManager(QObject):
             item.status = TaskStatus.CANCELED
             item.end_time = time.time()
             item.worker = None
+            self._save_history()
             
         self.task_updated.emit(item)
         self.task_finished.emit(item)
@@ -179,6 +255,7 @@ class TaskManager(QObject):
                 if v.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED)
             }
             self._tasks = active_tasks
+            self._save_history()
 
     def has_active_tasks(self) -> bool:
         with self._task_lock:

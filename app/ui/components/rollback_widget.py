@@ -228,10 +228,15 @@ class RollbackWidget(QWidget):
             
     def do_rollback(self, selected_ids):
         self.rollback_worker = RollbackWorker(self.current_manifest, selected_ids)
+        from app.core.task_manager import global_task_manager, TaskType, TaskStatus
+        self.current_task_id = global_task_manager.create_task("回滚还原快照", TaskType.CLEANUP, self.rollback_worker).task_id
         self.rollback_worker.finished_signal.connect(self.on_rollback_finished)
         self.rollback_worker.start()
         
     def on_rollback_finished(self, success, summary):
+        if hasattr(self, "current_task_id") and self.current_task_id:
+            from app.core.task_manager import global_task_manager, TaskStatus
+            global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED if success else TaskStatus.FAILED)
         msg = f"回滚完成！\\n成功: {summary['success_count']}，失败: {summary['failed_count']}，跳过: {summary['skipped_count']}"
         if success:
             QMessageBox.information(self, "回滚成功", msg)

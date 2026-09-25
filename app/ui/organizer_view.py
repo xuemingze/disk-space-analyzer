@@ -277,11 +277,16 @@ class OrganizerView(QWidget):
         self.sel_stat_lbl.setText("正在加载目录文件...")
 
         self.scan_worker = DirectoryScanWorker(self.current_dir)
+        from app.core.task_manager import global_task_manager, TaskType, TaskStatus
+        self.current_task_id = global_task_manager.create_task("目录加载", TaskType.SCAN, self.scan_worker).task_id
         self.scan_worker.scan_completed.connect(self.on_directory_loaded)
-        self.scan_worker.scan_error.connect(lambda err: QMessageBox.warning(self, "读取异常", f"加载目录失败: {err}"))
+        self.scan_worker.scan_error.connect(lambda err: [QMessageBox.warning(self, "读取异常", f"加载目录失败: {err}"), __import__("app.core.task_manager").core.task_manager.global_task_manager.set_task_status(getattr(self, "current_task_id", ""), __import__("app.core.task_manager").core.task_manager.TaskStatus.FAILED, err) if getattr(self, "current_task_id", "") else None])
         self.scan_worker.start()
 
     def on_directory_loaded(self, items: List[Dict[str, Any]]):
+        if hasattr(self, "current_task_id") and self.current_task_id:
+            from app.core.task_manager import global_task_manager, TaskStatus
+            global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
         self.current_file_items = items
         self.file_table.populate_data(items)
         self.on_selection_changed(0, 0)

@@ -88,6 +88,7 @@ class HomeView(QWidget):
         self.archive_worker: Optional[ArchiveWorker] = None
         self.current_task_id: Optional[str] = None
         self.ai_worker: Optional[AIWorker] = None
+        self._archived_files_backup = {}
         
         self.init_ui()
         
@@ -629,6 +630,7 @@ class HomeView(QWidget):
         self.phase_label.setText("🤖 正在向大模型提交文件特征进行智能甄别...")
         
         self.ai_worker = AIWorker("recommend", self.current_scan_result["redundant_files"])
+        self.current_task_id = global_task_manager.create_task("AI 智能甄别推荐", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         self.ai_worker.recommend_done.connect(self.on_ai_recommend_done)
         self.ai_worker.failed.connect(self.on_ai_failed)
         self.ai_worker.start()
@@ -636,6 +638,8 @@ class HomeView(QWidget):
     def on_ai_recommend_done(self, recommended_paths: List[str]):
         self.btn_select_rec.setEnabled(True)
         self.phase_label.setText("AI 智能分析完成")
+        if self.current_task_id:
+            global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
         if recommended_paths:
             self.duplicate_table.select_ai_recommended_paths(recommended_paths)
             self.releasable_table.select_ai_recommended_paths(recommended_paths)
@@ -683,6 +687,7 @@ class HomeView(QWidget):
         self.phase_label.setText(f"🤖 正在提交报告 (ID: {report_id}) 给 AI 提取执行计划...")
 
         self.ai_worker = AIWorker("process_report", {"report_path": str(export_path), "report_id": report_id, "scan_id": scan_id, "dest_root": dest_root})
+        self.current_task_id = global_task_manager.create_task("AI 提取执行计划", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         
         def on_process_report_done(classified_results):
             # 注入报告关联信息
@@ -692,6 +697,8 @@ class HomeView(QWidget):
                 
             self.btn_ai_auto.setEnabled(True)
             self.phase_label.setText("AI 智能规划已就绪")
+            if self.current_task_id:
+                global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
             dlg = OrganizePreviewDialog(
                 classification_items=classified_results,
                 destination_root=dest_root,
@@ -712,6 +719,8 @@ class HomeView(QWidget):
         def on_process_failed(err):
             self.btn_ai_auto.setEnabled(True)
             self.phase_label.setText("AI 提取执行计划失败")
+            if self.current_task_id:
+                global_task_manager.set_task_status(self.current_task_id, TaskStatus.FAILED, str(err))
             QMessageBox.critical(self, "提取失败", f"AI 读取报告并生成执行清单失败:\n{err}")
                 
         self.ai_worker.classify_done.connect(on_process_report_done)
@@ -734,12 +743,15 @@ class HomeView(QWidget):
         self.report_text_edit.setPlainText("🤖 分析中: 正在调用大模型生成全景深度分析与治理报告，请稍候...")
         
         self.ai_worker = AIWorker("report", self.current_scan_result)
+        self.current_task_id = global_task_manager.create_task("生成深度分析报告", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         self.ai_worker.report_done.connect(self.on_ai_report_done)
         self.ai_worker.failed.connect(self.on_ai_failed)
         self.ai_worker.start()
 
     def on_ai_report_done(self, ai_response):
         self.gen_ai_report_btn.setEnabled(True)
+        if self.current_task_id:
+            global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
         # 添加任务关联信息
         scan_id = self.current_scan_result.get('task_id', 'Unknown')
         
@@ -761,6 +773,8 @@ class HomeView(QWidget):
         self.btn_select_rec.setEnabled(True)
         self.gen_ai_report_btn.setEnabled(True)
         self.phase_label.setText("AI 请求异常")
+        if self.current_task_id:
+            global_task_manager.set_task_status(self.current_task_id, TaskStatus.FAILED, str(err))
         self.report_text_edit.setPlainText(f"❌ 请求失败或响应解析失败\n\n调用大模型失败: {err}\n\n请检查网络连接或 API Key 设置，并点击上方“重新生成 AI 深度分析报告”重试。")
 
     def execute_archive_selected_async(self):
