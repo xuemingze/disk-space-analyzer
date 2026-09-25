@@ -173,3 +173,84 @@ class RollbackWorker(QThread):
             event_bus.publish_files_changed("rollbacked", success_paths, "ROLLBACK_TASK", {"restored_bytes": summary["restored_bytes"]})
             
         self.finished_signal.emit(not has_failed, summary)
+
+class SnapshotDeleteWorker(QThread):
+    finished_signal = Signal(bool, dict)
+    log_signal = Signal(str, str)
+    
+    def __init__(self, manifest_paths: List[str], clean_all: bool = False, parent=None):
+        super().__init__(parent)
+        self.manifest_paths = manifest_paths
+        self.clean_all = clean_all
+        self._is_cancelled = False
+        
+    def cancel(self):
+        self._is_cancelled = True
+        
+    def run(self):
+        from app.core.events import event_bus
+        success_count = 0
+        failed_count = 0
+        skipped_count = 0
+        details = []
+        
+        target_files = self.manifest_paths
+        if self.clean_all:
+            target_files = []
+            archive_dir = Path.home() / ".disk_space_analyzer" / "archive_manifests"
+            if archive_dir.exists():
+                for f in archive_dir.glob("manifest_*.json"):
+                    try:
+                        with open(f, 'r', encoding='utf-8') as file:
+                            data = json.load(file)
+                            status = data.get("rollback_status", "NONE")
+                            if status in ("ALL_ROLLED_BACK", "CANCELED", "FAILED"):
+                                target_files.append(str(f))
+                    except:
+                        pass
+        
+        for path in target_files:
+            if self._is_cancelled:
+                break
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                status = data.get("rollback_status", "NONE")
+                if status == "PARTIAL_ROLLED_BACK" or status == "ROLLING_BACK":
+                    # Cannot delete if it is being rolled back or partially rolled back
+                    skipped_count += 1
+                    details.append({"path": path, "status": "skipped", "reason": "快照正在回滚或存在未完成的依赖"})
+                    continue
+                    
+                # Delete actual archive folder if it exists
+                backup_id = data.get("backup_id")
+                if backup_id:
+                    archive_dir = Path.home() / ".disk_space_analyzer" / "archive_data" / backup_id
+                    if archive_dir.exists():
+                        import shutil
+                        shutil.rmtree(archive_dir, ignore_errors=True)
+                
+                os.remove(path)
+                success_count += 1
+                details.append({"path": path, "status": "success", "reason": ""})
+                self.log_signal.emit(f"成功删除快照记录: {path}", "info")
+            except Exception as e:
+                failed_count += 1
+                details.append({"path": path, "status": "failed", "reason": str(e)})
+                self.log_signal.emit(f"删除快照失败 {path}: {str(e)}", "error")
+                
+        # Audit log
+        app_logger.info(f"[SnapshotDelete] Mode: {'Clean All' if self.clean_all else 'Selected'}, Success: {success_count}, Failed: {failed_count}, Skipped: {skipped_count}")
+        
+        summary = {
+            "success_count": success_count,
+            "failed_count": failed_count,
+            "skipped_count": skipped_count,
+            "details": details
+        }
+        
+        if success_count > 0:
+            event_bus.files_state_changed.emit("snapshots_deleted", [], "snapshot_manager", payload={})
+            
+        self.finished_signal.emit(True, summary)

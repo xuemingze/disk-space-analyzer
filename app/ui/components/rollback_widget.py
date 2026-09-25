@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from app.utils.file_helper import format_size
 from app.core.cleaner import ARCHIVE_MANIFEST_DIR
-from app.core.rollback_worker import RollbackWorker
+from app.core.rollback_worker import RollbackWorker, SnapshotDeleteWorker
 
 class RollbackWidget(QWidget):
     def __init__(self, parent=None):
@@ -21,7 +21,7 @@ class RollbackWidget(QWidget):
         event_bus.files_state_changed.connect(self.on_global_files_changed, Qt.QueuedConnection)
 
     def on_global_files_changed(self, event_type: str, processed_paths: list, task_id: str, payload: dict):
-        if event_type in ("archived", "rollbacked"):
+        if event_type in ("archived", "rollbacked", "snapshots_deleted"):
             self.load_manifests()
         
     def init_ui(self):
@@ -35,6 +35,7 @@ class RollbackWidget(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         
         self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QListWidget.ExtendedSelection)
         self.list_widget.itemSelectionChanged.connect(self.on_manifest_selected)
         
         btn_refresh = QPushButton("🔄 刷新快照列表")
@@ -43,6 +44,14 @@ class RollbackWidget(QWidget):
         left_layout.addWidget(QLabel("📂 历史归档/备份记录"))
         left_layout.addWidget(self.list_widget)
         left_layout.addWidget(btn_refresh)
+        
+        self.btn_delete_selected = QPushButton("🗑️ 删除选中快照")
+        self.btn_delete_selected.clicked.connect(self.delete_selected_snapshots)
+        self.btn_clean_all = QPushButton("🧹 一键清理无用快照")
+        self.btn_clean_all.clicked.connect(self.clean_all_snapshots)
+        
+        left_layout.addWidget(self.btn_delete_selected)
+        left_layout.addWidget(self.btn_clean_all)
         
         # 右侧：树状详情
         right_widget = QWidget()
@@ -93,7 +102,9 @@ class RollbackWidget(QWidget):
         if not ARCHIVE_MANIFEST_DIR.exists():
             return
             
-        for file in ARCHIVE_MANIFEST_DIR.glob("manifest_*.json"):
+        manifest_files = list(ARCHIVE_MANIFEST_DIR.glob("manifest_*.json"))
+        manifest_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        for file in manifest_files:
             try:
                 with open(file, "r", encoding="utf-8") as f:
                     data = json.load(f)
@@ -243,3 +254,46 @@ class RollbackWidget(QWidget):
         else:
             QMessageBox.warning(self, "回滚存在异常", msg)
         self.on_manifest_selected()
+
+    def delete_selected_snapshots(self):
+        selected_items = self.list_widget.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "提示", "请先选择要删除的快照！")
+            return
+            
+        paths = [item.data(Qt.UserRole) for item in selected_items]
+        
+        # Format confirmation message
+        msg = f"确定要删除选中的 {len(paths)} 个归档快照吗？\\n注意：正在回滚中的快照将自动跳过。"
+        if QMessageBox.question(self, "删除确认", msg) != QMessageBox.Yes:
+            return
+            
+        self._start_delete_worker(paths, clean_all=False)
+        
+    def clean_all_snapshots(self):
+        msg = "确定要一键清理所有已失效或完全回滚的无用快照吗？\\n（已完成回滚或已取消的快照将被彻底删除，未回滚的快照将被保留。）"
+        if QMessageBox.question(self, "清理确认", msg) != QMessageBox.Yes:
+            return
+            
+        self._start_delete_worker([], clean_all=True)
+        
+    def _start_delete_worker(self, paths, clean_all):
+        self.btn_delete_selected.setEnabled(False)
+        self.btn_clean_all.setEnabled(False)
+        
+        self.delete_worker = SnapshotDeleteWorker(paths, clean_all=clean_all)
+        from app.core.task_manager import global_task_manager, TaskType, TaskStatus
+        self.current_del_task_id = global_task_manager.create_task("清理归档快照", TaskType.CLEANUP, self.delete_worker).task_id
+        
+        self.delete_worker.finished_signal.connect(self.on_delete_finished)
+        self.delete_worker.start()
+        
+    def on_delete_finished(self, success, summary):
+        self.btn_delete_selected.setEnabled(True)
+        self.btn_clean_all.setEnabled(True)
+        
+        if hasattr(self, "current_del_task_id") and self.current_del_task_id:
+            from app.core.task_manager import global_task_manager, TaskStatus
+            global_task_manager.set_task_status(self.current_del_task_id, TaskStatus.COMPLETED)
+            
+        QMessageBox.information(self, "清理完成", f"操作完成！\\n成功删除: {summary['success_count']} 个\\n跳过/占用: {summary['skipped_count']} 个\\n失败: {summary['failed_count']} 个")
