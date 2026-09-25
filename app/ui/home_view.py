@@ -169,7 +169,6 @@ class HomeView(QWidget):
         custom_folder_layout.setContentsMargins(8, 8, 8, 8)
         
         self.custom_paths_list = QListWidget()
-        self.custom_paths_list.setMaximumHeight(45)
         self.add_folder_btn = QPushButton("➕ 添加目录")
         self.add_folder_btn.setProperty("class", "SecondaryButton")
         self.add_folder_btn.clicked.connect(self.add_custom_folder)
@@ -199,25 +198,21 @@ class HomeView(QWidget):
         # 操作控制按钮
         action_btn_box = QHBoxLayout()
         self.start_scan_btn = QPushButton("🚀 启动分阶段扫描")
-        self.start_scan_btn.setMinimumHeight(40)
         self.start_scan_btn.setStyleSheet("font-size: 13px; font-weight: bold;")
         self.start_scan_btn.clicked.connect(self.start_scan)
         
         self.pause_scan_btn = QPushButton("⏸️ 暂停")
         self.pause_scan_btn.setProperty("class", "SecondaryButton")
-        self.pause_scan_btn.setMinimumHeight(40)
         self.pause_scan_btn.setEnabled(False)
         self.pause_scan_btn.clicked.connect(self.toggle_pause_scan)
 
         self.stop_scan_btn = QPushButton("⏹️ 取消")
         self.stop_scan_btn.setProperty("class", "DangerButton")
-        self.stop_scan_btn.setMinimumHeight(40)
         self.stop_scan_btn.setEnabled(False)
         self.stop_scan_btn.clicked.connect(self.stop_scan)
 
         self.task_center_btn = QPushButton("⚡ 任务管理")
         self.task_center_btn.setStyleSheet("background-color: #4F46E5; border-color: #6366F1; font-weight: bold;")
-        self.task_center_btn.setMinimumHeight(40)
         self.task_center_btn.clicked.connect(self.open_task_manager)
         
         action_btn_box.addWidget(self.start_scan_btn, 2)
@@ -858,8 +853,8 @@ class HomeView(QWidget):
         self.chart_widget.update_ai_insights(ai_response.final_text, ai_response.report_id, scan_id)
         
         sections = AIReportParser.extract_sections(ai_response.final_text)
-        self.duplicate_wrapper.ai_panel.setMarkdown("**🤖 报告中的冗余分析**\n\n" + (sections.get("redundant_files") or "报告未提供该项分析。\n") + f"\n\n*来源: 报告 ID {ai_response.report_id}*")
-        self.top100_wrapper.ai_panel.setMarkdown("**🤖 报告中的大文件观察**\n\n" + (sections.get("large_files") or "报告未提供该项分析。\n") + f"\n\n*来源: 报告 ID {ai_response.report_id}*")
+        self.duplicate_wrapper.ai_panel.setMarkdown("**🤖 报告中的冗余分析**\n\n" + ((sections.get("duplicate_waste", "") + "\n" + sections.get("duplicate_warning", "")).strip() or "报告未提供该项分析。\n") + f"\n\n*来源: 报告 ID {ai_response.report_id}*")
+        self.top100_wrapper.ai_panel.setMarkdown("**🤖 报告中的大文件观察**\n\n" + ((sections.get("top10_analysis", "") + "\n" + sections.get("top10_warning", "")).strip() or "报告未提供该项分析。\n") + f"\n\n*来源: 报告 ID {ai_response.report_id}*")
         from app.core.events import event_bus
         event_bus.publish_report_updated(ai_response.report_id, scan_id)
             

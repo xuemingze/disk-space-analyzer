@@ -27,6 +27,7 @@ class MigrationDialog(QDialog):
 
         self.setWindowTitle("📦 智能应用与文件迁移向导 (可回滚 / 关联项审计)")
         self.resize(860, 640)
+        self.setMinimumSize(800, 600)
         self.setModal(True)
 
         self.init_ui()
@@ -127,7 +128,7 @@ class MigrationDialog(QDialog):
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(120)
+        
         self.log_text.setStyleSheet("background-color: #0F172A; font-family: Consolas, monospace; font-size: 11px;")
         layout.addWidget(self.log_text)
 

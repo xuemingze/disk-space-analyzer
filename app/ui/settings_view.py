@@ -339,7 +339,7 @@ class SettingsView(QWidget):
         # 忽略文件夹列表展示
         self.ignore_list = QListWidget()
         self.ignore_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.ignore_list.setMinimumHeight(130)
+        
         self.ignore_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.ignore_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.ignore_list.customContextMenuRequested.connect(self.on_ignore_list_context_menu)

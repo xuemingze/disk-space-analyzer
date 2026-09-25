@@ -172,13 +172,11 @@ class TaskManagerDialog(QDialog):
             if task.status == TaskStatus.RUNNING:
                 btn_pause = QPushButton("⏸️")
                 btn_pause.setToolTip("暂停任务")
-                btn_pause.setFixedWidth(32)
                 btn_pause.clicked.connect(lambda _, tid=task.task_id: global_task_manager.pause_task(tid))
                 act_layout.addWidget(btn_pause)
             elif task.status == TaskStatus.PAUSED:
                 btn_resume = QPushButton("▶️")
                 btn_resume.setToolTip("恢复任务")
-                btn_resume.setFixedWidth(32)
                 btn_resume.clicked.connect(lambda _, tid=task.task_id: global_task_manager.resume_task(tid))
                 act_layout.addWidget(btn_resume)
                 
@@ -186,13 +184,11 @@ class TaskManagerDialog(QDialog):
                 btn_cancel = QPushButton("⏹️")
                 btn_cancel.setToolTip("取消任务")
                 btn_cancel.setProperty("class", "DangerButton")
-                btn_cancel.setFixedWidth(32)
                 btn_cancel.clicked.connect(lambda _, tid=task.task_id: global_task_manager.cancel_task(tid))
                 act_layout.addWidget(btn_cancel)
                 
             btn_log = QPushButton("📜")
             btn_log.setToolTip("查看运行日志")
-            btn_log.setFixedWidth(32)
             btn_log.clicked.connect(lambda _, t=task: TaskLogDialog(t, self).exec())
             act_layout.addWidget(btn_log)
             

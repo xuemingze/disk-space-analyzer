@@ -182,7 +182,21 @@ class SpacePanoramaWidget(QWidget):
             return
             
         header = f"关联信息 - 报告 ID: {report_id} | 扫描任务 ID: {scan_task_id} | 数据来源: AI 深度分析报告\n\n"
-        self.ai_report_view.setMarkdown(header + report_text)
+        from app.core.ai_parser import AIReportParser
+        sections = AIReportParser.extract_sections(report_text)
+        core = sections.get("panorama_core_issues", "")
+        obs = sections.get("panorama_key_observations", "")
+        hotspots = sections.get("panorama_redundant_hotspots", "")
+        
+        combined = ""
+        if core: combined += core + "\n\n"
+        if obs: combined += obs + "\n\n"
+        if hotspots: combined += hotspots + "\n\n"
+        
+        if not combined.strip():
+            combined = "报告未提供该项分析。"
+            
+        self.ai_report_view.setMarkdown(header + combined)
         
     def clear_ai_insights(self):
         self.ai_report_view.setHtml("<div style='color:#94A3B8; text-align:center; padding: 20px;'>暂无有效 AI 分析数据。请重新生成报告。</div>")
