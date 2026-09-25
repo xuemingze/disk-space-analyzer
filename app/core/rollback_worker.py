@@ -72,6 +72,7 @@ class RollbackWorker(QThread):
             self.finished_signal.emit(True, {"success_count": 0, "failed_count": 0, "skipped_count": 0})
             return
 
+        success_paths = []
         summary = {
             "success_count": 0,
             "failed_count": 0,
@@ -114,6 +115,7 @@ class RollbackWorker(QThread):
                 os.makedirs(os.path.dirname(orig), exist_ok=True)
                 shutil.move(targ, orig)
                 summary["success_count"] += 1
+                success_paths.append(orig)
                 summary["restored_bytes"] += f_size
                 processed_bytes += f_size
                 bytes_since_last += f_size
@@ -165,4 +167,9 @@ class RollbackWorker(QThread):
             f"🎉 回滚任务完成！成功: {summary['success_count']} | 失败: {summary['failed_count']} | 跳过: {summary['skipped_count']} (耗时 {elapsed}s)",
             "success" if not has_failed else "warn"
         )
+        
+        from app.core.events import event_bus
+        if success_paths:
+            event_bus.publish_files_changed("rollbacked", success_paths, "ROLLBACK_TASK", {"restored_bytes": summary["restored_bytes"]})
+            
         self.finished_signal.emit(not has_failed, summary)

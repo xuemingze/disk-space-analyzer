@@ -283,6 +283,13 @@ class ArchiveWorker(QThread):
             f"🎉 归档任务执行完成！成功: {summary['success_count']} | 失败: {summary['failed_count']} | 跳过: {summary['skipped_count']} | 容量: {format_size(summary['archived_bytes'])} (耗时 {elapsed}s)",
             "success" if summary["failed_count"] == 0 else "warn"
         )
+        
+        # --- [New] Domain Event Publishing ---
+        from app.core.events import event_bus
+        success_paths = [item["original_path"] for item in manifest["items"] if item.get("operation_status") == "success"]
+        if success_paths:
+            event_bus.publish_files_changed("archived", success_paths, self.task_id, {"archived_bytes": summary["archived_bytes"]})
+            
         self.finished_signal.emit(summary["failed_count"] == 0, summary)
 
     @classmethod
@@ -336,6 +343,7 @@ class DeleteWorker(QThread):
             "errors": []
         }
         total = len(self.file_paths)
+        success_paths = []
 
         for idx, fpath in enumerate(self.file_paths, 1):
             if self._is_canceled:
@@ -360,12 +368,17 @@ class DeleteWorker(QThread):
                         shutil.rmtree(fpath)
                 summary["success_count"] += 1
                 summary["freed_bytes"] += file_size
+                success_paths.append(fpath)
             except Exception as e:
                 summary["failed_count"] += 1
                 summary["errors"].append({"path": fpath, "error": str(e)})
 
             self.progress_signal.emit(idx, total)
 
+        if success_paths:
+            from app.core.events import event_bus
+            event_bus.publish_files_changed("deleted", success_paths, "DELETE_TASK", {"freed_bytes": summary["freed_bytes"]})
+            
         self.finished_signal.emit(summary["failed_count"] == 0, summary)
 
 

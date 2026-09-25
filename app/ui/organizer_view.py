@@ -72,6 +72,9 @@ class OrganizerView(QWidget):
 
         self.init_ui()
         self.load_directory(self.current_dir)
+        
+        from app.core.events import event_bus
+        event_bus.files_state_changed.connect(self.on_global_files_changed, Qt.QueuedConnection)
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -363,3 +366,22 @@ class OrganizerView(QWidget):
             return
 
         self.preview_organize_plan()
+
+    def on_global_files_changed(self, event_type: str, processed_paths: list, task_id: str, payload: dict):
+        if not self.current_file_items:
+            return
+        
+        processed_set = set(processed_paths)
+        new_items = []
+        removed_count = 0
+        
+        for item in self.current_file_items:
+            if item.get("path") in processed_set:
+                removed_count += 1
+            else:
+                new_items.append(item)
+                
+        if removed_count > 0:
+            self.current_file_items = new_items
+            if hasattr(self, "file_table"):
+                self.file_table.remove_paths(processed_paths)

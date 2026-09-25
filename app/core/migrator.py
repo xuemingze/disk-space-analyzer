@@ -258,6 +258,7 @@ foreach ($lnk in $links) {{
             "registry_backup": []
         }
 
+        success_paths = []
         summary = {
             "manifest_id": manifest_id,
             "manifest_path": str(manifest_file),
@@ -323,6 +324,7 @@ foreach ($lnk in $links) {{
                 })
 
                 summary["success_count"] += 1
+                success_paths.append(src_path)
                 summary["migrated_bytes"] += src_size
                 self.log_signal.emit(f"✅ 文件实体迁移完成 (释放空间: {format_size(src_size)})", "success")
 
@@ -383,6 +385,11 @@ foreach ($lnk in $links) {{
             f"\n🎉 智能迁移完成！成功: {summary['success_count']} | 失败: {summary['failed_count']} | 迁移容量: {format_size(summary['migrated_bytes'])}",
             "success" if summary["failed_count"] == 0 else "warn"
         )
+        
+        from app.core.events import event_bus
+        if success_paths:
+            event_bus.publish_files_changed("migrated", success_paths, "MIGRATE_TASK", {"migrated_bytes": summary["migrated_bytes"]})
+            
         self.finished_signal.emit(summary["failed_count"] == 0, summary)
 
     def _sync_shortcuts_with_backup(self, old_path: str, new_path: str, backup_list: list) -> int:

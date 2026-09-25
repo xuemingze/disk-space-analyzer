@@ -131,6 +131,13 @@ class FileTableModel(QAbstractTableModel):
         self._data = new_data
         self.endResetModel()
 
+    def add_data(self, new_items: List[Dict[str, Any]]):
+        if not new_items:
+            return
+        self.beginResetModel()
+        self._data.extend(new_items)
+        self.endResetModel()
+
     def select_all(self, checked: bool):
         self.beginResetModel()
         self.checked_paths.clear()
@@ -327,6 +334,10 @@ class FileDataGridWidget(QWidget):
     def remove_paths(self, paths_to_remove: List[str]):
         remove_set = {os.path.normpath(p).lower() for p in paths_to_remove}
         self.source_model.remove_paths(remove_set)
+        self._update_stats_label()
+
+    def add_data(self, new_items: List[Dict[str, Any]]):
+        self.source_model.add_data(new_items)
         self._update_stats_label()
 
     def apply_filter(self, keyword: str):

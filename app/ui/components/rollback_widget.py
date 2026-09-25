@@ -17,6 +17,13 @@ class RollbackWidget(QWidget):
         self.current_manifest = None
         self.init_ui()
         
+        from app.core.events import event_bus
+        event_bus.files_state_changed.connect(self.on_global_files_changed, Qt.QueuedConnection)
+
+    def on_global_files_changed(self, event_type: str, processed_paths: list, task_id: str, payload: dict):
+        if event_type in ("archived", "rollbacked"):
+            self.load_manifests()
+        
     def init_ui(self):
         layout = QVBoxLayout(self)
         

@@ -90,6 +90,10 @@ class HomeView(QWidget):
         self.ai_worker: Optional[AIWorker] = None
         
         self.init_ui()
+        
+        from app.core.events import event_bus
+        event_bus.files_state_changed.connect(self.on_global_files_changed, Qt.QueuedConnection)
+        event_bus.report_updated.connect(self.on_global_report_updated, Qt.QueuedConnection)
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -891,3 +895,116 @@ class HomeView(QWidget):
                 QMessageBox.information(self, "导出成功", f"分析报告已成功生成并保存至:\n{save_path}")
             else:
                 QMessageBox.critical(self, "导出失败", "生成或保存报告时发生错误！")
+
+    def on_global_files_changed(self, event_type: str, processed_paths: list, task_id: str, payload: dict):
+        if not self.current_scan_result:
+            return
+            
+        processed_set = set(processed_paths)
+        redundant_files = self.current_scan_result.get("redundant_files", [])
+        top100_files = self.current_scan_result.get("top_100_files", [])
+        
+        if "history_removed_files" not in self.current_scan_result:
+            self.current_scan_result["history_removed_files"] = {}
+        if "history_removed_top100" not in self.current_scan_result:
+            self.current_scan_result["history_removed_top100"] = {}
+            
+        history_map = self.current_scan_result["history_removed_files"]
+        history_top100_map = self.current_scan_result["history_removed_top100"]
+        
+        changed_count = 0
+        changed_bytes = 0
+        changed_dup_bytes = 0
+        
+        if event_type == "rollbacked":
+            restored_files = []
+            restored_top100 = []
+            for path in processed_paths:
+                if path in history_map:
+                    f = history_map.pop(path)
+                    redundant_files.append(f)
+                    restored_files.append(f)
+                    
+                    changed_count += 1
+                    changed_bytes += f.get("size", 0)
+                    if f.get("is_duplicate"):
+                        changed_dup_bytes += f.get("size", 0)
+                
+                if path in history_top100_map:
+                    f_top = history_top100_map.pop(path)
+                    top100_files.append(f_top)
+                    restored_top100.append(f_top)
+                        
+            if changed_count == 0 and not restored_top100:
+                return
+                
+            self.current_scan_result["total_files"] = self.current_scan_result.get("total_files", 0) + changed_count
+            self.current_scan_result["total_bytes"] = self.current_scan_result.get("total_bytes", 0) + changed_bytes
+            
+            reclaimable_diff = changed_bytes - changed_dup_bytes
+            self.current_scan_result["reclaimable_bytes"] = self.current_scan_result.get("reclaimable_bytes", 0) + reclaimable_diff
+            self.current_scan_result["duplicate_wasted_bytes"] = self.current_scan_result.get("duplicate_wasted_bytes", 0) + changed_dup_bytes
+            
+            dup_to_add = [f for f in restored_files if f.get("is_duplicate")]
+            rel_to_add = [f for f in restored_files if not f.get("is_duplicate")]
+            
+            if dup_to_add:
+                self.duplicate_table.add_data(dup_to_add)
+            if rel_to_add:
+                self.releasable_table.add_data(rel_to_add)
+            if restored_top100:
+                # 重新排序并恢复
+                top100_files.sort(key=lambda x: x.get("size", 0), reverse=True)
+                self.current_scan_result["top_100_files"] = top100_files[:100]
+                self.top100_table.populate_data(self.current_scan_result["top_100_files"], self.current_scan_result["total_bytes"])
+                
+            action_name = "回滚并恢复显示"
+        else:
+            new_redundant = []
+            for f in redundant_files:
+                if f.get("path") in processed_set:
+                    history_map[f.get("path")] = f
+                    changed_count += 1
+                    changed_bytes += f.get("size", 0)
+                    if f.get("is_duplicate"):
+                        changed_dup_bytes += f.get("size", 0)
+                else:
+                    new_redundant.append(f)
+                    
+            new_top100 = []
+            for f in top100_files:
+                if f.get("path") in processed_set:
+                    history_top100_map[f.get("path")] = f
+                else:
+                    new_top100.append(f)
+                    
+            if changed_count == 0 and len(new_top100) == len(top100_files):
+                return
+                
+            self.current_scan_result["redundant_files"] = new_redundant
+            self.current_scan_result["top_100_files"] = new_top100
+            
+            self.current_scan_result["total_files"] = max(0, self.current_scan_result.get("total_files", 0) - changed_count)
+            self.current_scan_result["total_bytes"] = max(0, self.current_scan_result.get("total_bytes", 0) - changed_bytes)
+            
+            reclaimable_diff = changed_bytes - changed_dup_bytes
+            self.current_scan_result["reclaimable_bytes"] = max(0, self.current_scan_result.get("reclaimable_bytes", 0) - reclaimable_diff)
+            self.current_scan_result["duplicate_wasted_bytes"] = max(0, self.current_scan_result.get("duplicate_wasted_bytes", 0) - changed_dup_bytes)
+            
+            self.duplicate_table.remove_paths(processed_paths)
+            self.releasable_table.remove_paths(processed_paths)
+            self.top100_table.remove_paths(processed_paths)
+            
+            action_name = {"archived": "归档", "deleted": "清理", "migrated": "迁移"}.get(event_type, event_type)
+            
+        self.stat_cards.update_stats(
+            total_bytes_str=format_size(self.current_scan_result["total_bytes"]),
+            reclaimable_str=format_size(self.current_scan_result["reclaimable_bytes"]),
+            files_count_str=f"{self.current_scan_result['total_files']:,} 个",
+            dup_waste_str=format_size(self.current_scan_result["duplicate_wasted_bytes"]),
+            dup_groups_count=self.current_scan_result.get("duplicate_groups_count", 0)
+        )
+        self.selection_stat_label.setText(f"增量刷新: {changed_count} 个文件已{action_name}")
+
+    def on_global_report_updated(self, report_id: str, scan_task_id: str):
+        pass # 预留
