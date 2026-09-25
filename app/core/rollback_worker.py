@@ -251,6 +251,6 @@ class SnapshotDeleteWorker(QThread):
         }
         
         if success_count > 0:
-            event_bus.files_state_changed.emit("snapshots_deleted", [], "snapshot_manager", payload={})
+            event_bus.files_state_changed.emit("snapshots_deleted", [], "snapshot_manager", {})
             
         self.finished_signal.emit(True, summary)
