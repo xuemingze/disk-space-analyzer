@@ -25,13 +25,14 @@ from app.ui.components.data_table import FileDataGridWidget
 from app.ui.components.migration_dialog import MigrationDialog
 from app.ui.components.task_manager_widget import TaskManagerDialog
 from app.ui.components.organize_dialog import OrganizePreviewDialog
+from app.ui.components.rollback_widget import RollbackWidget
 from app.utils.file_helper import format_size
 from app.utils.logger import app_logger
 
 
 class AIWorker(QThread):
     recommend_done = Signal(list)
-    report_done = Signal(str)
+    report_done = Signal(object)
     classify_done = Signal(list)
     failed = Signal(str)
 
@@ -54,10 +55,10 @@ class AIWorker(QThread):
                 )
                 self.recommend_done.emit(paths)
             elif self.action == "report":
-                report_md = AIService.generate_health_report_with_ai(
+                ai_response = AIService.generate_health_report_with_ai(
                     base_url, api_key, model, self.data
                 )
-                self.report_done.emit(report_md)
+                self.report_done.emit(ai_response)
             elif self.action == "classify":
                 dest_root = self.kwargs.get("destination_root", "D:/归档备份")
                 classified = AIService.classify_files_with_ai(
@@ -261,6 +262,9 @@ class HomeView(QWidget):
         self.top100_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.top100_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
         self.tabs.addTab(self.top100_table, "🏆 全局 Top 100 超大文件 (阶段一即显)")
+        
+        self.rollback_tab = RollbackWidget()
+        self.tabs.addTab(self.rollback_tab, "🔙 归档快照与安全回滚 (安全审计)")
         
         # AI 深度分析报告
         report_widget = QWidget()
@@ -730,12 +734,23 @@ class HomeView(QWidget):
         self.ai_worker.failed.connect(self.on_ai_failed)
         self.ai_worker.start()
 
-    def on_ai_report_done(self, report_md: str):
+    def on_ai_report_done(self, ai_response):
         self.gen_ai_report_btn.setEnabled(True)
         # 添加任务关联信息
         scan_id = self.current_scan_result.get('task_id', 'Unknown')
-        report_text = f"✅ 分析成功\n扫描任务ID: {scan_id}\n生成时间: {self.current_scan_result.get('timestamp', 'N/A')}\n\n" + report_md
+        
+        # 把 report_id 保存到 scan_result 里
+        self.current_scan_result['report_id'] = ai_response.report_id
+        
+        report_text = f"✅ 分析成功\n扫描任务ID: {scan_id}\n生成时间: {self.current_scan_result.get('timestamp', 'N/A')}\n报告ID: {ai_response.report_id}\n分析模型: {ai_response.model}\n\n" + ai_response.final_text
         self.report_text_edit.setPlainText(report_text)
+        
+        # 更新图表
+        if ai_response.structured_data and "chart_categories" in ai_response.structured_data:
+            cat_list = ai_response.structured_data["chart_categories"]
+            cat_stats = { item["category"]: {"bytes": item["bytes"], "percent": item.get("percent", 0.0)} for item in cat_list }
+            self.chart_widget.update_chart(cat_stats)
+            
         self.tabs.setCurrentIndex(3)
 
     def on_ai_failed(self, err: str):
@@ -768,11 +783,15 @@ class HomeView(QWidget):
 
         file_items = [{"path": p} for p in checked_paths]
 
+        report_id = self.current_scan_result.get('report_id', '') if self.current_scan_result else ''
+        scan_id = self.current_scan_result.get('task_id', '') if self.current_scan_result else ''
         self.archive_worker = ArchiveWorker(
             file_items=file_items,
             destination_root=archive_dir,
             conflict_policy="auto_rename",
-            preserve_structure=True
+            preserve_structure=True,
+            report_id=report_id,
+            scan_task_id=scan_id
         )
 
         task_item = global_task_manager.create_task(

@@ -435,11 +435,18 @@ class OrganizePreviewDialog(QDialog):
         self.progress_bar.setValue(0)
         self.status_label.setText("正在执行后台目录级安全归档...")
 
+        report_id = ""
+        scan_id = ""
+        if self.groups and len(self.groups) > 0:
+            report_id = self.groups[0].get("report_id", "")
+            scan_id = self.groups[0].get("task_id", "")
         self.archive_worker = ArchiveWorker(
             file_items=selected_file_items,
             destination_root=self.destination_root,
             conflict_policy=self.conflict_policy,
-            preserve_structure=True
+            preserve_structure=True,
+            report_id=report_id,
+            scan_task_id=scan_id
         )
         self.archive_worker.progress_signal.connect(self.on_archive_progress)
         self.archive_worker.finished_signal.connect(self.on_archive_finished)

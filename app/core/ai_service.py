@@ -4,11 +4,27 @@ import requests
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from urllib.parse import urljoin
+from dataclasses import dataclass, field
 
 from app.utils.logger import app_logger
 from app.utils.file_helper import is_system_critical_path, categorize_file_by_ext, format_size
 from app.core.app_detector import AppDetector
 
+@dataclass
+class AIResponse:
+    task_id: str
+    report_id: Optional[str] = None
+    provider: str = "Unknown"
+    model: str = "Unknown"
+    final_text: str = ""
+    structured_data: Optional[Dict[str, Any]] = None
+    reasoning_removed: bool = True
+    analysis_source: str = "AI"
+    parse_status: str = "SUCCESS" # SUCCESS, MISSING_FINAL_TEXT, PARSE_ERROR, EMPTY
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+    raw_content: str = ""
+    reasoning_content: str = ""
 
 class AIService:
     """
@@ -38,7 +54,7 @@ class AIService:
         return url + "/chat/completions"
 
     @staticmethod
-    def _execute_with_retry(method: str, url: str, kwargs: dict, max_retries: int = None, task_desc: str = ""):
+    def _execute_with_retry(method: str, url: str, kwargs: dict, max_retries: int = None, task_desc: str = "", validator=None):
         import time
         import uuid
         import requests
@@ -70,7 +86,19 @@ class AIService:
                 app_logger.info(f"[AI-TASK-{task_id}] 尝试 {attempt+1}/{max_retries+1} 耗时: {elapsed:.2f}s, HTTP 状态: {resp.status_code}")
                 
                 if resp.status_code == 200:
-                    return True, {"data": resp.json(), "task_id": task_id, "elapsed": elapsed}
+                    resp_json = resp.json()
+                    if validator:
+                        is_valid, val_err, parsed_data = validator(resp_json)
+                        if not is_valid:
+                            last_err = f"业务逻辑校验失败: {val_err}"
+                            if attempt < max_retries:
+                                pass # allow retry
+                            else:
+                                break # skip to bottom error
+                        else:
+                            return True, {"data": resp_json, "task_id": task_id, "elapsed": elapsed, "parsed_data": parsed_data}
+                    else:
+                        return True, {"data": resp_json, "task_id": task_id, "elapsed": elapsed}
                 elif resp.status_code in (400, 401, 403, 404, 422):
                     last_err = f"不可重试错误 (HTTP {resp.status_code}): {resp.text[:200]}"
                     break # Don't retry
@@ -151,6 +179,54 @@ class AIService:
         return False, result
 
     @staticmethod
+    def _parse_ai_response(resp_json: dict, task_id: str = "") -> AIResponse:
+        resp = AIResponse(task_id=task_id)
+        if not resp_json:
+            resp.parse_status = "EMPTY"
+            resp.error_message = "空响应"
+            return resp
+            
+        try:
+            choices = resp_json.get("choices", [])
+            if not choices:
+                resp.parse_status = "EMPTY"
+                resp.error_message = "没有返回 choices 字段"
+                return resp
+                
+            message = choices[0].get("message", {})
+            content = message.get("content", "")
+            
+            # Extract reasoning
+            reasoning = message.get("reasoning_content", "")
+            if not reasoning:
+                reasoning = message.get("thinking", "")
+            if not reasoning:
+                reasoning = message.get("think", "")
+                
+            import re
+            # Extract <think> from content if present
+            think_match = re.search(r'<think>(.*?)</think>', content, flags=re.DOTALL)
+            if think_match:
+                if not reasoning:
+                    reasoning = think_match.group(1).strip()
+                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                
+            resp.raw_content = content
+            resp.reasoning_content = reasoning
+            resp.final_text = content.strip()
+            
+            if not resp.final_text:
+                resp.parse_status = "MISSING_FINAL_TEXT"
+                resp.error_message = "缺少最终回复"
+                return resp
+                
+            return resp
+        except Exception as e:
+            resp.parse_status = "PARSE_ERROR"
+            resp.error_message = str(e)
+            return resp
+
+    @staticmethod
     def _clean_json_response(content: str) -> str:
         """从大模型混杂的输出中提取并清理干净的 JSON 字符串"""
         import re
@@ -210,22 +286,36 @@ class AIService:
         if "gpt" in model.lower() or "deepseek" in model.lower():
             payload["response_format"] = {"type": "json_object"}
 
-        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="处理报告")
+        def validator(resp_json):
+            ai_resp = cls._parse_ai_response(resp_json)
+            if ai_resp.parse_status != "SUCCESS" and ai_resp.parse_status != "MISSING_FINAL_TEXT":
+                return False, ai_resp.error_message, None
+            if ai_resp.parse_status == "MISSING_FINAL_TEXT":
+                return False, "缺少最终回复 (可能仅包含思考内容)", None
+            clean_str = cls._clean_json_response(ai_resp.final_text)
+            if not clean_str:
+                return False, "未找到 JSON 内容", None
+            try:
+                parsed = json.loads(clean_str)
+                return True, "", parsed
+            except Exception as e:
+                return False, f"JSON 解析失败: {e}", None
+
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="处理报告", validator=validator)
         if not success:
             raise RuntimeError(f"AI 提取执行清单失败: {result.get('error')}")
             
-        content_str = result["data"]["choices"][0]["message"]["content"]
-        clean_str = cls._clean_json_response(content_str)
-        if not clean_str:
-            raise RuntimeError("AI 返回空响应或未找到 JSON")
-            
-        try:
-            parsed = json.loads(clean_str)
-        except Exception as e:
-            raise RuntimeError(f"AI 响应 JSON 解析失败: {e}\n响应内容片段: {content_str[:200]}")
+        parsed = result.get("parsed_data")
+        if parsed is None and "data" in result:
+            ai_resp = cls._parse_ai_response(result.get("data", {}))
+            clean_str = cls._clean_json_response(ai_resp.final_text or "")
+            try:
+                parsed = json.loads(clean_str)
+            except Exception:
+                parsed = None
             
         grouped_units = []
-        if "groups" in parsed and isinstance(parsed["groups"], list):
+        if parsed and "groups" in parsed and isinstance(parsed["groups"], list):
             import hashlib
             dest_root_p = Path(destination_root)
             for g in parsed["groups"]:
@@ -353,22 +443,32 @@ class AIService:
                 payload["response_format"] = {"type": "json_object"}
 
             try:
-                success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload})
+                def validator(resp_json):
+                    ai_resp = cls._parse_ai_response(resp_json)
+                    if ai_resp.parse_status == "MISSING_FINAL_TEXT":
+                        return False, "缺少最终回复 (可能仅包含思考内容)", None
+                    if ai_resp.parse_status != "SUCCESS":
+                        return False, ai_resp.error_message, None
+                    clean_str = cls._clean_json_response(ai_resp.final_text)
+                    if not clean_str:
+                        return False, "未找到 JSON 内容", None
+                    try:
+                        parsed = json.loads(clean_str)
+                        return True, "", parsed
+                    except Exception as e:
+                        return False, f"JSON 解析失败: {e}", None
+                
+                success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, validator=validator)
                 if success:
-                    content_str = result["data"]["choices"][0]["message"]["content"]
-                    
-                    # Clean markdown code blocks
-                    clean_str = content_str.strip()
-                    if clean_str.startswith("```json"):
-                        clean_str = clean_str[7:]
-                    elif clean_str.startswith("```"):
-                        clean_str = clean_str[3:]
-                    if clean_str.endswith("```"):
-                        clean_str = clean_str[:-3]
-                    clean_str = clean_str.strip()
-                    
-                    parsed = json.loads(clean_str)
-                    if "groups" in parsed and isinstance(parsed["groups"], list):
+                    parsed = result.get("parsed_data")
+                    if parsed is None and "data" in result:
+                        ai_resp = cls._parse_ai_response(result.get("data", {}))
+                        clean_str = cls._clean_json_response(ai_resp.final_text or "")
+                        try:
+                            parsed = json.loads(clean_str)
+                        except Exception:
+                            parsed = None
+                    if parsed and "groups" in parsed and isinstance(parsed["groups"], list):
                         res_map = {item["original_root"]: item for item in parsed["groups"] if "original_root" in item}
                         
                         # 用大模型的精炼识别结果更新目录单元
@@ -447,21 +547,36 @@ class AIService:
         if "gpt" in model.lower() or "deepseek" in model.lower():
             payload["response_format"] = {"type": "json_object"}
 
-        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="智能推荐")
+        def validator(resp_json):
+            ai_resp = cls._parse_ai_response(resp_json)
+            if ai_resp.parse_status == "MISSING_FINAL_TEXT":
+                return False, "缺少最终回复 (可能仅包含思考内容)", None
+            if ai_resp.parse_status != "SUCCESS":
+                return False, ai_resp.error_message, None
+            clean_str = cls._clean_json_response(ai_resp.final_text)
+            if not clean_str:
+                return False, "未找到 JSON 内容", None
+            try:
+                parsed = json.loads(clean_str)
+                return True, "", parsed
+            except Exception as e:
+                return False, f"JSON 解析失败: {e}", None
+
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="智能推荐", validator=validator)
         if not success:
             app_logger.error(f"AI 冗余文件分析调用失败: {result.get('error')}")
             return []
             
-        content = result["data"]["choices"][0]["message"]["content"]
-        
-        # Clean markdown code blocks
-        clean_str = cls._clean_json_response(content)
-        try:
-            parsed = json.loads(clean_str)
-            if "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
-                return parsed["recommended_paths"]
-        except Exception as e:
-            app_logger.error(f"AI 解析冗余推荐响应失败: {e}")
+        parsed = result.get("parsed_data")
+        if parsed is None and "data" in result:
+            ai_resp = cls._parse_ai_response(result.get("data", {}))
+            clean_str = cls._clean_json_response(ai_resp.final_text or "")
+            try:
+                parsed = json.loads(clean_str)
+            except Exception:
+                parsed = None
+        if parsed and "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
+            return parsed["recommended_paths"]
 
         return []
 
@@ -472,7 +587,7 @@ class AIService:
         api_key: str,
         model: str,
         scan_summary: Dict[str, Any]
-    ) -> str:
+    ) -> AIResponse:
         if not (api_key and base_url and model):
             raise ValueError("AI 模型未配置：缺少 base_url、api_key 或 model。")
 
@@ -485,8 +600,9 @@ class AIService:
         
         system_prompt = (
             "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据与冗余文件列表，"
-            "生成一份结构完整、数据详实、排版优美的 Markdown 格式《磁盘空间全景深度分析与治理报告》。\n"
-            "必须包含：\n"
+            "进行深度分析，并严格以 JSON 格式输出结果。\n"
+            "输出 JSON 格式要求: {\"markdown_report\": \"完整的 Markdown 格式报告文本\", \"chart_categories\": [{\"category\": \"分类名称\", \"bytes\": \"占用字节数(整数)\", \"percent\": \"占比(浮点数)\"}]}\n"
+            "报告必须包含：\n"
             "1. 磁盘现状与健康度评估(0-100分与等级)\n"
             "2. 空间构成与类型特征\n"
             "3. 大文件与冗余分布\n"
@@ -519,14 +635,56 @@ class AIService:
             ],
             "temperature": 0.5
         }
+        if "gpt" in model.lower() or "deepseek" in model.lower():
+            payload["response_format"] = {"type": "json_object"}
 
-        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="生成报告")
-        if not success:
-            app_logger.error(f"AI 生成报告失败: {result.get('error')}")
-            raise RuntimeError(f"AI 生成报告失败: {result.get('error')}")
+        def validator(resp_json):
+            import time
+            task_id = f"RPT_{int(time.time()*100)}"
+            ai_resp = cls._parse_ai_response(resp_json, task_id=task_id)
+            if ai_resp.parse_status == "MISSING_FINAL_TEXT":
+                return False, "缺少最终回复 (可能仅包含思考内容)", None
+            if ai_resp.parse_status != "SUCCESS":
+                return False, ai_resp.error_message, None
+                
+            clean_str = cls._clean_json_response(ai_resp.final_text)
+            if not clean_str:
+                return False, "未找到 JSON 内容", None
+                
+            try:
+                parsed = json.loads(clean_str)
+                if "markdown_report" not in parsed:
+                    return False, "缺少 markdown_report 字段", None
+                
+                ai_resp.structured_data = parsed
+                ai_resp.final_text = parsed.get("markdown_report", "")
+                ai_resp.model = model
+                ai_resp.report_id = f"REP_{ai_resp.task_id}"
+                
+                return True, "", ai_resp
+            except Exception as e:
+                return False, f"JSON 解析失败: {e}", None
             
-        content = result["data"]["choices"][0]["message"]["content"]
-        return content
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="生成报告", validator=validator)
+        if not success:
+            err_msg = result.get('error')
+            app_logger.error(f"AI 生成报告失败: {err_msg}")
+            raise RuntimeError(f"AI 生成报告失败: {err_msg}")
+            
+        ai_resp = result.get("parsed_data")
+        if ai_resp is None and "data" in result:
+            ai_resp = cls._parse_ai_response(result.get("data", {}))
+            clean_str = cls._clean_json_response(ai_resp.final_text or "")
+            try:
+                parsed = json.loads(clean_str)
+                if isinstance(parsed, dict) and "markdown_report" in parsed:
+                    ai_resp.structured_data = parsed
+                    ai_resp.final_text = parsed.get("markdown_report", "")
+                    ai_resp.model = model
+                    ai_resp.report_id = f"REP_{ai_resp.task_id}"
+            except Exception:
+                pass
+        return ai_resp
 
     @classmethod
     def _generate_fallback_report(cls, summary: Dict[str, Any]) -> str:

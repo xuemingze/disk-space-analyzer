@@ -38,6 +38,8 @@ class ArchiveWorker(QThread):
         conflict_policy: str = "auto_rename", # auto_rename | skip | overwrite
         preserve_structure: bool = True,
         task_id: Optional[str] = None,
+        report_id: Optional[str] = None,
+        scan_task_id: Optional[str] = None,
         parent=None
     ):
         super().__init__(parent)
@@ -46,6 +48,9 @@ class ArchiveWorker(QThread):
         self.conflict_policy = conflict_policy
         self.preserve_structure = preserve_structure
         self.task_id = task_id or f"ARCHIVE_{int(time.time()*1000)}"
+        self.report_id = report_id or ""
+        self.scan_task_id = scan_task_id or ""
+        self.backup_id = f"BACKUP_{int(time.time()*1000000)}"
 
         self._is_running = True
         self._pause_event = threading.Event()
@@ -64,17 +69,43 @@ class ArchiveWorker(QThread):
         self._pause_event.set()
         self.log_signal.emit("⏹️ 正在中止归档任务...", "warn")
 
+    def _save_manifest(self, manifest, manifest_file):
+        import json
+        with open(manifest_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
     def run(self):
         start_time = time.time()
         ARCHIVE_MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
-        manifest_file = ARCHIVE_MANIFEST_DIR / f"manifest_{self.task_id}.json"
+        manifest_file = ARCHIVE_MANIFEST_DIR / f"manifest_{self.backup_id}.json"
 
         manifest = {
+            "backup_id": self.backup_id,
             "task_id": self.task_id,
+            "scan_task_id": self.scan_task_id,
+            "report_id": self.report_id,
             "created_at": start_time,
+            "status": "PENDING",
+            "conflict_policy": self.conflict_policy,
             "destination_root": self.destination_root,
-            "items": []
+            "items": [],
+            "results": {
+                "success": 0, "failed": 0, "skipped": 0, "conflict": 0
+            },
+            "manifest_path": str(manifest_file),
+            "rollback_status": "NONE",
+            "error_reason": ""
         }
+        
+        # 归档开始前必须确保快照记录已成功写入，否则不得执行实际文件移动
+        try:
+            self._save_manifest(manifest, manifest_file)
+        except Exception as e:
+            self.log_signal.emit(f"❌ 无法写入备份快照，中止任务: {e}", "error")
+            self.finished_signal.emit(False, {"error": str(e)})
+            return
+            
+        manifest["status"] = "RUNNING"
 
         summary = {
             "task_id": self.task_id,
@@ -182,8 +213,18 @@ class ArchiveWorker(QThread):
                 bytes_since_last_calc += f_size
 
                 manifest["items"].append({
+                    "entry_id": f"ENTRY_{idx}",
+                    "node_type": "dir" if p.is_dir() else "file",
                     "original_path": fpath,
-                    "target_path": str(target_file),
+                    "archived_path": str(target_file),
+                    "parent_path": str(p.parent),
+                    "file_id": "",
+                    "directory_id": "",
+                    "operation": "move",
+                    "operation_status": "success",
+                    "rollback_status": "none",
+                    "conflict_status": "none",
+                    "error_message": "",
                     "size": f_size
                 })
 
@@ -210,12 +251,29 @@ class ArchiveWorker(QThread):
                 summary["errors"].append({"path": fpath, "error": str(e)})
                 self.log_signal.emit(f"❌ 归档失败: {fpath} -> {str(e)}", "error")
                 self.file_processed_signal.emit(fpath, "", False, str(e))
+                manifest["items"].append({
+                    "entry_id": f"ENTRY_{idx}",
+                    "node_type": "file",
+                    "original_path": fpath,
+                    "archived_path": "",
+                    "parent_path": "",
+                    "operation": "move",
+                    "operation_status": "failed",
+                    "rollback_status": "none",
+                    "conflict_status": "none",
+                    "error_message": str(e),
+                    "size": 0
+                })
 
         # 保存 Manifest 凭据
         try:
-            with open(manifest_file, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2, ensure_ascii=False)
-            self.log_signal.emit(f"📑 已生成归档回滚清单: {manifest_file.name}", "info")
+            manifest["status"] = "COMPLETED" if summary["failed_count"] == 0 else "PARTIAL_SUCCESS"
+            manifest["results"]["success"] = summary["success_count"]
+            manifest["results"]["failed"] = summary["failed_count"]
+            manifest["results"]["skipped"] = summary["skipped_count"]
+            manifest["results"]["conflict"] = summary["conflict_count"]
+            self._save_manifest(manifest, manifest_file)
+            self.log_signal.emit(f"📑 已更新归档回滚快照: {manifest_file.name}", "info")
         except Exception as e:
             app_logger.error(f"保存归档清单异常: {e}")
 
@@ -242,7 +300,7 @@ class ArchiveWorker(QThread):
             errors = []
             for item in data.get("items", []):
                 orig = item.get("original_path")
-                targ = item.get("target_path")
+                targ = item.get("archived_path") or item.get("target_path")
                 if targ and os.path.exists(targ):
                     try:
                         os.makedirs(os.path.dirname(orig), exist_ok=True)
