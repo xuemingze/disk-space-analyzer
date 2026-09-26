@@ -12,6 +12,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush, QFont, QIcon
 
+from PySide6.QtWidgets import QComboBox
+from app.core.category_manager import global_category_manager
+from pathlib import Path
 from app.core.cleaner import ArchiveWorker
 from app.utils.file_helper import format_size
 
@@ -324,7 +327,22 @@ class OrganizePreviewDialog(QDialog):
                                 parent_item.setForeground(1, QBrush(QColor("#94A3B8")))
                             parent_item.setFont(1, font)
                             
-                            parent_item.setText(2, group.get("suggested_category", ""))
+                                                        
+                            # Replace suggested category text with combobox
+                            combo = QComboBox()
+                            cats = ["未分类/待人工确认"] + [c["name"] for c in global_category_manager.get_active()]
+                            combo.addItems(cats)
+                            
+                            curr_cat = group.get("suggested_category", "")
+                            if curr_cat in cats:
+                                combo.setCurrentText(curr_cat)
+                            else:
+                                combo.addItem(curr_cat)
+                                combo.setCurrentText(curr_cat)
+                                
+                            combo.currentTextChanged.connect(lambda txt, it=parent_item: self._on_category_changed(it, txt))
+                            self.tree.setItemWidget(parent_item, 2, combo)
+                            
                             parent_item.setText(3, group.get("target_root", ""))
                             parent_item.setText(4, group.get("rationale", ""))
                             parent_item.setText(6, f"{conf * 100:.0f}%")
@@ -427,6 +445,62 @@ class OrganizePreviewDialog(QDialog):
             
         self._is_updating_checks = False
 
+
+    def _on_category_changed(self, group_item, new_cat_name):
+        u_data = group_item.data(0, Qt.UserRole)
+        if not u_data or u_data.get("type") != "group":
+            return
+            
+        group = u_data["data"]
+        group["effective_category"] = new_cat_name
+        group["source"] = "User"
+        
+        # Recalculate target root
+        dest_root_p = Path(self.destination_root)
+        orig_root_p = Path(group.get("original_root", ""))
+        
+        # Calculate new target base
+        active_cats = global_category_manager.get_active()
+        template = "{archive_root}/{category_name}/{app_name}"
+        for cat in active_cats:
+            if cat["name"] == new_cat_name:
+                template = cat.get("target_path_template", template)
+                break
+                
+        app_name = group.get("app_name", orig_root_p.name)
+        res = template.replace("{archive_root}", str(dest_root_p))
+        res = res.replace("{category_name}", new_cat_name)
+        res = res.replace("{app_name}", app_name)
+        
+        new_target_base = Path(res)
+        if not group.get("is_directory_group", True):
+            # For loose files, the group root might just be the dest folder
+            if "{app_name}" not in template:
+                new_target_base = dest_root_p / new_cat_name
+                
+        group["target_root"] = str(new_target_base)
+        group_item.setText(3, str(new_target_base))
+        group_item.setText(1, f"{app_name} [User]")
+        group_item.setForeground(1, QBrush(QColor("#F59E0B"))) # Warn color for manual
+        
+        # If manual, set requires confirmation to true
+        group["require_confirmation"] = True
+        
+        # Update children
+        for i in range(group_item.childCount()):
+            child = group_item.child(i)
+            c_data = child.data(0, Qt.UserRole)
+            if c_data and c_data.get("type") == "file":
+                sub = c_data["data"]
+                rel = sub.get("relative_path", "")
+                if rel:
+                    new_sub_target = new_target_base / Path(rel)
+                    sub["target_path"] = str(new_target_base / Path(rel))
+                    child.setText(3, str(new_sub_target))
+                child.setText(2, new_cat_name)
+                
+        self.tree.viewport().update()
+
     def _select_safe_only(self):
         self._is_updating_checks = True
         
@@ -461,9 +535,10 @@ class OrganizePreviewDialog(QDialog):
                 sub_info = u_data.get("data", {})
                 group_data = u_data.get("group", {})
                 if sub_info:
+                    eff_cat = group_data.get("effective_category", group_data.get("suggested_category", ""))
                     selected_file_items.append({
                         "path": sub_info.get("original_path", ""),
-                        "target_category": group_data.get("suggested_category", ""),
+                        "target_category": eff_cat,
                         "custom_target": sub_info.get("target_path", "")
                     })
             for j in range(item.childCount()):
@@ -520,9 +595,10 @@ class OrganizePreviewDialog(QDialog):
                 sub_info = u_data.get("data", {})
                 group_data = u_data.get("group", {})
                 if sub_info:
+                    eff_cat = group_data.get("effective_category", group_data.get("suggested_category", ""))
                     selected_file_items.append({
                         "path": sub_info.get("original_path", ""),
-                        "target_category": group_data.get("suggested_category", ""),
+                        "target_category": eff_cat,
                         "custom_target": sub_info.get("target_path", "")
                     })
             
