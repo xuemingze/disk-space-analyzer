@@ -521,7 +521,7 @@ class AIService:
                 app_logger.error(f"AI 目录聚合分类请求失败，使用内置规则引擎: {e}")
                 for g in grouped_units:
                     g["source"] = "offline_rule"
-                return grouped_units
+        return grouped_units
 
     @classmethod
 

@@ -213,9 +213,25 @@ class TaskManagerDialog(QDialog):
         super().closeEvent(event)
 
     def on_clear_history(self):
-        global_task_manager.clear_history()
-        self.table.setRowCount(0)
-        self.refresh_task_table()
+        # Prevent starting multiple cleanups
+        if hasattr(self, "cleanup_task") and self.cleanup_task.isRunning():
+            return
+            
+        from app.core.task_manager import TaskHistoryCleanupTask
+        self.cleanup_task = TaskHistoryCleanupTask(global_task_manager, self)
+        
+        # Optionally show progress or wait
+        self.clear_btn.setEnabled(False)
+        self.clear_btn.setText("清理中...")
+        
+        def on_finished(task_id, success, failed, skipped):
+            self.clear_btn.setEnabled(True)
+            self.clear_btn.setText("🗑️ 清空已完成/失败记录")
+            self.refresh_task_table()
+            
+        self.cleanup_task.cleanup_finished.connect(on_finished)
+        self.cleanup_task.start()
+
 
     def show_task_log(self, task_id: str):
         task = global_task_manager.get_task(task_id)

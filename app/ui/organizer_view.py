@@ -243,11 +243,20 @@ class OrganizerView(QWidget):
 
     def on_ai_classify_done(self, classified_groups: List[Dict[str, Any]]):
         self.btn_run.setEnabled(True)
+        if not classified_groups:
+            self.lbl_status.setText("❌ AI 规划未产生任何有效结果")
+            if getattr(self, "ai_task_id", None):
+                global_task_manager.set_task_status(self.ai_task_id, TaskStatus.FAILED, "返回结果为空")
+                self.ai_task_id = None
+            QMessageBox.warning(self, "AI 规划失败", "未识别到任何符合条件的目录单元，或 AI 解析失败。请检查原始文件或网络设置。")
+            return
+            
         self.lbl_status.setText("✅ AI 规划已就绪等待确认")
         if getattr(self, "ai_task_id", None):
             global_task_manager.set_task_status(self.ai_task_id, TaskStatus.COMPLETED)
             self.last_ai_task_id = self.ai_task_id
             self.ai_task_id = None
+
             
         for g in classified_groups:
             g["task_id"] = getattr(self, "last_scan_task_id", "")

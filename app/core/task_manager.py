@@ -264,4 +264,55 @@ class TaskManager(QObject):
                     return True
         return False
 
+
+from PySide6.QtCore import QThread
+
+class TaskHistoryCleanupTask(QThread):
+    cleanup_started = Signal(str, int)
+    cleanup_progress = Signal(str, int, int)
+    cleanup_item_result = Signal(str, str, str, str)
+    cleanup_finished = Signal(str, int, int, int)
+    cleanup_failed = Signal(str, str, str)
+
+    def __init__(self, task_manager, parent=None):
+        super().__init__(parent)
+        self.task_manager = task_manager
+        self.cleanup_task_id = "CLEANUP_" + str(int(time.time()))
+
+    def run(self):
+        try:
+            tasks_to_remove = []
+            with self.task_manager._task_lock:
+                all_tasks = list(self.task_manager._tasks.values())
+            
+            for t in all_tasks:
+                if t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED):
+                    tasks_to_remove.append(t.task_id)
+            
+            total = len(tasks_to_remove)
+            self.cleanup_started.emit(self.cleanup_task_id, total)
+            
+            success = 0
+            skipped = 0
+            
+            for i, tid in enumerate(tasks_to_remove):
+                with self.task_manager._task_lock:
+                    t = self.task_manager._tasks.get(tid)
+                    if t and t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED):
+                        del self.task_manager._tasks[tid]
+                        success += 1
+                        self.cleanup_item_result.emit(self.cleanup_task_id, tid, "SUCCESS", "")
+                    else:
+                        skipped += 1
+                        self.cleanup_item_result.emit(self.cleanup_task_id, tid, "SKIPPED", "状态已改变")
+                
+                self.cleanup_progress.emit(self.cleanup_task_id, i + 1, total)
+                time.sleep(0.01)
+                
+            self.task_manager._save_history()
+            self.cleanup_finished.emit(self.cleanup_task_id, success, 0, skipped)
+        except Exception as e:
+            self.cleanup_failed.emit(self.cleanup_task_id, "Exception", str(e))
+
+
 global_task_manager = TaskManager()
