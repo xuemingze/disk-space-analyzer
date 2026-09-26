@@ -166,32 +166,35 @@ class TaskManagerDialog(QDialog):
             # 7. 控制操作按钮组
             act_widget = QWidget()
             act_layout = QHBoxLayout(act_widget)
-            act_layout.setContentsMargins(2, 2, 2, 2)
-            act_layout.setSpacing(4)
+            act_layout.setContentsMargins(4, 2, 4, 2)
+            act_layout.setSpacing(6)
             
-            if task.status == TaskStatus.RUNNING:
-                btn_pause = QPushButton("⏸️")
-                btn_pause.setToolTip("暂停任务")
-                btn_pause.clicked.connect(lambda _, tid=task.task_id: global_task_manager.pause_task(tid))
-                act_layout.addWidget(btn_pause)
-            elif task.status == TaskStatus.PAUSED:
-                btn_resume = QPushButton("▶️")
-                btn_resume.setToolTip("恢复任务")
-                btn_resume.clicked.connect(lambda _, tid=task.task_id: global_task_manager.resume_task(tid))
-                act_layout.addWidget(btn_resume)
-                
+            # 暂停/继续按钮
             if task.status in (TaskStatus.RUNNING, TaskStatus.PAUSED):
-                btn_cancel = QPushButton("⏹️")
-                btn_cancel.setToolTip("取消任务")
-                btn_cancel.setProperty("class", "DangerButton")
+                btn_toggle = QPushButton()
+                btn_toggle.setStyleSheet("padding: 4px 10px; font-weight: bold;")
+                if task.status == TaskStatus.RUNNING:
+                    btn_toggle.setText("⏸️ 暂停")
+                    btn_toggle.clicked.connect(lambda _, tid=task.task_id: global_task_manager.pause_task(tid))
+                else:
+                    btn_toggle.setText("▶️ 继续")
+                    btn_toggle.clicked.connect(lambda _, tid=task.task_id: global_task_manager.resume_task(tid))
+                act_layout.addWidget(btn_toggle)
+
+            # 停止按钮 (正在排队或运行中的均可停止)
+            if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+                btn_cancel = QPushButton("⏹️ 停止")
+                btn_cancel.setStyleSheet("background-color: #EF4444; color: white; padding: 4px 10px; font-weight: bold; border-radius: 4px;")
                 btn_cancel.clicked.connect(lambda _, tid=task.task_id: global_task_manager.cancel_task(tid))
                 act_layout.addWidget(btn_cancel)
-                
-            btn_log = QPushButton("📜")
-            btn_log.setToolTip("查看运行日志")
+
+            # 查看日志按钮
+            btn_log = QPushButton("📄 查看日志")
+            btn_log.setStyleSheet("background-color: #3B82F6; color: white; padding: 4px 10px; font-weight: bold; border-radius: 4px;")
             btn_log.clicked.connect(lambda _, t=task: TaskLogDialog(t, self).exec())
             act_layout.addWidget(btn_log)
             
+            act_layout.addStretch()
             self.table.setCellWidget(row, 7, act_widget)
 
     def _set_item(self, row: int, col: int, text: str):
@@ -206,3 +209,47 @@ class TaskManagerDialog(QDialog):
         global_task_manager.clear_history()
         self.table.setRowCount(0)
         self.refresh_task_table()
+
+    def show_task_log(self, task_id: str):
+        task = global_task_manager.get_task(task_id)
+        if not task:
+            return
+            
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"任务日志 - {task.name} ({task_id})")
+        dlg.resize(700, 450)
+        l = QVBoxLayout(dlg)
+        
+        from PySide6.QtWidgets import QTextEdit
+        txt = QTextEdit()
+        txt.setReadOnly(True)
+        txt.setStyleSheet("background-color: #0F172A; color: #E2E8F0; font-family: Consolas, monospace; font-size: 13px; padding: 10px;")
+        
+        html = []
+        for log in task.logs:
+            ts = log.get("time", "")
+            lvl = log.get("level", "info")
+            msg = log.get("message", "")
+            
+            color = "#38BDF8"
+            if lvl == "error": color = "#EF4444"
+            elif lvl == "warn": color = "#F59E0B"
+            elif lvl == "success": color = "#10B981"
+            
+            html.append(f'<span style="color: #64748B;">[{ts}]</span> <span style="color: {color};">[{lvl.upper()}] {msg}</span>')
+            
+        if not html:
+            html.append('<span style="color: #64748B;">暂无日志记录...</span>')
+            
+        txt.setHtml("<br>".join(html))
+        
+        l.addWidget(txt)
+        btn = QPushButton("关闭")
+        btn.setFixedSize(100, 32)
+        btn.clicked.connect(dlg.accept)
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn)
+        l.addLayout(btn_layout)
+        
+        dlg.exec()
