@@ -251,7 +251,7 @@ class OrganizePreviewDialog(QDialog):
             # Update root node text if rejected
             from pathlib import Path
             if not scan_root:
-                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\"
+                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\\"
 
             for sub in sub_items:
                 orig_path = sub.get("original_path", "")
