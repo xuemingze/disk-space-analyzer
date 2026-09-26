@@ -586,7 +586,8 @@ class AIService:
         base_url: str,
         api_key: str,
         model: str,
-        scan_summary: Dict[str, Any]
+        scan_summary: Dict[str, Any],
+        progress_callback=None
     ) -> AIResponse:
         if not (api_key and base_url and model):
             raise ValueError("AI 模型未配置：缺少 base_url、api_key 或 model。")
@@ -666,7 +667,11 @@ class AIService:
             except Exception as e:
                 return False, f"JSON 解析失败: {e}", None
             
+        if progress_callback:
+            progress_callback("AI_ANALYZING: 正在发送数据与大模型进行分析...")
         success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="生成报告", validator=validator)
+        if progress_callback:
+            progress_callback("AI_REPORT_SAVING: 正在校验与保存结构化报告...")
         if not success:
             err_msg = result.get('error')
             app_logger.error(f"AI 生成报告失败: {err_msg}")

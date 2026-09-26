@@ -31,6 +31,7 @@ from app.utils.logger import app_logger
 
 
 class AIWorker(QThread):
+    phase_changed = Signal(str)
     recommend_done = Signal(list)
     report_done = Signal(object)
     classify_done = Signal(list)
@@ -67,7 +68,7 @@ class AIWorker(QThread):
                 self.recommend_done.emit(paths)
             elif self.action == "report":
                 ai_response = AIService.generate_health_report_with_ai(
-                    base_url, api_key, model, self.data
+                    base_url, api_key, model, self.data, progress_callback=lambda p: self.phase_changed.emit(p)
                 )
                 self.report_done.emit(ai_response)
             elif self.action == "classify":
@@ -97,7 +98,7 @@ class HomeView(QWidget):
         self.current_scan_result: Optional[Dict[str, Any]] = None
         self.scan_worker: Optional[ScanWorker] = None
         self.archive_worker: Optional[ArchiveWorker] = None
-        self.current_task_id: Optional[str] = None
+        self.scan_task_id: Optional[str] = None
         self.ai_worker: Optional[AIWorker] = None
         self._archived_files_backup = {}
         
@@ -516,8 +517,8 @@ class HomeView(QWidget):
             task_type=TaskType.SCAN,
             worker=self.scan_worker
         )
-        self.current_task_id = task_item.task_id
-        self.scan_worker.task_id = self.current_task_id
+        self.scan_task_id = task_item.task_id
+        self.scan_worker.task_id = self.scan_task_id
 
         self.scan_worker.progress_updated.connect(self.on_scan_progress)
         self.scan_worker.phase_changed.connect(self.on_scan_phase_changed)
@@ -536,38 +537,38 @@ class HomeView(QWidget):
             self.scan_worker.pause()
             self.pause_scan_btn.setText("▶️ 恢复")
             self.phase_label.setText("⏸️ 扫描已暂停")
-            if self.current_task_id:
-                global_task_manager.pause_task(self.current_task_id)
+            if self.scan_task_id:
+                global_task_manager.pause_task(self.scan_task_id)
         else:
             self.scan_worker.resume()
             self.pause_scan_btn.setText("⏸️ 暂停")
-            if self.current_task_id:
-                global_task_manager.resume_task(self.current_task_id)
+            if self.scan_task_id:
+                global_task_manager.resume_task(self.scan_task_id)
 
     def stop_scan(self):
         if self.scan_worker and self.scan_worker.isRunning():
             self.phase_label.setText("正在中止扫描...")
             self.scan_worker.cancel()
             self.scan_worker.wait()
-            if self.current_task_id:
-                global_task_manager.cancel_task(self.current_task_id)
+            if self.scan_task_id:
+                global_task_manager.cancel_task(self.scan_task_id)
             self.on_scan_stopped()
 
     def on_scan_progress(self, current_dir: str, file_count: object, total_bytes: object):
         f_cnt = int(file_count)
         t_byt = int(total_bytes)
         self.current_path_label.setText(f"已扫: {f_cnt:,} 文件 ({format_size(t_byt)}) | {str(current_dir)[:50]}...")
-        if self.current_task_id:
+        if self.scan_task_id:
             global_task_manager.update_task_progress(
-                self.current_task_id,
+                self.scan_task_id,
                 processed_count=f_cnt,
                 processed_bytes=t_byt
             )
 
     def on_scan_phase_changed(self, phase_name: str):
         self.phase_label.setText(phase_name)
-        if self.current_task_id:
-            global_task_manager.update_task_progress(self.current_task_id, phase=phase_name)
+        if self.scan_task_id:
+            global_task_manager.update_task_progress(self.scan_task_id, phase=phase_name)
 
     def on_phase1_completed(self, p1_result: dict):
         self.phase_label.setText(f"✅ 阶段一完成 (耗时 {p1_result['elapsed_seconds']}s) - 正在进入阶段二哈希比对...")
@@ -588,9 +589,9 @@ class HomeView(QWidget):
         pct = (proc_int / tot_int * 100.0) if tot_int > 0 else 0.0
         self.progress_bar.setValue(int(pct))
         self.speed_label.setText(f"⚡ 查重速度: {speed} | ETA: {eta}s (组: {cur_g}/{tot_g})")
-        if self.current_task_id:
+        if self.scan_task_id:
             global_task_manager.update_task_progress(
-                self.current_task_id,
+                self.scan_task_id,
                 progress_pct=pct,
                 processed_bytes=proc_int,
                 total_bytes=tot_int,
@@ -621,17 +622,18 @@ class HomeView(QWidget):
         self.duplicate_table.populate_data(duplicate_files, result["total_bytes"])
         self.releasable_table.populate_data(releasable_files, result["total_bytes"])
 
-        # 自动触发 AI 分析
-        self.report_text_edit.setPlainText("⏳ 等待分析: 正在准备后台分析任务...")
-        self.generate_ai_report(auto_triggered=True)
+        if getattr(self, "scan_task_id", None):
+            global_task_manager.set_task_status(self.scan_task_id, TaskStatus.COMPLETED)
+            self.scan_task_id = None
 
         if duplicate_files:
             self.tabs.setCurrentIndex(1)
         elif releasable_files:
             self.tabs.setCurrentIndex(2)
 
-        if self.current_task_id:
-            global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
+        # 自动触发 AI 分析
+        self.report_text_edit.setPlainText("⏳ 等待分析: 正在准备后台分析任务...")
+        self.generate_ai_report(auto_triggered=True)
 
         msg = (
             f"空间全景深度扫描已全部完成！\n"
@@ -650,8 +652,8 @@ class HomeView(QWidget):
 
     def on_scan_error(self, err_msg: str):
         self.on_scan_stopped()
-        if self.current_task_id:
-            global_task_manager.set_task_status(self.current_task_id, TaskStatus.FAILED, err_msg)
+        if self.scan_task_id:
+            global_task_manager.set_task_status(self.scan_task_id, TaskStatus.FAILED, err_msg)
         QMessageBox.critical(self, "扫描异常", f"扫描过程中发生错误: {err_msg}")
 
     def on_scan_stopped(self):
@@ -698,7 +700,7 @@ class HomeView(QWidget):
         self.phase_label.setText("🤖 正在向大模型提交文件特征进行智能甄别...")
         
         self.ai_worker = AIWorker("recommend", self.current_scan_result["redundant_files"])
-        self.current_task_id = global_task_manager.create_task("AI 智能甄别推荐", TaskType.AI_ANALYSIS, self.ai_worker).task_id
+        self.ai_task_id = global_task_manager.create_task("AI 智能甄别推荐", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         self.ai_worker.recommend_done.connect(self.on_ai_recommend_done)
         self.ai_worker.failed.connect(self.on_ai_failed)
         self.ai_worker.start()
@@ -706,8 +708,9 @@ class HomeView(QWidget):
     def on_ai_recommend_done(self, recommended_paths: List[str]):
         self.btn_select_rec.setEnabled(True)
         self.phase_label.setText("AI 智能分析完成")
-        if self.current_task_id:
-            global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
+        if getattr(self, "ai_task_id", None):
+            global_task_manager.set_task_status(self.ai_task_id, TaskStatus.COMPLETED)
+            self.ai_task_id = None
         if recommended_paths:
             self.duplicate_table.select_ai_recommended_paths(recommended_paths)
             self.releasable_table.select_ai_recommended_paths(recommended_paths)
@@ -755,7 +758,7 @@ class HomeView(QWidget):
         self.phase_label.setText(f"🤖 正在提交报告 (ID: {report_id}) 给 AI 提取执行计划...")
 
         self.ai_worker = AIWorker("process_report", {"report_path": str(export_path), "report_id": report_id, "scan_id": scan_id, "dest_root": dest_root})
-        self.current_task_id = global_task_manager.create_task("AI 提取执行计划", TaskType.AI_ANALYSIS, self.ai_worker).task_id
+        self.ai_task_id = global_task_manager.create_task("AI 提取执行计划", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         
         def on_process_report_done(classified_results):
             # 注入报告关联信息
@@ -765,8 +768,9 @@ class HomeView(QWidget):
                 
             self.btn_ai_auto.setEnabled(True)
             self.phase_label.setText("AI 智能规划已就绪")
-            if self.current_task_id:
-                global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
+            if getattr(self, "ai_task_id", None):
+                global_task_manager.set_task_status(self.ai_task_id, TaskStatus.COMPLETED)
+                self.ai_task_id = None
             dlg = OrganizePreviewDialog(
                 classification_items=classified_results,
                 destination_root=dest_root,
@@ -787,8 +791,9 @@ class HomeView(QWidget):
         def on_process_failed(err):
             self.btn_ai_auto.setEnabled(True)
             self.phase_label.setText("AI 提取执行计划失败")
-            if self.current_task_id:
-                global_task_manager.set_task_status(self.current_task_id, TaskStatus.FAILED, str(err))
+            if getattr(self, "ai_task_id", None):
+                global_task_manager.set_task_status(self.ai_task_id, TaskStatus.FAILED, str(err))
+                self.ai_task_id = None
             QMessageBox.critical(self, "提取失败", f"AI 读取报告并生成执行清单失败:\n{err}")
                 
         self.ai_worker.classify_done.connect(on_process_report_done)
@@ -815,17 +820,24 @@ class HomeView(QWidget):
         self.report_text_edit.setPlainText("🤖 分析中: 正在调用大模型生成全景深度分析与治理报告，请稍候...")
         
         self.ai_worker = AIWorker("report", self.current_scan_result)
-        self.current_task_id = global_task_manager.create_task("生成深度分析报告", TaskType.AI_ANALYSIS, self.ai_worker).task_id
+        self.ai_task_id = global_task_manager.create_task("生成深度分析报告", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         self.ai_worker.report_done.connect(self.on_ai_report_done)
         self.ai_worker.failed.connect(self.on_ai_failed)
+        self.ai_worker.phase_changed.connect(self.on_ai_phase_changed)
         self.ai_worker.start()
+
+    def on_ai_phase_changed(self, phase_name: str):
+        self.report_text_edit.setPlainText(f"🤖 分析中: {phase_name}")
+        if getattr(self, "ai_task_id", None):
+            global_task_manager.update_task_progress(self.ai_task_id, phase=phase_name)
 
     def on_ai_report_done(self, ai_response):
         self.gen_ai_report_btn.setEnabled(True)
         self.pause_ai_report_btn.setEnabled(False)
         self.stop_ai_report_btn.setEnabled(False)
-        if self.current_task_id:
-            global_task_manager.set_task_status(self.current_task_id, TaskStatus.COMPLETED)
+        if getattr(self, "ai_task_id", None):
+            global_task_manager.set_task_status(self.ai_task_id, TaskStatus.COMPLETED)
+            self.ai_task_id = None
         # 添加任务关联信息
         scan_id = self.current_scan_result.get('task_id', 'Unknown')
         
@@ -852,8 +864,9 @@ class HomeView(QWidget):
         self.pause_ai_report_btn.setEnabled(False)
         self.stop_ai_report_btn.setEnabled(False)
         self.phase_label.setText("AI 请求异常")
-        if self.current_task_id:
-            global_task_manager.set_task_status(self.current_task_id, TaskStatus.FAILED, str(err))
+        if getattr(self, "ai_task_id", None):
+            global_task_manager.set_task_status(self.ai_task_id, TaskStatus.FAILED, str(err))
+            self.ai_task_id = None
         self.report_text_edit.setPlainText(f"❌ 请求失败或响应解析失败\n\n调用大模型失败: {err}\n\n请检查网络连接或 API Key 设置，并点击上方“重新生成 AI 深度分析报告”重试。")
 
     def execute_archive_selected_async(self):
