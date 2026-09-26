@@ -85,6 +85,8 @@ class TaskManagerDialog(QDialog):
         ])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setMinimumSectionSize(44)
         self.table.setAlternatingRowColors(True)
         
         header = self.table.horizontalHeader()
@@ -97,8 +99,7 @@ class TaskManagerDialog(QDialog):
         header.setSectionResizeMode(5, QHeaderView.Fixed)
         self.table.setColumnWidth(5, 120)
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.Fixed)
-        self.table.setColumnWidth(7, 180)
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         
         layout.addWidget(self.table, 1)
 
@@ -204,6 +205,12 @@ class TaskManagerDialog(QDialog):
             self.table.setItem(row, col, item)
         else:
             item.setText(text)
+
+
+    def closeEvent(self, event):
+        if hasattr(self, "timer") and self.timer.isActive():
+            self.timer.stop()
+        super().closeEvent(event)
 
     def on_clear_history(self):
         global_task_manager.clear_history()
