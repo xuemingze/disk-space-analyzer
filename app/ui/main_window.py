@@ -131,6 +131,27 @@ class MainWindow(QMainWindow):
         dlg = TaskManagerDialog(self)
         dlg.exec()
 
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            handled = False
+            # 1. 优先退出标签页内全屏
+            if hasattr(self, "page_home") and hasattr(self.page_home, "is_tab_fullscreen"):
+                if self.page_home.is_tab_fullscreen():
+                    self.page_home.toggle_tab_fullscreen()
+                    handled = True
+            
+            # 2. 其次退出主窗口全屏 (如果存在)
+            if not handled and self.isFullScreen():
+                self.showNormal()
+                
+                handled = True
+                
+            if not handled:
+                super().keyPressEvent(event)
+        else:
+            super().keyPressEvent(event)
+
     def closeEvent(self, event: QCloseEvent):
         """主窗口关闭时安全拦截活跃后台任务"""
         if global_task_manager.has_active_tasks():

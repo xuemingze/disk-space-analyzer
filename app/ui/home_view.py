@@ -209,10 +209,6 @@ class HomeView(QWidget):
         self.stop_scan_btn.setProperty("class", "DangerButton")
         self.stop_scan_btn.setEnabled(False)
         self.stop_scan_btn.clicked.connect(self.stop_scan)
-
-        self.fullscreen_btn = QPushButton("⛶ 全屏显示")
-        self.fullscreen_btn.setStyleSheet("background-color: #0F172A; border-color: #334155; font-weight: bold;")
-        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
         self.task_center_btn = QPushButton("⚡ 任务管理")
         self.task_center_btn.setStyleSheet("background-color: #4F46E5; border-color: #6366F1; font-weight: bold;")
         self.task_center_btn.clicked.connect(self.open_task_manager)
@@ -221,7 +217,6 @@ class HomeView(QWidget):
         action_btn_box.addWidget(self.pause_scan_btn, 1)
         action_btn_box.addWidget(self.stop_scan_btn, 1)
         action_btn_box.addWidget(self.task_center_btn, 1)
-        action_btn_box.addWidget(self.fullscreen_btn, 1)
         options_row.addLayout(action_btn_box, 2)
 
         top_card_layout.addLayout(options_row)
@@ -252,6 +247,7 @@ class HomeView(QWidget):
         progress_layout.addWidget(self.progress_bar)
         
         top_card_layout.addLayout(progress_layout)
+        self.top_card = top_card
         main_layout.addWidget(top_card)
 
         # 2. 统计指标卡片栏
@@ -334,12 +330,20 @@ class HomeView(QWidget):
         report_layout.addWidget(report_splitter)
         self.tabs.addTab(report_widget, "📑 AI 深度分析报告预览")
         
+        self.tab_fullscreen_btn = QPushButton("⛶ 放大当前标签页")
+        self.tab_fullscreen_btn.setStyleSheet("background-color: transparent; font-weight: bold; padding: 2px 8px; color: #38BDF8;")
+        self.tab_fullscreen_btn.clicked.connect(self.toggle_tab_fullscreen)
+        self.tabs.setCornerWidget(self.tab_fullscreen_btn, Qt.TopRightCorner)
+        self.tab_states = {}
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+        
         self._setup_gui_logger()
 
         main_layout.addWidget(self.tabs, 1)
 
         # 4. 底部批量交互操作栏
-        bottom_bar = QFrame()
+        self.bottom_bar = QFrame()
+        bottom_bar = self.bottom_bar
         bottom_bar.setProperty("class", "CardFrame")
         bottom_layout = QHBoxLayout(bottom_bar)
         bottom_layout.setContentsMargins(12, 8, 12, 8)
@@ -398,7 +402,32 @@ class HomeView(QWidget):
         bottom_layout.addWidget(self.btn_cleanup)
 
         main_layout.addWidget(bottom_bar)
-
+    def toggle_tab_fullscreen(self):
+        idx = self.tabs.currentIndex()
+        is_fs = self.tab_states.get(idx, False)
+        self.tab_states[idx] = not is_fs
+        self.on_tab_changed(idx)
+        
+    def on_tab_changed(self, index: int):
+        is_fs = self.tab_states.get(index, False)
+        if is_fs:
+            self.top_card.hide()
+            self.stat_cards.hide()
+            self.bottom_bar.hide()
+            self.tab_fullscreen_btn.setText("🗗 还原标签页 (Esc)")
+            self.tab_fullscreen_btn.setToolTip("按 Esc 键或点击此处还原")
+        else:
+            self.top_card.show()
+            self.stat_cards.show()
+            self.bottom_bar.show()
+            self.tab_fullscreen_btn.setText("⛶ 放大当前标签页")
+            self.tab_fullscreen_btn.setToolTip("将当前标签页放大至填满主区域")
+            
+    def is_tab_fullscreen(self) -> bool:
+        idx = getattr(self, "tabs", None)
+        if idx:
+            return self.tab_states.get(self.tabs.currentIndex(), False)
+        return False
 
     def _setup_gui_logger(self):
         import logging
@@ -1167,12 +1196,3 @@ class HomeView(QWidget):
 
     def on_global_report_updated(self, report_id: str, scan_task_id: str):
         pass
-
-    def toggle_fullscreen(self):
-        window = self.window()
-        if window.isFullScreen():
-            window.showNormal()
-            self.fullscreen_btn.setText("⛶ 全屏显示")
-        else:
-            window.showFullScreen()
-            self.fullscreen_btn.setText("🗗 退出全屏 (Esc)")
