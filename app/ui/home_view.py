@@ -210,6 +210,9 @@ class HomeView(QWidget):
         self.stop_scan_btn.setEnabled(False)
         self.stop_scan_btn.clicked.connect(self.stop_scan)
 
+        self.fullscreen_btn = QPushButton("⛶ 全屏显示")
+        self.fullscreen_btn.setStyleSheet("background-color: #0F172A; border-color: #334155; font-weight: bold;")
+        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
         self.task_center_btn = QPushButton("⚡ 任务管理")
         self.task_center_btn.setStyleSheet("background-color: #4F46E5; border-color: #6366F1; font-weight: bold;")
         self.task_center_btn.clicked.connect(self.open_task_manager)
@@ -218,6 +221,7 @@ class HomeView(QWidget):
         action_btn_box.addWidget(self.pause_scan_btn, 1)
         action_btn_box.addWidget(self.stop_scan_btn, 1)
         action_btn_box.addWidget(self.task_center_btn, 1)
+        action_btn_box.addWidget(self.fullscreen_btn, 1)
         options_row.addLayout(action_btn_box, 2)
 
         top_card_layout.addLayout(options_row)
@@ -705,20 +709,69 @@ class HomeView(QWidget):
         self.ai_worker.failed.connect(self.on_ai_failed)
         self.ai_worker.start()
 
-    def on_ai_recommend_done(self, recommended_paths: List[str]):
+
+    def on_ai_recommend_done(self, recommended_items: List[Any]):
         self.btn_select_rec.setEnabled(True)
         self.phase_label.setText("AI 智能分析完成")
         if getattr(self, "ai_task_id", None):
             global_task_manager.set_task_status(self.ai_task_id, TaskStatus.COMPLETED)
             self.ai_task_id = None
-        if recommended_paths:
-            self.duplicate_table.select_ai_recommended_paths(recommended_paths)
-            self.releasable_table.select_ai_recommended_paths(recommended_paths)
-            QMessageBox.information(self, "仅选推荐就绪", f"大模型已甄别并勾选了 {len(recommended_paths)} 个推荐清理项！\n未执行任何删除/归档，您可继续修改勾选。")
+        if recommended_items:
+            # Normalize to list of dicts if they are strings (legacy fallback)
+            if isinstance(recommended_items[0], str):
+                recommended_items = [{"path": p, "risk_level": "未知", "confidence": 1.0, "reason": "遗留格式"} for p in recommended_items]
+                
+            # Filter strict rules
+            safe_items = []
+            unsafe_count = 0
+            risk_stats = {"低风险": 0, "中风险": 0, "高风险": 0, "未知": 0}
+            reasons = {}
+            
+            for item in recommended_items:
+                risk = item.get("risk_level", "未知")
+                if "低" in risk: risk_stats["低风险"] += 1
+                elif "中" in risk: risk_stats["中风险"] += 1
+                elif "高" in risk: risk_stats["高风险"] += 1
+                else: risk_stats["未知"] += 1
+                
+                conf = float(item.get("confidence", 0.0))
+                path = item.get("path", "").lower()
+                
+                is_system = any(sys_dir in path for sys_dir in ["windows", "program files", "programdata", "appdata", "system32"])
+                
+                reject_reason = []
+                if "低风险" not in risk: reject_reason.append(f"非低风险({risk})")
+                if conf < 0.75: reject_reason.append(f"置信度低({conf})")
+                if is_system: reject_reason.append("涉及系统敏感目录")
+                
+                if not reject_reason:
+                    safe_items.append(item)
+                else:
+                    unsafe_count += 1
+                    r = " | ".join(reject_reason)
+                    reasons[r] = reasons.get(r, 0) + 1
+                    
+            safe_paths = [i["path"] for i in safe_items]
+            
+            self.duplicate_table.select_ai_recommended_paths(safe_paths)
+            self.releasable_table.select_ai_recommended_paths(safe_paths)
+            
+            msg = f"大模型智能甄别已完成！\\n\\n"
+            msg += f"✅ 自动勾选 (安全/低风险): {len(safe_paths)} 项\\n"
+            msg += f"⏸️ 拦截不选 (中高风险/系统): {unsafe_count} 项\\n"
+            msg += f"📊 风险分布: 低 {risk_stats['低风险']} | 中 {risk_stats['中风险']} | 高 {risk_stats['高风险']} | 未知 {risk_stats['未知']}\\n"
+            if reasons:
+                msg += f"\\n未自动勾选的主要原因:\\n"
+                for r, c in list(reasons.items())[:3]:
+                    msg += f" - {r}: {c} 项\\n"
+                    
+            msg += "\\n(注: 未执行任何删除/归档，您可继续在列表中修改勾选)"
+            QMessageBox.information(self, "AI 推荐就绪与拦截报告", msg)
         else:
             self.duplicate_table.select_recommended_only()
             self.releasable_table.select_recommended_only()
             QMessageBox.information(self, "智能推荐", "已根据本地安全启发式规则完成推荐勾选！")
+
 
     def trigger_ai_auto_process(self):
         """AI 自动处理：读取深度分析报告，让大模型根据报告建议生成执行清单"""
@@ -1114,3 +1167,12 @@ class HomeView(QWidget):
 
     def on_global_report_updated(self, report_id: str, scan_task_id: str):
         pass
+
+    def toggle_fullscreen(self):
+        window = self.window()
+        if window.isFullScreen():
+            window.showNormal()
+            self.fullscreen_btn.setText("⛶ 全屏显示")
+        else:
+            window.showFullScreen()
+            self.fullscreen_btn.setText("🗗 退出全屏 (Esc)")

@@ -59,6 +59,14 @@ class OrganizePreviewDialog(QDialog):
         top_bar.addWidget(dest_desc)
         layout.addLayout(top_bar)
 
+        # 2. 统计摘要与详细勾选拦截报告
+        self.lbl_auto_checked = QLabel("自动勾选: 0项")
+        self.lbl_auto_checked.setStyleSheet("color: #10B981; font-weight: bold;")
+        self.lbl_unselected = QLabel("未勾选: 0项")
+        self.lbl_unselected.setStyleSheet("color: #F59E0B; font-weight: bold;")
+        self.lbl_risk_stats = QLabel("风险统计: 低 0 | 中 0 | 高 0")
+        self.lbl_risk_stats.setStyleSheet("color: #94A3B8;")
+
         # 2. 统计摘要与快捷操作栏
         stats_frame = QFrame()
         stats_frame.setProperty("class", "CardFrame")
@@ -166,6 +174,7 @@ class OrganizePreviewDialog(QDialog):
 
         layout.addLayout(btn_bar)
 
+
     def populate_tree(self):
         """装填目录树结构 (按原根路径完整层级)"""
         self._is_updating_checks = True
@@ -178,22 +187,71 @@ class OrganizePreviewDialog(QDialog):
         folder_fg = QBrush(QColor("#000000"))
         file_bg = QBrush(QColor("#FFFFFF"))
         file_fg = QBrush(QColor("#000000"))
+        
+        auto_checked_count = 0
+        unselected_count = 0
+        risk_low = 0
+        risk_mid = 0
+        risk_high = 0
 
         for group in self.classification_items:
             orig_root = group.get("original_root", "")
             scan_root = group.get("scan_root", "")
             sub_items = group.get("sub_items", [])
             
-            risk = group.get("risk_level", "低风险")
-            risk_color = QColor("#10B981") if "低风险" in risk else (QColor("#F59E0B") if "中风险" in risk else QColor("#EF4444"))
+            risk = group.get("risk_level", "未知风险")
             
-            conf = float(group.get("confidence", 0.8))
-            require_conf = group.get("require_confirmation", False)
-            default_checked = (not require_conf) and (conf >= 0.7) and ("低风险" in risk)
-
+            if "低风险" in risk:
+                risk_color = QColor("#10B981")
+                risk_low += 1
+            elif "中风险" in risk:
+                risk_color = QColor("#F59E0B")
+                risk_mid += 1
+            else:
+                risk_color = QColor("#EF4444")
+                risk_high += 1
+                if risk == "未知风险":
+                    risk = "高风险 (无法确认系统影响)"
+            
+            conf = float(group.get("confidence", 0.0))
+            require_conf = group.get("require_confirmation", True)
+            
+            app_name = group.get("app_name", "").lower()
+            unrecognized = not app_name or "未识别" in app_name or "未知" in app_name
+            
+            is_system_path = False
+            for sys_dir in ["windows", "program files", "programdata", "appdata", "system32"]:
+                if sys_dir in orig_root.lower():
+                    is_system_path = True
+                    break
+            
+            # 严格拦截规则
+            reject_reasons = []
+            if "高风险" in risk or risk_color == QColor("#EF4444"):
+                reject_reasons.append(risk)
+            if "中风险" in risk:
+                reject_reasons.append("中风险需复核")
+            if conf < 0.75:
+                reject_reasons.append(f"置信度偏低({conf})")
+            if require_conf:
+                reject_reasons.append("要求人工确认")
+            if unrecognized:
+                reject_reasons.append("未识别所属应用")
+            if is_system_path:
+                reject_reasons.append("涉及系统敏感目录")
+                
+            default_checked = len(reject_reasons) == 0
+            if default_checked:
+                auto_checked_count += 1
+                group["reject_reason"] = ""
+            else:
+                unselected_count += 1
+                group["reject_reason"] = " | ".join(reject_reasons)
+                
+            # Update root node text if rejected
             from pathlib import Path
             if not scan_root:
-                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\\"
+                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\"
 
             for sub in sub_items:
                 orig_path = sub.get("original_path", "")
@@ -217,6 +275,7 @@ class OrganizePreviewDialog(QDialog):
                 
                 for idx, pt in enumerate(parts):
                     pt_str = str(pt)
+
                     is_file = (idx == len(parts) - 1 and p.is_file() if p.exists() else idx == len(parts) - 1)
                     
                     if pt_str not in node_map:

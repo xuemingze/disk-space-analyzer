@@ -502,15 +502,90 @@ class AIService:
         return grouped_units
 
     @classmethod
+
     def analyze_redundant_files_with_ai(
         cls,
         base_url: str,
         api_key: str,
         model: str,
         candidate_files: List[Dict[str, Any]]
-    ) -> List[str]:
+    ) -> List[Dict[str, Any]]:
         if not api_key or not base_url or not candidate_files:
             return []
+
+        samples = candidate_files[:120]
+        summary_items = [
+            {
+                "path": item["path"],
+                "name": item["name"],
+                "size_mb": round(item["size"] / (1024 * 1024), 2),
+                "tag": item.get("tag", ""),
+                "is_duplicate_copy": item.get("is_duplicate_copy", False)
+            }
+            for item in samples
+        ]
+
+        system_prompt = (
+            "你是一个专业的操作系统磁盘存储与清理专家。请甄别以下文件路径与特征，严格排除任何操作系统关键组件、核心运行库。"
+            "仅推荐可以安全清理（如临时文件、安装包残留、日志、历史快照、多余重复副本）的文件。"
+            "请以严格的 JSON 格式输出: {\"recommended_items\": [{\"path\": \"路径1\", \"risk_level\": \"低风险\", \"confidence\": 0.95, \"reason\": \"日志文件安全可清理\"}]}"
+        )
+
+        normalized_url = cls._normalize_base_url(base_url)
+        endpoint = normalized_url
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key.strip()}"
+        }
+
+        payload = {
+            "model": model.strip(),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"候选清理文件列表: {json.dumps(summary_items, ensure_ascii=False, indent=2)}"}
+            ],
+            "temperature": 0.2
+        }
+        if "gpt" in model.lower() or "deepseek" in model.lower():
+            payload["response_format"] = {"type": "json_object"}
+
+        def validator(resp_json):
+            ai_resp = cls._parse_ai_response(resp_json)
+            if ai_resp.parse_status == "MISSING_FINAL_TEXT":
+                return False, "缺少最终回复 (可能仅包含思考内容)", None
+            if ai_resp.parse_status != "SUCCESS":
+                return False, ai_resp.error_message, None
+            clean_str = cls._clean_json_response(ai_resp.final_text)
+            if not clean_str:
+                return False, "未找到 JSON 内容", None
+            try:
+                parsed = json.loads(clean_str, strict=False)
+                return True, "", parsed
+            except Exception as e:
+                return False, f"JSON 解析失败: {e}", None
+
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="智能推荐", validator=validator)
+        if not success:
+            from app.utils.logger import app_logger
+            app_logger.error(f"AI 冗余文件分析调用失败: {result.get('error')}")
+            return []
+            
+        parsed = result.get("parsed_data")
+        if parsed is None and "data" in result:
+            ai_resp = cls._parse_ai_response(result.get("data", {}))
+            clean_str = cls._clean_json_response(ai_resp.final_text or "")
+            try:
+                parsed = json.loads(clean_str, strict=False)
+            except Exception:
+                parsed = None
+        if parsed and "recommended_items" in parsed and isinstance(parsed["recommended_items"], list):
+            return parsed["recommended_items"]
+        elif parsed and "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
+            # Fallback for older formats
+            return [{"path": p, "risk_level": "未知", "confidence": 0.5, "reason": "格式兼容"} for p in parsed["recommended_paths"]]
+
+        return []
+
 
         samples = candidate_files[:120]
         summary_items = [
