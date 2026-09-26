@@ -115,7 +115,7 @@ class OrganizePreviewDialog(QDialog):
         ])
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.tree.itemChanged.connect(self.on_tree_item_changed)
+        self.tree.itemChanged.connect(self._schedule_update_stats)
         self.tree.itemExpanded.connect(self._on_item_expanded)
         
         header = self.tree.header()
@@ -128,10 +128,14 @@ class OrganizePreviewDialog(QDialog):
         header.setSectionResizeMode(3, QHeaderView.Interactive)
         self.tree.setColumnWidth(3, 160)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.Interactive)
+        self.tree.setColumnWidth(5, 80)
+        header.setSectionResizeMode(6, QHeaderView.Interactive)
+        self.tree.setColumnWidth(6, 60)
+        header.setSectionResizeMode(7, QHeaderView.Interactive)
+        self.tree.setColumnWidth(7, 80)
+        header.setSectionResizeMode(8, QHeaderView.Interactive)
+        self.tree.setColumnWidth(8, 80)
         header.setSectionResizeMode(9, QHeaderView.Interactive)
         self.tree.setColumnWidth(9, 120)
 
@@ -302,41 +306,6 @@ class OrganizePreviewDialog(QDialog):
         # self.tree.expandToDepth(0)
 
 
-    def on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
-        """父子节点联动勾选事件响应"""
-        if self._is_updating_checks or column != 0:
-            return
-
-        self._is_updating_checks = True
-        state = item.checkState(0)
-
-        # 1. 若改变的是父节点，递归更新所有子节点
-        if item.childCount() > 0:
-            for i in range(item.childCount()):
-                child = item.child(i)
-                child.setCheckState(0, state)
-
-        # 2. 若改变的是子节点，更新父节点状态 (Checked / PartiallyChecked / Unchecked)
-        parent = item.parent()
-        if parent:
-            checked_count = 0
-            partial_count = 0
-            for i in range(parent.childCount()):
-                ch_state = parent.child(i).checkState(0)
-                if ch_state == Qt.Checked:
-                    checked_count += 1
-                elif ch_state == Qt.PartiallyChecked:
-                    partial_count += 1
-
-            if checked_count == parent.childCount():
-                parent.setCheckState(0, Qt.Checked)
-            elif checked_count > 0 or partial_count > 0:
-                parent.setCheckState(0, Qt.PartiallyChecked)
-            else:
-                parent.setCheckState(0, Qt.Unchecked)
-
-        self._is_updating_checks = False
-
     def _set_all_checked_state(self, state: Any):
         if isinstance(state, bool):
             check_state = Qt.Checked if state else Qt.Unchecked
@@ -438,7 +407,7 @@ class OrganizePreviewDialog(QDialog):
                 child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
                 child_item.setCheckState(0, item.checkState(0))
                 
-                child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "group": group})
+                child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub})
                 child_item.setText(0, sub.get("relative_path", ""))
                 child_item.setText(1, "-")
                 child_item.setText(2, group.get("effective_category", group.get("suggested_category", "")))
@@ -464,7 +433,12 @@ class OrganizePreviewDialog(QDialog):
         
         def recurse_safe(item, parent_safe=False):
             u_data = item.data(0, Qt.UserRole) or {}
-            g_info = u_data.get("data", {}) if u_data.get("type") == "group" else u_data.get("group", {})
+            if u_data.get("type") == "group":
+                g_info = u_data.get("data", {})
+            else:
+                p = item.parent()
+                p_data = p.data(0, Qt.UserRole) if p else {}
+                g_info = p_data.get("data", {})
             
             is_safe = parent_safe
             if u_data.get("type") == "group" and g_info:
@@ -482,6 +456,36 @@ class OrganizePreviewDialog(QDialog):
         self._is_updating_checks = False
 
 
+    def _schedule_update_stats(self, item, column):
+        if column != 0: return
+        if not hasattr(self, '_stats_timer'):
+            from PySide6.QtCore import QTimer
+            self._stats_timer = QTimer(self)
+            self._stats_timer.setSingleShot(True)
+            self._stats_timer.timeout.connect(self.update_stats)
+        self._stats_timer.start(50) # 50ms debounce
+
+    def update_stats(self):
+        selected_count = 0
+        total_bytes = 0
+        from PySide6.QtCore import Qt
+        
+        def recurse(item):
+            nonlocal selected_count, total_bytes
+            u_data = item.data(0, Qt.UserRole) or {}
+            if u_data.get("type") == "file" and item.checkState(0) == Qt.Checked:
+                selected_count += 1
+                sub = u_data.get("data", {})
+                total_bytes += sub.get("size", 0)
+            for i in range(item.childCount()):
+                recurse(item.child(i))
+                
+        for i in range(self.tree.topLevelItemCount()):
+            recurse(self.tree.topLevelItem(i))
+            
+        from app.utils.file_helper import format_size
+        self.lbl_auto_checked.setText(f"已勾选: {selected_count}项 ({format_size(total_bytes)})")
+
     def export_script(self):
         """仅导出执行批处理脚本"""
         selected_file_items = []
@@ -491,7 +495,9 @@ class OrganizePreviewDialog(QDialog):
             u_data = item.data(0, Qt.UserRole) or {}
             if u_data.get("type") == "file" and state == Qt.Checked:
                 sub_info = u_data.get("data", {})
-                group_data = u_data.get("group", {})
+                p = item.parent()
+                p_data = p.data(0, Qt.UserRole) if p else {}
+                group_data = p_data.get("data", {})
                 if sub_info:
                     eff_cat = group_data.get("effective_category", group_data.get("suggested_category", ""))
                     selected_file_items.append({
@@ -551,7 +557,9 @@ class OrganizePreviewDialog(QDialog):
             
             if u_data.get("type") == "file" and state == Qt.Checked:
                 sub_info = u_data.get("data", {})
-                group_data = u_data.get("group", {})
+                p = item.parent()
+                p_data = p.data(0, Qt.UserRole) if p else {}
+                group_data = p_data.get("data", {})
                 if sub_info:
                     eff_cat = group_data.get("effective_category", group_data.get("suggested_category", ""))
                     selected_file_items.append({
@@ -600,6 +608,12 @@ class OrganizePreviewDialog(QDialog):
             preserve_structure=True,
             report_id=report_id,
             scan_task_id=scan_id
+        )
+        from app.core.task_manager import global_task_manager, TaskType
+        self.archive_task = global_task_manager.create_task(
+            name=f"批量归档 ({len(selected_file_items)} 项)",
+            task_type=TaskType.MIGRATION,
+            worker=self.archive_worker
         )
         self.archive_worker.progress_signal.connect(self.on_archive_progress)
         self.archive_worker.finished_signal.connect(self.on_archive_finished)
