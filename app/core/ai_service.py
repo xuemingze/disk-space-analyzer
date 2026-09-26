@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from app.utils.logger import app_logger
 from app.utils.file_helper import is_system_critical_path, categorize_file_by_ext, format_size
 from app.core.app_detector import AppDetector
+from app.core.category_manager import global_category_manager
+
+
 
 @dataclass
 class AIResponse:
@@ -27,6 +30,22 @@ class AIResponse:
     reasoning_content: str = ""
 
 class AIService:
+    @classmethod
+    def _calculate_target_path(cls, cat_name: str, app_name: str, dest_root_p: Path, orig_root_p: Path, is_dir: bool) -> Path:
+        active_cats = global_category_manager.get_active()
+        for cat in active_cats:
+            if cat["name"] == cat_name:
+                template = cat.get("target_path_template", "{archive_root}/{category_name}/{app_name}")
+                res = template.replace("{archive_root}", str(dest_root_p))
+                res = res.replace("{category_name}", cat_name)
+                res = res.replace("{app_name}", app_name if app_name else orig_root_p.name)
+                return Path(res)
+        # Fallback
+        if is_dir:
+            return dest_root_p / cat_name / orig_root_p.name
+        else:
+            return dest_root_p / cat_name
+
     """
     负责对接 OpenAI 兼容规范的大模型服务接口：
     1. 动态拉取 /v1/models 模型列表
@@ -329,10 +348,7 @@ class AIService:
                 root_p = Path(orig_root)
                 
                 # Determine target root
-                if root_p.is_dir():
-                    new_target_base = dest_root_p / cat_name / root_p.name
-                else:
-                    new_target_base = dest_root_p / cat_name
+                new_target_base = cls._calculate_target_path(cat_name, g.get("app_name", ""), dest_root_p, root_p, root_p.is_dir())
                     
                 sub_items_detail = []
                 for sub in g.get("sub_items", []):
@@ -423,8 +439,13 @@ class AIService:
 
             sys_prefs = ""
             if weights:
-                sys_prefs = f"\n【用户偏好设置】\n工作类占比: {weights.get('work_ratio', 0.5)*100}% | 私人类占比: {weights.get('personal_ratio', 0.5)*100}%\n"
-                sys_prefs += f"要求最低自动置信度: {weights.get('min_conf', 0.75)}\n"
+                w = weights.get("work_ratio", 0.5)
+                sys_prefs = f"用户偏好：工作相关 {int(w*100)}%，私人相关 {100-int(w*100)}%，最低接受置信度 {weights.get('min_conf', 0.8)}\n"
+            
+            active_cats = global_category_manager.get_active()
+            cat_list_str = "\n".join([f"- {c['name']} (描述: {c['description']})" for c in active_cats])
+            if cat_list_str:
+                sys_prefs += f"\n【必须使用的有效分类白名单】\n你必须且只能从以下列表中选择最合适的分类名称（如果都不匹配，请使用 '未分类/待人工确认'）：\n{cat_list_str}\n"
 
             system_prompt = (
                 "你是一个专业的文件系统治理与软件生态识别专家。请分析待处理的目录与文件聚合单元：\n"
@@ -494,10 +515,7 @@ class AIService:
                                 
                                 # 更新目标根路径与子项目标路径
                                 root_p = Path(orig_root)
-                                if g["is_directory_group"]:
-                                    new_target_base = dest_root_p / new_cat / root_p.name
-                                else:
-                                    new_target_base = dest_root_p / new_cat
+                                new_target_base = cls._calculate_target_path(new_cat, ai_item.get("app_name", g.get("app_name", "")), dest_root_p, root_p, g.get("is_directory_group", False))
                                 g["target_root"] = str(new_target_base)
 
                                 for sub in g["sub_items"]:

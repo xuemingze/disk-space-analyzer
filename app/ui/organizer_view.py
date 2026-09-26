@@ -75,6 +75,11 @@ class OrganizerView(QWidget):
         pref_group = QGroupBox("⚙️ 分类与偏好设置")
         pref_layout = QFormLayout(pref_group)
         
+        from app.ui.components.category_dialog import CategoryManagerDialog
+        self.btn_manage_categories = QPushButton("📂 管理全局自定义分类...")
+        self.btn_manage_categories.clicked.connect(lambda: CategoryManagerDialog(self).exec())
+        pref_layout.addRow("", self.btn_manage_categories)
+        
         # 场景偏好
         self.work_personal_slider = QSlider(Qt.Horizontal)
         self.work_personal_slider.setRange(0, 100)
