@@ -83,12 +83,24 @@ graph TD
 ---
 
 ### 7. 🛡️ Zero-Stall Architecture & Background Task Manager
+- **Unified Task Center**: Monitors history, stage progression (e.g., aggregating, AI analysis), speeds, and success/failure/skip ratios.
 - All disk I/O, hashing, archiving, migration, and LLM requests execute in dedicated background `QThread` workers.
 - Real-time throughput metrics: **⚡ Speed (MB/s), Processed Files/Bytes, and ETA**.
 - Complete control with **⏸️ Pause, ▶️ Resume, ⏹️ Cancel**.
 - Intercepts window close events if tasks are actively running to safeguard disk operations.
 
 ---
+
+
+### 8. 🗂️ Snapshot Management & Intelligent Cleanup
+- **History Archive Manager**: Multi-select snapshot deletion, status visualization, and chronological sorting.
+- **One-Click Safe Clean**: Securely wipes out fully rolled-back or canceled snapshots without affecting active ones.
+- **Incremental UI Refresh**: Real-time localized table and UI updates without triggering heavy full-disk rescans.
+
+### 9. 🎨 Responsive UI & High-DPI Adaptation
+- **Adaptive Layouts**: Full support for 125%, 150%, and higher Windows DPI scaling settings.
+- **Scrollable Dynamic Areas**: Removes rigid height constraints, letting AI insights and logs expand organically.
+- **Targeted AI Extraction**: Smartly parses LLM markdown to display *only relevant sections* (e.g., redundant files vs. large files) on respective tabs, instead of dumping entire reports.
 
 ## 📂 Project Directory Structure
 
