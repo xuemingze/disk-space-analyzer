@@ -421,14 +421,20 @@ class AIService:
                     "sample_files": sample_files
                 })
 
+            sys_prefs = ""
+            if weights:
+                sys_prefs = f"\n【用户偏好设置】\n工作类占比: {weights.get('work_ratio', 0.5)*100}% | 私人类占比: {weights.get('personal_ratio', 0.5)*100}%\n"
+                sys_prefs += f"要求最低自动置信度: {weights.get('min_conf', 0.75)}\n"
+
             system_prompt = (
                 "你是一个专业的文件系统治理与软件生态识别专家。请分析待处理的目录与文件聚合单元：\n"
                 "【核心原则】\n"
                 "1. 必须以目录或工具链为整体单元（如 ~/npm, node_modules, ~/.cache, AppData 下具体工具），严禁拆分内部单个文件；\n"
                 "2. 优先识别所属 App、软件或工具链（如 Node.js/npm, VS Code, Python/pip, 微信, Docker 等）；\n"
-                "3. 若无法明确识别所属 App，必须归入 '未识别工具/待分类'，置信度设为 0.4 并标记 require_confirmation=true；\n"
-                "4. 包含系统级受保护或关键配置文件时，风险等级必须设为 '需人工确认' 或 '高风险'。\n\n"
-                "请严格以 JSON 格式输出: {\"groups\": [{\"original_root\": \"原根路径\", \"app_name\": \"软件名称\", \"suggested_category\": \"归档分类\", \"rationale\": \"依据\", \"confidence\": 0.95, \"risk_level\": \"低风险/中风险/需人工确认/高风险\", \"require_confirmation\": false}]}"
+                "3. 若无法明确识别所属 App，必须归入 '未分类杂项'，置信度设低并标记 require_confirmation=true；\n"
+                "4. 包含系统级受保护或关键配置文件时，风险等级必须设为 '高风险'。\n"
+                + sys_prefs +
+                "\n请严格以 JSON 格式输出: {\"groups\": [{\"original_root\": \"原根路径\", \"app_name\": \"软件名称\", \"suggested_category\": \"归档分类\", \"rationale\": \"依据\", \"confidence\": 0.95, \"risk_level\": \"低风险/中风险/高风险\", \"require_confirmation\": false}]}"
             )
 
             payload = {
