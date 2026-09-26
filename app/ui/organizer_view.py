@@ -99,6 +99,10 @@ class OrganizerView(QWidget):
         pref_layout.addRow("文件冲突策略:", self.conflict_combo)
         
         # 跨磁盘移动
+        self.chk_execute = QCheckBox("允许直接执行文件移动 (不勾选则仅生成离线批处理脚本)")
+        self.chk_execute.setChecked(app_config.get("org_allow_execute", default=False))
+        pref_layout.addRow("执行安全策略:", self.chk_execute)
+
         self.chk_cross_disk = QCheckBox("允许跨磁盘移动 (物理剪切)")
         self.chk_cross_disk.setChecked(app_config.get("org_cross_disk", default=True))
         pref_layout.addRow("磁盘策略:", self.chk_cross_disk)
@@ -153,6 +157,7 @@ class OrganizerView(QWidget):
         app_config.set("org_unknown_policy", self.unknown_combo.currentIndex())
         app_config.set("org_conflict_policy", self.conflict_combo.currentIndex())
         app_config.set("org_cross_disk", self.chk_cross_disk.isChecked())
+        app_config.set("org_allow_execute", self.chk_execute.isChecked())
         app_config.set("org_min_conf", self.spin_conf.value())
         app_config.set("org_high_risk_policy", self.high_risk_combo.currentIndex())
 
@@ -243,6 +248,7 @@ class OrganizerView(QWidget):
             classification_items=classified_groups,
             destination_root=dest_root,
             conflict_policy=conflict,
+            allow_execute=self.chk_execute.isChecked(),
             parent=self
         )
         dlg.exec()

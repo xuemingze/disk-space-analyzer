@@ -25,12 +25,14 @@ class OrganizePreviewDialog(QDialog):
         classification_items: List[Dict[str, Any]], # 传入目录聚合单元列表 (由 AppDetector.group_files_by_parent_or_tool 或 AIService 生成)
         destination_root: str,
         conflict_policy: str = "auto_rename",
+        allow_execute: bool = True,
         parent=None
     ):
         super().__init__(parent)
         self.classification_items = classification_items
         self.destination_root = os.path.normpath(destination_root)
         self.conflict_policy = conflict_policy
+        self.allow_execute = allow_execute
         self.archive_worker: Optional[ArchiveWorker] = None
         self.last_manifest_path: str = ""
         self._is_updating_checks = False
@@ -446,6 +448,64 @@ class OrganizePreviewDialog(QDialog):
             recurse_safe(self.tree.topLevelItem(i))
             
         self._is_updating_checks = False
+
+
+    def export_script(self):
+        """仅导出执行批处理脚本"""
+        selected_file_items = []
+        
+        def recurse_collect(item):
+            state = item.checkState(0)
+            u_data = item.data(0, Qt.UserRole) or {}
+            if u_data.get("type") == "file" and state == Qt.Checked:
+                sub_info = u_data.get("data", {})
+                group_data = u_data.get("group", {})
+                if sub_info:
+                    selected_file_items.append({
+                        "path": sub_info.get("original_path", ""),
+                        "target_category": group_data.get("suggested_category", ""),
+                        "custom_target": sub_info.get("target_path", "")
+                    })
+            for j in range(item.childCount()):
+                recurse_collect(item.child(j))
+
+        for i in range(self.tree.topLevelItemCount()):
+            recurse_collect(self.tree.topLevelItem(i))
+
+        if not selected_file_items:
+            QMessageBox.warning(self, "提示", "未勾选任何文件！")
+            return
+
+        from pathlib import Path
+        import os
+        
+        script_path, _ = QFileDialog.getSaveFileName(self, "保存批处理脚本", "DiskAnalyzer_Migration.bat", "Batch Files (*.bat)")
+        if not script_path:
+            return
+
+        try:
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write("@echo off\n")
+                f.write("chcp 65001 > nul\n")
+                f.write("echo === 空间全景深度分析与冗余文件扫描 - 文件迁移脚本 ===\n\n")
+                for item in selected_file_items:
+                    src = os.path.normpath(item["path"])
+                    custom_target = item.get("custom_target")
+                    if custom_target:
+                        dest = os.path.normpath(custom_target)
+                    else:
+                        dest = os.path.normpath(str(Path(self.destination_root) / item.get("target_category", "") / Path(src).name))
+                    
+                    dest_dir = os.path.dirname(dest)
+                    f.write(f'if not exist "{dest_dir}" mkdir "{dest_dir}"\n')
+                    f.write(f'move /Y "{src}" "{dest}"\n')
+                
+                f.write("\necho.\necho 迁移完成！\npause\n")
+            
+            QMessageBox.information(self, "导出成功", f"脚本已成功导出至：\n{script_path}")
+            # Do not close dialog, let user decide if they want to exit
+        except Exception as e:
+            QMessageBox.critical(self, "导出失败", f"无法写入文件: {e}")
 
     def execute_archive(self):
         """收集勾选的项目并启动后台流式归档"""
