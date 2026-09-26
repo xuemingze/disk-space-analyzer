@@ -110,10 +110,7 @@ class AIService:
                         is_valid, val_err, parsed_data = validator(resp_json)
                         if not is_valid:
                             last_err = f"业务逻辑校验失败: {val_err}"
-                            if attempt < max_retries:
-                                pass # allow retry
-                            else:
-                                break # skip to bottom error
+                            break # 禁止对格式或程序异常无意义重试
                         else:
                             return True, {"data": resp_json, "task_id": task_id, "elapsed": elapsed, "parsed_data": parsed_data}
                     else:
@@ -515,15 +512,16 @@ class AIService:
                                 
                                 # 更新目标根路径与子项目标路径
                                 root_p = Path(orig_root)
-                                new_target_base = cls._calculate_target_path(new_cat, ai_item.get("app_name", g.get("app_name", "")), dest_root_p, root_p, g.get("is_directory_group", False))
+                                new_target_base = cls._calculate_target_path(new_cat, r.get("app_name", g.get("app_name", "")), dest_root_p, root_p, g.get("is_directory_group", False))
                                 g["target_root"] = str(new_target_base)
 
                                 for sub in g["sub_items"]:
                                     sub["target_path"] = str(new_target_base / Path(sub["relative_path"]))
             except Exception as e:
                 app_logger.error(f"AI 目录聚合分类请求失败，使用内置规则引擎: {e}")
-
-        return grouped_units
+                for g in grouped_units:
+                    g["source"] = "offline_rule"
+                return grouped_units
 
     @classmethod
 

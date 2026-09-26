@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QFrame, QAbstractItemView,
@@ -115,6 +116,7 @@ class OrganizePreviewDialog(QDialog):
         self.tree.setAlternatingRowColors(False)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.itemChanged.connect(self.on_tree_item_changed)
+        self.tree.itemExpanded.connect(self._on_item_expanded)
         
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.Interactive)
@@ -181,17 +183,12 @@ class OrganizePreviewDialog(QDialog):
 
 
     def populate_tree(self):
-        """装填目录树结构 (按原根路径完整层级)"""
         self._is_updating_checks = True
+        self.tree.setUpdatesEnabled(False)
         self.tree.clear()
-
-        node_map = {}
-        dir_stats = {}
-
+        
         folder_bg = QBrush(QColor("#E3F2FD"))
         folder_fg = QBrush(QColor("#000000"))
-        file_bg = QBrush(QColor("#FFFFFF"))
-        file_fg = QBrush(QColor("#000000"))
         
         auto_checked_count = 0
         unselected_count = 0
@@ -200,8 +197,8 @@ class OrganizePreviewDialog(QDialog):
         risk_high = 0
 
         for group in self.classification_items:
+            QApplication.processEvents()
             orig_root = group.get("original_root", "")
-            scan_root = group.get("scan_root", "")
             sub_items = group.get("sub_items", [])
             
             risk = group.get("risk_level", "未知风险")
@@ -225,170 +222,85 @@ class OrganizePreviewDialog(QDialog):
             unrecognized = not app_name or "未识别" in app_name or "未知" in app_name
             
             is_system_path = False
-            for sys_dir in ["windows", "program files", "programdata", "appdata", "system32"]:
-                if sys_dir in orig_root.lower():
-                    is_system_path = True
-                    break
+            if orig_root:
+                from app.utils.file_helper import is_system_critical_path
+                is_system_path = is_system_critical_path(orig_root)
             
-            # 严格拦截规则
-            reject_reasons = []
-            if "高风险" in risk or risk_color == QColor("#EF4444"):
-                reject_reasons.append(risk)
-            if "中风险" in risk:
-                reject_reasons.append("中风险需复核")
-            if conf < 0.75:
-                reject_reasons.append(f"置信度偏低({conf})")
-            if require_conf:
-                reject_reasons.append("要求人工确认")
-            if unrecognized:
-                reject_reasons.append("未识别所属应用")
-            if is_system_path:
-                reject_reasons.append("涉及系统敏感目录")
-                
-            default_checked = len(reject_reasons) == 0
-            if default_checked:
+            default_checked = False
+            if (not require_conf) and conf >= 0.7 and (not unrecognized) and (not is_system_path):
+                default_checked = True
                 auto_checked_count += 1
-                group["reject_reason"] = ""
             else:
                 unselected_count += 1
-                group["reject_reason"] = " | ".join(reject_reasons)
                 
-            # Update root node text if rejected
+            group_item = QTreeWidgetItem(self.tree)
+            group_item.setFlags(group_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            group_item.setCheckState(0, Qt.Checked if default_checked else Qt.Unchecked)
+            group_item.setData(0, Qt.UserRole, {"type": "group", "data": group})
+            
             from pathlib import Path
-            if not scan_root:
-                scan_root = str(Path(orig_root).anchor) if orig_root else "C:\\"
-
-            for sub in sub_items:
-                orig_path = sub.get("original_path", "")
-                if not orig_path: continue
+            pt = Path(orig_root)
+            display_name = pt.name if pt.name else str(pt)
+            group_item.setText(0, f"📦 {display_name}")
+            group_item.setToolTip(0, orig_root)
+            
+            for col in range(8):
+                group_item.setBackground(col, folder_bg)
+                group_item.setForeground(col, folder_fg)
                 
-                p = Path(orig_path)
-                parts = []
-                curr = p
+            source = group.get("source", "离线规则")
+            group_item.setText(1, f"{group.get('app_name', '')} [{source}]")
+            font = group_item.font(1)
+            font.setBold(True)
+            if source == "AI":
+                group_item.setForeground(1, QBrush(QColor("#38BDF8")))
+            else:
+                group_item.setForeground(1, QBrush(QColor("#94A3B8")))
+            group_item.setFont(1, font)
+            
+            combo = QComboBox()
+            cats = ["未分类/待人工确认"] + [c["name"] for c in global_category_manager.get_active()]
+            combo.addItems(cats)
+            
+            curr_cat = group.get("suggested_category", "")
+            if curr_cat in cats:
+                combo.setCurrentText(curr_cat)
+            else:
+                combo.addItem(curr_cat)
+                combo.setCurrentText(curr_cat)
                 
-                while str(curr) != str(curr.anchor) and str(curr) != scan_root and str(curr) != curr.parent.name:
-                    parts.append(curr)
-                    if str(curr) == scan_root or str(curr) == str(curr.parent):
-                        break
-                    curr = curr.parent
-                if str(curr) not in [str(pt) for pt in parts]:
-                    parts.append(curr)
-                
-                parts.reverse()
+            combo.currentTextChanged.connect(lambda txt, it=group_item: self._on_category_changed(it, txt))
+            self.tree.setItemWidget(group_item, 2, combo)
+            
+            group_item.setText(3, group.get("target_root", ""))
+            group_item.setText(4, group.get("rationale", ""))
+            
+            total_size = sum(s.get("size", 0) for s in sub_items)
+            size_str = f"{len(sub_items)} 项 ({format_size(total_size)})"
+            group_item.setText(5, size_str)
+            group_item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
+            
+            group_item.setText(6, f"{conf * 100:.0f}%")
+            group_item.setTextAlignment(6, Qt.AlignCenter)
+            
+            group_item.setText(7, risk)
+            group_item.setTextAlignment(7, Qt.AlignCenter)
+            group_item.setForeground(7, QBrush(risk_color))
+            
+            group_item.setText(8, group.get("action", ""))
+            group_item.setTextAlignment(8, Qt.AlignCenter)
+            
+            task_info = f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}"
+            group_item.setText(9, task_info)
+            
+            if sub_items:
+                dummy = QTreeWidgetItem(group_item)
+                dummy.setText(0, "加载中...")
 
-                parent_item = self.tree.invisibleRootItem()
-                
-                for idx, pt in enumerate(parts):
-                    pt_str = str(pt)
-
-                    is_file = (idx == len(parts) - 1 and p.is_file() if p.exists() else idx == len(parts) - 1)
-                    
-                    if pt_str not in node_map:
-                        item = QTreeWidgetItem(parent_item)
-                        item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
-                        item.setCheckState(0, Qt.Checked if default_checked else Qt.Unchecked)
-                        
-                        icon_prefix = "📄 " if is_file else "📁 "
-                        display_name = pt.name if pt.name else str(pt)
-                        if display_name.endswith("\\") or display_name.endswith("/"):
-                            display_name = display_name[:-1]
-                        if not display_name:
-                            display_name = str(pt)
-                            
-                        item.setText(0, f"{icon_prefix}{display_name}")
-                        item.setToolTip(0, pt_str)
-                        
-                        for col in range(8):
-                            item.setBackground(col, file_bg if is_file else folder_bg)
-                            item.setForeground(col, file_fg if is_file else folder_fg)
-                        
-                        node_map[pt_str] = item
-                        if not is_file:
-                            dir_stats[pt_str] = {"size": 0, "count": 0, "group_data": None}
-                    
-                    parent_item = node_map[pt_str]
-                    
-                    if not is_file:
-                        dir_stats[pt_str]["size"] += sub.get("size", 0)
-                        dir_stats[pt_str]["count"] += 1
-                        
-                        if pt_str == orig_root:
-                            dir_stats[pt_str]["group_data"] = group
-                            parent_item.setData(0, Qt.UserRole, {"type": "group", "data": group})
-                            
-                            app_name = group.get("app_name", "")
-                            source = group.get("source", "离线规则")
-                            parent_item.setText(1, f"{app_name} [{source}]")
-                            font = parent_item.font(1)
-                            font.setBold(True)
-                            if source == "AI":
-                                parent_item.setForeground(1, QBrush(QColor("#38BDF8")))
-                            else:
-                                parent_item.setForeground(1, QBrush(QColor("#94A3B8")))
-                            parent_item.setFont(1, font)
-                            
-                                                        
-                            # Replace suggested category text with combobox
-                            combo = QComboBox()
-                            cats = ["未分类/待人工确认"] + [c["name"] for c in global_category_manager.get_active()]
-                            combo.addItems(cats)
-                            
-                            curr_cat = group.get("suggested_category", "")
-                            if curr_cat in cats:
-                                combo.setCurrentText(curr_cat)
-                            else:
-                                combo.addItem(curr_cat)
-                                combo.setCurrentText(curr_cat)
-                                
-                            combo.currentTextChanged.connect(lambda txt, it=parent_item: self._on_category_changed(it, txt))
-                            self.tree.setItemWidget(parent_item, 2, combo)
-                            
-                            parent_item.setText(3, group.get("target_root", ""))
-                            parent_item.setText(4, group.get("rationale", ""))
-                            parent_item.setText(6, f"{conf * 100:.0f}%")
-                            parent_item.setTextAlignment(6, Qt.AlignCenter)
-                            
-                            parent_item.setText(7, risk)
-                            parent_item.setTextAlignment(7, Qt.AlignCenter)
-                            parent_item.setForeground(7, QBrush(risk_color))
-                            
-                            action = group.get("action", "")
-                            parent_item.setText(8, action)
-                            parent_item.setTextAlignment(8, Qt.AlignCenter)
-                            
-                            task_info = f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}"
-                            parent_item.setText(9, task_info)
-
-                    if is_file:
-                        parent_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "group": group})
-                        parent_item.setText(1, "-")
-                        parent_item.setText(2, group.get("suggested_category", ""))
-                        parent_item.setText(3, sub.get("target_path", ""))
-                        parent_item.setText(4, "包含在目录单元中")
-                        parent_item.setText(5, format_size(sub.get("size", 0)))
-                        parent_item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
-                        parent_item.setText(6, "-")
-                        parent_item.setTextAlignment(6, Qt.AlignCenter)
-                        parent_item.setText(7, risk)
-                        parent_item.setTextAlignment(7, Qt.AlignCenter)
-                        parent_item.setForeground(7, QBrush(risk_color))
-                        
-                        action = group.get("action", "")
-                        parent_item.setText(8, action)
-                        parent_item.setTextAlignment(8, Qt.AlignCenter)
-                        
-                        task_info = f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}"
-                        parent_item.setText(9, task_info)
-
-        for pt_str, stats in dir_stats.items():
-            item = node_map.get(pt_str)
-            if item:
-                size_str = f"{stats['count']} 项 ({format_size(stats['size'])})"
-                item.setText(5, size_str)
-                item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
-                
         self._is_updating_checks = False
-        self.tree.expandToDepth(0) # 默认展开第一层顶级目录
+        self.tree.setUpdatesEnabled(True)
+        # self.tree.expandToDepth(0)
+
 
     def on_tree_item_changed(self, item: QTreeWidgetItem, column: int):
         """父子节点联动勾选事件响应"""
@@ -500,6 +412,52 @@ class OrganizePreviewDialog(QDialog):
                 child.setText(2, new_cat_name)
                 
         self.tree.viewport().update()
+
+
+    def _on_item_expanded(self, item):
+        if item.childCount() == 1 and item.child(0).text(0) == "加载中...":
+            u_data = item.data(0, Qt.UserRole)
+            if not u_data or u_data.get("type") != "group": return
+            
+            # Remove dummy
+            item.removeChild(item.child(0))
+            
+            group = u_data["data"]
+            risk = group.get("risk_level", "未知风险")
+            if "低风险" in risk:
+                risk_color = QColor("#10B981")
+            elif "中风险" in risk:
+                risk_color = QColor("#F59E0B")
+            else:
+                risk_color = QColor("#EF4444")
+                
+            self.tree.setUpdatesEnabled(False)
+            new_children = []
+            for sub in group.get("sub_items", []):
+                child_item = QTreeWidgetItem()
+                child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+                child_item.setCheckState(0, item.checkState(0))
+                
+                child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "group": group})
+                child_item.setText(0, sub.get("relative_path", ""))
+                child_item.setText(1, "-")
+                child_item.setText(2, group.get("effective_category", group.get("suggested_category", "")))
+                child_item.setText(3, sub.get("target_path", ""))
+                child_item.setText(4, "包含在目录单元中")
+                from app.utils.file_helper import format_size
+                child_item.setText(5, format_size(sub.get("size", 0)))
+                child_item.setTextAlignment(5, Qt.AlignRight | Qt.AlignVCenter)
+                child_item.setText(6, "-")
+                child_item.setTextAlignment(6, Qt.AlignCenter)
+                child_item.setText(7, risk)
+                child_item.setTextAlignment(7, Qt.AlignCenter)
+                child_item.setForeground(7, QBrush(risk_color))
+                child_item.setText(8, group.get("action", ""))
+                child_item.setTextAlignment(8, Qt.AlignCenter)
+                child_item.setText(9, f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}")
+                new_children.append(child_item)
+            item.addChildren(new_children)
+            self.tree.setUpdatesEnabled(True)
 
     def _select_safe_only(self):
         self._is_updating_checks = True
