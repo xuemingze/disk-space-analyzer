@@ -182,7 +182,7 @@ class TaskManagerDialog(QDialog):
                 act_layout.addWidget(btn_toggle)
 
             # 停止按钮 (正在排队或运行中的均可停止)
-            if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+            if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED):
                 btn_cancel = QPushButton("⏹️ 停止")
                 btn_cancel.setStyleSheet("background-color: #EF4444; color: white; padding: 4px 10px; font-weight: bold; border-radius: 4px;")
                 btn_cancel.clicked.connect(lambda _, tid=task.task_id: global_task_manager.cancel_task(tid))
