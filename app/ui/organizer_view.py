@@ -184,19 +184,21 @@ class OrganizerView(QWidget):
         self.scan_task.finished_ok.connect(self.on_scan_completed)
         self.scan_task.error.connect(self.on_scan_error)
         
-        from PySide6.QtCore import QThreadPool
-        QThreadPool.globalInstance().start(self.scan_task)
+        # DirectoryScanTask inherits from QThread (via BaseScanTask)
+        self.scan_task.start()
 
     def on_scan_error(self, err: str):
         self.btn_run.setEnabled(True)
         self.lbl_status.setText(f"❌ 扫描失败: {err}")
         if getattr(self, "scan_task_id", None):
             global_task_manager.set_task_status(self.scan_task_id, TaskStatus.FAILED, err)
+            self.last_scan_task_id = self.scan_task_id
             self.scan_task_id = None
 
     def on_scan_completed(self, result: dict):
         if getattr(self, "scan_task_id", None):
             global_task_manager.set_task_status(self.scan_task_id, TaskStatus.COMPLETED)
+            self.last_scan_task_id = self.scan_task_id
             self.scan_task_id = None
 
         all_scanned_files = result.get("all_scanned_files", [])
@@ -239,7 +241,13 @@ class OrganizerView(QWidget):
         self.lbl_status.setText("✅ AI 规划已就绪等待确认")
         if getattr(self, "ai_task_id", None):
             global_task_manager.set_task_status(self.ai_task_id, TaskStatus.COMPLETED)
+            self.last_ai_task_id = self.ai_task_id
             self.ai_task_id = None
+            
+        for g in classified_groups:
+            g["task_id"] = getattr(self, "last_scan_task_id", "")
+            g["report_id"] = getattr(self, "last_ai_task_id", "")
+
 
         dest_root = self.dest_input.text().strip()
         conflict = "auto_rename" if self.conflict_combo.currentIndex() == 0 else ("skip" if self.conflict_combo.currentIndex() == 1 else "overwrite")

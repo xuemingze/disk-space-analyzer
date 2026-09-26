@@ -556,9 +556,9 @@ class OrganizePreviewDialog(QDialog):
 
         report_id = ""
         scan_id = ""
-        if self.groups and len(self.groups) > 0:
-            report_id = self.groups[0].get("report_id", "")
-            scan_id = self.groups[0].get("task_id", "")
+        if hasattr(self, "classification_items") and self.classification_items and len(self.classification_items) > 0:
+            report_id = self.classification_items[0].get("report_id", "")
+            scan_id = self.classification_items[0].get("task_id", "")
         self.archive_worker = ArchiveWorker(
             file_items=selected_file_items,
             destination_root=self.destination_root,
