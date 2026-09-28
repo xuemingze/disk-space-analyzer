@@ -6,6 +6,24 @@
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
 [![AI Powered](https://img.shields.io/badge/AI-OpenAI%20%7C%20DeepSeek%20%7C%20MiniMax%20%7C%20Ollama-orange.svg)](https://github.com/xuemingze/disk-space-analyzer)
 
+---
+
+## 📥 Download & Usage
+
+**➡️ [Latest Release](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [All Releases](https://github.com/xuemingze/disk-space-analyzer/releases) · [Usage & Safety Guide (中文)](./docs/使用说明.md)
+
+| File | Size | Best for | Download |
+| --- | ---: | --- | :---: |
+| **`DiskSpaceAnalyzer-1.2.0-win64-portable.zip`** | 82.5 MB | **Recommended.** Portable folder build — unzip anywhere and run `DiskSpaceAnalyzer.exe`. Fast startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.2.0-win64.exe` | 82.4 MB | Single-file build — double-click to run, nothing to unzip. First launch is slower (self-extraction). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64.exe) |
+| Source code (`.zip` / `.tar.gz`) | — | Build from source: `pip install -r requirements.txt && python main.py` | [Releases page](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
+
+> 🖥️ **Windows 10 / 11 (64-bit).** No Python installation required for the prebuilt binaries.
+> 📝 Runtime logs, `error.log` and crash snapshots are written to `logs/` next to the executable — please attach them when reporting an issue.
+
+---
+
+
 > **High-Performance Desktop Client for Windows Disk Space Analysis & AI Governance**: Features a 3-Phase Asynchronous Non-blocking Scan Engine, Persistent SQLite Hash Cache, 3-Tier Configuration Inheritance, **App/Toolchain Atomic Directory Grouping**, **Smart Migration with Windows Shortcut & Registry Synchronization and Rollback Manifests**, and an **End-to-End Anti-Hallucination AI Deep Analysis & Automated Execution Pipeline**.
 
 [English Documentation](./README.md) | [中文文档](./README_ZH.md)
@@ -131,13 +149,24 @@ Disk-Space-Analyzer/
 │       ├── file_helper.py         # System Protected Whitelist & Size Formatter
 │       └── logger.py              # Application Logging System
 ├── tests/
+│   ├── test_ai_scenarios.py             # AI Response Parsing Scenarios
 │   ├── test_ai_service_and_pipeline.py  # AI Sanitization, Validation & Retry Tests
 │   ├── test_app_detector_and_grouping.py# Toolchain Grouping & ~/npm Verification
 │   ├── test_gui_dialogs.py             # Headless Qt Tree Dialog Verification
 │   ├── test_null_safety.py             # Null Safety & Edge Case Protection Tests
-│   └── test_settings_and_ignore_folders.py # Settings Persistence & Ignore List Tests
-├── main.py                        # Application Entrypoint
-├── requirements.txt               # Dependencies
+│   ├── test_rollback_worker.py         # Migration Rollback & Conflict Handling
+│   ├── test_settings_and_ignore_folders.py # Settings Persistence & Ignore List Tests
+│   └── test_tree_freeze.py             # Expand-All / Cascade Checkbox Freeze Regression
+├── assets/
+│   ├── app.ico                     # Multi-size application icon
+│   └── make_icon.py                # Icon generator (Pillow)
+├── docs/
+│   ├── 使用说明.md                  # Usage & Safety Guide (Chinese)
+│   └── release-notes-v1.2.0.md     # Release Notes
+├── build_release.py               # One-command PyInstaller build (portable zip + exe)
+├── main.py                        # Application Entrypoint (logging + global error hooks)
+├── requirements.txt               # Runtime Dependencies
+├── requirements-dev.txt           # Development / Build Dependencies
 ├── README.md                      # English Documentation
 └── README_ZH.md                   # Chinese Documentation
 ```
@@ -168,7 +197,8 @@ python main.py
 
 ### 3. Run Automated Test Suite
 ```bash
-pytest tests/ -v
+pytest tests/ -v                   # 17 tests: unit + headless Qt regression
+python tests/test_tree_freeze.py   # Optional: 50,000-node expand-all stress benchmark
 ```
 
 ---
@@ -181,6 +211,28 @@ Navigate to **"Settings"** in the sidebar:
 3. **Model Selection**: Click **"🔄 Fetch Available Models"** to populate available models (e.g. `gpt-4o`, `deepseek-chat`, `MiniMax-Text-01`).
 4. **Test & Save**: Click **"⚡ Test Connection"** to verify, then save to Global or Profile configuration.
 *(Note: If no API Key is configured, the client automatically and seamlessly falls back to the high-accuracy offline heuristic rule engine).*
+
+---
+
+## 🩺 Logging & Troubleshooting
+
+The application intercepts unhandled exceptions globally (main thread, worker threads, interpreter exit)
+and persists everything to disk — **no silent crashes**:
+
+| File | Content |
+| --- | --- |
+| `logs/app.log` | Full runtime log (rolling, 2 MB × 3) |
+| `logs/error.log` | Errors & exceptions with complete stack traces (rolling, 1 MB × 5) |
+| `logs/crash-<timestamp>.log` | Dedicated snapshot for every uncaught exception |
+
+Log directory resolution order:
+
+1. `DISK_ANALYZER_LOG_DIR` environment variable
+2. `logs/` next to the executable (portable builds)
+3. `~/.disk_space_analyzer/logs` (fallback)
+
+Qt framework warnings are routed into the same log via `qInstallMessageHandler`.
+When reporting an issue, please attach `logs/error.log` or the relevant `crash-*.log`.
 
 ---
 

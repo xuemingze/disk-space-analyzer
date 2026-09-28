@@ -76,3 +76,33 @@ hash_cache.db
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Build / release artifacts
+build/
+dist/
+release/
+*.spec
+
+# Runtime logs (error.log / crash-*.log 落盘位置)
+logs/
+
+# Generated icon preview & bytecode inside assets
+assets/_preview.png
+assets/__pycache__/
+
+# Test scratch directories
+.tmp_testrun/
+.pytest_tmp/
+.tmpprobe/
+.probe_default/
+.probe_0700/
+# 任意 .tmp* 临时目录（冒烟测试探针等），防止大体积探针被误提交
+.tmp*/
+
+# AI session context exports (本地调试产物，不参与发布)
+context-export-*.json
+*-context-export-*.json
+
+# 本地随手记录的说明文件（正式内容已并入 docs/使用说明.md）
+使用方法.txt
+文件清理助手使用说明.txt

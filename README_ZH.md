@@ -6,6 +6,24 @@
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
 [![AI Powered](https://img.shields.io/badge/AI-OpenAI%20%7C%20DeepSeek%20%7C%20MiniMax%20%7C%20Ollama-orange.svg)](https://github.com/xuemingze/disk-space-analyzer)
 
+---
+
+## 📥 下载与使用
+
+**➡️ [最新版本 Release](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [历史版本](https://github.com/xuemingze/disk-space-analyzer/releases) · [使用说明与安全须知](./docs/使用说明.md)
+
+| 文件 | 大小 | 适用场景 | 下载 |
+| --- | ---: | --- | :---: |
+| **`DiskSpaceAnalyzer-1.2.0-win64-portable.zip`** | 82.5 MB | **推荐**。目录版便携包，解压到任意位置后双击 `DiskSpaceAnalyzer.exe` 即可，**无需安装 Python**，启动快。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.2.0-win64.exe` | 82.4 MB | 单文件版，双击直接运行、无需解压；首次启动稍慢（自解压属正常现象）。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64.exe) |
+| 源码包（`.zip` / `.tar.gz`） | — | 源码运行：`pip install -r requirements.txt && python main.py` | [Releases 页面](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
+
+> 🖥️ **系统要求：Windows 10 / 11 64 位。** 预编译版本无需安装 Python。
+> 📝 运行日志、`error.log` 与崩溃快照写入可执行文件同级的 `logs/` 目录，反馈问题时请一并附上。
+
+---
+
+
 > **专为 Windows 深度空间治理打造的高性能桌面客户端**：融合三阶段异步分层扫描引擎、SQLite 哈希持久化缓存、三级配置继承体系、**以 App / 工具链为原子单元的树状目录级 AI 智能整理**、具备**快捷方式与注册表自动同步的智能跨盘迁移与安全回滚机制**，以及**防超时与抗幻觉的端到端 AI 深度分析报告与自动化执行链路**。
 
 [English Documentation](./README.md) | [中文文档](./README_ZH.md)
@@ -13,7 +31,13 @@
 ---
 
 ## 📢 版本更新说明
-### v1.1.0 最新特性
+### v1.2.0 最新特性
+- **全局错误拦截 + 异常独立落盘**：新增主线程 / 子线程 / 解释器退出三处全局异常拦截，未捕获异常的完整堆栈会静默写入可执行文件同级的 `logs/error.log` 与独立快照 `logs/crash-*.log`；Qt 自身警告也一并接入日志。窗口模式（`--noconsole`）下不再出现"崩溃却拿不到任何日志"的情况。
+- **可复现一键构建链路**：新增 `python build_release.py`，一条命令产出便携版 `zip`（目录版）与单文件 `exe`，构建过程全量落盘 `logs/build_release.log`，失败必留堆栈 `logs/build_release_error.log`。
+- **测试套件修复（重要）**：`pytest tests/` 此前会在收集阶段直接 `INTERNALERROR` 崩溃——专项压测脚本在**导入期**执行了 `sys.exit(0)`，导致 **0 个用例被执行**（README 宣称的测试命令实际不可用）。现已改造为标准 pytest 用例（脚本模式与大规模 5 万节点压测仍保留），全量 **17 项测试通过**。
+- **仓库结构治理**：移除 33 个开发期临时脚本（`patch_*.py` / `fix_*.py` / `benchmark_*.py` / 根级 `test_*.py` / 未被引用的 `model.py`），公开仓库只保留产品代码。
+
+### v1.1.0 特性
 - **AI 目录树智能规划中心**：彻底重构文件整理页面。现在通过底层非阻塞引擎递归扫描生成全景目录树报告，并将用户的工作/私人偏好比例注入 LLM System Prompt，由 AI 统筹制定整体目录级迁移与归档方案。
 - **安全沙盒与批处理离线引擎**：执行文件归档时增加拦截保护机制。如果未授权物理执行，系统会自动抽取安全项目，生成携带原/目的相对路径的 .bat 离线批处理脚本。
 - **强制前置快照 (Pre-Backup)**：底层文件流引擎重构，无论 AI 推荐还是自定义迁移，移动前都会强制在硬盘固化一条 PENDING 状态的快照清单，天然防范掉电中断。
@@ -136,15 +160,26 @@ graph TD
 │   │       └── task_manager_widget.py # 后台任务监控与日志排查弹窗
 │   └── utils/
 │       ├── file_helper.py         # 系统保护白名单、格式化与扩展名分类
-│       └── logger.py              # 全局多级别日志记录模块
+│       └── logger.py              # 控制台 + 独立文件日志、全局异常拦截与崩溃快照
 ├── tests/
+│   ├── test_ai_scenarios.py             # AI 响应解析场景测试
 │   ├── test_ai_service_and_pipeline.py  # AI 响应清洗、字段校验与重试机制测试
 │   ├── test_app_detector_and_grouping.py# 工具链原子分组与 ~/npm 规则验证
 │   ├── test_gui_dialogs.py             # Qt 离线组件与目录树预览验证
 │   ├── test_null_safety.py             # 空值与边界安全防护测试
-│   └── test_settings_and_ignore_folders.py # 忽略路径持久化与来源继承测试
-├── main.py                        # 应用程序启动入口
-├── requirements.txt               # 项目依赖清单
+│   ├── test_rollback_worker.py         # 迁移回滚与目标冲突处理测试
+│   ├── test_settings_and_ignore_folders.py # 忽略路径持久化与来源继承测试
+│   └── test_tree_freeze.py             # 批量展开/级联勾选卡死回归（含 5 万节点压测模式）
+├── assets/
+│   ├── app.ico                     # 多尺寸应用图标
+│   └── make_icon.py                # 图标生成脚本 (Pillow)
+├── docs/
+│   ├── 使用说明.md                  # 清理 C 盘的正确姿势与安全须知
+│   └── release-notes-v1.2.0.md     # 版本发布说明
+├── build_release.py               # 一键打包 (便携 zip + 单文件 exe)
+├── main.py                        # 应用程序启动入口 (日志装配 + 全局异常拦截)
+├── requirements.txt               # 运行时依赖清单
+├── requirements-dev.txt           # 开发与构建依赖
 ├── README.md                      # English Documentation
 └── README_ZH.md                   # 中文使用与架构文档
 ```
