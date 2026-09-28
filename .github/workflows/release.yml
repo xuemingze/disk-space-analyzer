@@ -77,13 +77,11 @@ jobs:
         run: python build_release.py --onefile
 
       - name: Collect artifacts
-        id: artifacts
         shell: pwsh
         run: |
           $files = Get-ChildItem release -File -ErrorAction SilentlyContinue
           if (-not $files) { throw "release 目录为空，构建未产出任何制品" }
           $files | ForEach-Object { Write-Host ("  {0}  ({1:N2} MB)" -f $_.Name, ($_.Length / 1MB)) }
-          "files=" + ($files.FullName -join "`n") >> $env:GITHUB_OUTPUT
 
       - name: Publish GitHub Release
         shell: pwsh
