@@ -1,0 +1,132 @@
+name: Release
+
+# 触发方式：
+#   1) 推送 v* 标签 —— 自动构建并发布
+#   2) 手动 workflow_dispatch —— 为已存在的标签补发 Release
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的标签（例如 v1.2.0），该标签必须已存在"
+        required: true
+        type: string
+
+# 使用仓库内置 GITHUB_TOKEN 发布，无需依赖个人 PAT
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Resolve release tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
+            $tag = '${{ github.event.inputs.tag }}'
+          } else {
+            $tag = '${{ github.ref_name }}'
+          }
+          if ([string]::IsNullOrWhiteSpace($tag)) { throw "无法解析发布标签" }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "发布标签: $tag"
+
+      - name: Verify code version matches tag
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $code = (Select-String -Path main.py -Pattern 'APP_VERSION\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          Write-Host "main.py APP_VERSION = $code | tag = $tag"
+          if ($tag -ne "v$code") {
+            throw "版本不一致: tag=$tag 但 APP_VERSION=$code —— 请先同步 main.py"
+          }
+
+      - name: Run test suite
+        run: python -m pytest tests/ -v
+
+      - name: Build release artifacts
+        run: python build_release.py --onefile
+
+      - name: Collect artifacts
+        id: artifacts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem release -File -ErrorAction SilentlyContinue
+          if (-not $files) { throw "release 目录为空，构建未产出任何制品" }
+          $files | ForEach-Object { Write-Host ("  {0}  ({1:N2} MB)" -f $_.Name, ($_.Length / 1MB)) }
+          "files=" + ($files.FullName -join "`n") >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $assets = (Get-ChildItem release -File).FullName
+          $notesFile = "docs/release-notes-$tag.md"
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag 已存在，覆盖上传附件"
+            gh release upload $tag --repo $env:GITHUB_REPOSITORY @assets --clobber
+          } elseif (Test-Path $notesFile) {
+            Write-Host "使用发布说明: $notesFile"
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title "$tag" `
+              --notes-file $notesFile --verify-tag @assets
+          } else {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --title "$tag" `
+              --generate-notes --verify-tag @assets
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Release 发布失败，退出码 $LASTEXITCODE" }
+
+      - name: Verify release assets are downloadable
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ steps.tag.outputs.tag }}'
+          $names = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+          if (-not $names) { throw "Release $tag 没有任何附件" }
+          foreach ($name in $names) {
+            $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$name"
+            $resp = Invoke-WebRequest -Uri $url -Method Head -MaximumRedirection 5 -SkipHttpErrorCheck
+            Write-Host ("{0} -> HTTP {1} ({2} bytes)" -f $name, $resp.StatusCode, $resp.Headers['Content-Length'])
+            if ($resp.StatusCode -ne 200) { throw "附件不可下载: $url (HTTP $($resp.StatusCode))" }
+          }
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: logs/
+          if-no-files-found: ignore
