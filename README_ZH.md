@@ -14,8 +14,8 @@
 
 | 文件 | 大小 | 适用场景 | 下载 |
 | --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.2.0-win64-portable.zip`** | 82.5 MB | **推荐**。目录版便携包，解压到任意位置后双击 `DiskSpaceAnalyzer.exe` 即可，**无需安装 Python**，启动快。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.2.0-win64.exe` | 82.4 MB | 单文件版，双击直接运行、无需解压；首次启动稍慢（自解压属正常现象）。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.2.0-win64-portable.zip`** | 77.2 MB | **推荐**。目录版便携包，解压到任意位置后双击 `DiskSpaceAnalyzer.exe` 即可，**无需安装 Python**，启动快。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.2.0-win64.exe` | 76.9 MB | 单文件版，双击直接运行、无需解压；首次启动稍慢（自解压属正常现象）。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64.exe) |
 | 源码包（`.zip` / `.tar.gz`） | — | 源码运行：`pip install -r requirements.txt && python main.py` | [Releases 页面](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **系统要求：Windows 10 / 11 64 位。** 预编译版本无需安装 Python。
