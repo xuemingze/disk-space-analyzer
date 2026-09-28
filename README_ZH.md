@@ -19,6 +19,7 @@
 | 源码包（`.zip` / `.tar.gz`） | — | 源码运行：`pip install -r requirements.txt && python main.py` | [Releases 页面](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **系统要求：Windows 10 / 11 64 位。** 预编译版本无需安装 Python。
+> ⚙️ **默认归档 / 迁移路径**为 `D:\归档备份` 与 `D:\软件与文件迁移`（无 D 盘时回退到 `%USERPROFILE%\DiskAnalyzerArchive` / `%USERPROFILE%\MigratedApps`）。这些是开发者环境沿用的默认值、**并非通用约定**，请在 **设置** 中改成自己的目录后再开始归档。
 > 📝 运行日志、`error.log` 与崩溃快照写入可执行文件同级的 `logs/` 目录，反馈问题时请一并附上。
 
 ---

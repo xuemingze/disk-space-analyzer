@@ -19,6 +19,7 @@
 | Source code (`.zip` / `.tar.gz`) | — | Build from source: `pip install -r requirements.txt && python main.py` | [Releases page](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **Windows 10 / 11 (64-bit).** No Python installation required for the prebuilt binaries.
+> ⚙️ **Default archive / migration paths** are `D:\归档备份` and `D:\软件与文件迁移` (falling back to `%USERPROFILE%\DiskAnalyzerArchive` / `%USERPROFILE%\MigratedApps` when no `D:` drive exists). These are developer-environment defaults, **not** a convention — change them in **Settings** before you start archiving.
 > 📝 Runtime logs, `error.log` and crash snapshots are written to `logs/` next to the executable — please attach them when reporting an issue.
 
 ---
