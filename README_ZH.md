@@ -14,10 +14,8 @@
 
 | 文件 | 大小 | 适用场景 | 下载 |
 | --- | ---: | --- | :---: |
-| 文件 | 大小 | 适用场景 | 下载 |
-| --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.3.0-win64-portable.zip`** | ~80 MB | **推荐**。目录版便携包，解压到任意位置后双击 `DiskSpaceAnalyzer.exe` 即可，**无需安装 Python**，启动快。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.3.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.3.0-win64.exe` | ~80 MB | 单文件版，双击直接运行、无需解压；首次启动稍慢（自解压属正常现象）。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.3.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.4.0-win64-portable.zip`** | ~80 MB | **推荐**。目录版便携包，解压到任意位置后双击 `DiskSpaceAnalyzer.exe` 即可，**无需安装 Python**，启动快。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.4.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.4.0-win64.exe` | ~80 MB | 单文件版，双击直接运行、无需解压；首次启动稍慢（自解压属正常现象）。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.4.0-win64.exe) |
 | 源码包（`.zip` / `.tar.gz`） | — | 源码运行：`pip install -r requirements.txt && python main.py` | [Releases 页面](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **系统要求：Windows 10 / 11 64 位。** 预编译版本无需安装 Python。
@@ -34,7 +32,19 @@
 ---
 
 ## 📢 版本更新说明
-### v1.3.0 最新特性（AI 智能整理与目录级原子保全重大升级）
+### v1.4.0 最新特性（三大整理核心原则架构贯通与全场景资产枚举重构）
+- **三大整理核心原则全面贯通**：
+  - **原则一：防御性递归原则 (Defensive Recursion Principle)**：扫描栈遍历到原子狭义集体即源头剪枝汇总封包，严禁碎片文件与运行时依赖泄露入栈；全生命周期（轻量探测、集体深度指纹哈希、聚合分析、UI 表格呈现、归档与释放）作为独立资产单元参与。
+  - **原则二：泛式大抽屉与狭义实体拓扑法则 (Broad vs. Narrow Topology Law)**：父子语义落差优先裁决，大抽屉（`MovedApps`, `backups`, `财务`, `Live2D`, `多媒体` 等）向下强行赋权上位语义；解禁非系统盘一级独立软件（如 `D:\Clash`, `D:\Everything`），纠偏备份目录下的快照反客为主识别为代码工程的问题。
+  - **原则三：同源同宿——源路径同构保全在全链条的贯通 (Source Umbrella Consistency)**：全链条推荐子路径保持源泛目录命名结构同构映射；备份大抽屉下完整归档压缩包（如 `.tar.gz`）严禁误标为“冗余归档包”，全方位保全用户备份资产。
+- **主控扫描全生命周期资产枚举体系全面重构**：
+  - 彻底消除零散碎文件枚举模式，四大表格（可释放文件明细、全局明细、Top 100 超大文件、全局景深）全面改造为原子实体集体与独立资产单元主导；
+  - Top 100 设立严格的 **>300MB 门槛**，彻底告别琐碎杂质文件。
+- **报告与呈现升级**：
+  - 增强 AI 与降级报告容错防御机制；超大资产列表自动挂接外显软件身份铭牌（如 `Application (Microsoft Edge)`、`7 (PowerShell 7)`），告别无意义目录名。
+- **测试覆盖率跃升**：全量单元测试扩充至 35 项，100% 通过。
+
+### v1.3.0 历史特性（AI 智能整理与目录级原子保全升级）
 - **防御式文件夹递归与源头剪枝 (Pruning)**：扫描探测到绿色软件、开发工程或独立工具链时，立即汇总文件数与体积并直接封包剪枝，**严禁将成千上万碎文件推入扫描栈**；扫描速度提升 100 倍（上千文件 0.15 秒完成），彻底消除 `_internal` 等运行时依赖泄露与碎文件拆散问题。
 - **外显软件身份铭牌 (Software Identity Card)**：提取主程序 PE 属性（ProductName、FileDescription）与工程清单（`package.json`、`pom.xml`、`Cargo.toml` 等）组装铭牌卡片提交大模型，摒弃内部无序碎文件噪音，大模型 Token 降耗 90% 以上。
 - **广义与狭义父子语义拓扑佐证机制**：

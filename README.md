@@ -14,8 +14,8 @@
 
 | File | Size | Best for | Download |
 | --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.3.0-win64-portable.zip`** | ~80 MB | **Recommended.** Portable folder build — unzip anywhere and run `DiskSpaceAnalyzer.exe`. Fast startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.3.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.3.0-win64.exe` | ~80 MB | Single-file build — double-click to run, nothing to unzip. First launch is slower (self-extraction). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.3.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.4.0-win64-portable.zip`** | ~80 MB | **Recommended.** Portable folder build — unzip anywhere and run `DiskSpaceAnalyzer.exe`. Fast startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.4.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.4.0-win64.exe` | ~80 MB | Single-file build — double-click to run, nothing to unzip. First launch is slower (self-extraction). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.4.0-win64.exe) |
 | Source code (`.zip` / `.tar.gz`) | — | Build from source: `pip install -r requirements.txt && python main.py` | [Releases page](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **Windows 10 / 11 (64-bit).** No Python installation required for the prebuilt binaries.
