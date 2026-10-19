@@ -1487,6 +1487,102 @@ def test_scan_enumeration_overhaul_and_collective_asset_sync(tmp_path):
     assert "`7` 项 (含 `2` 个原子实体集体, `5` 个独立单项资产，底层聚合 `25` 个物理碎片文件)" in report
 
 
+def test_three_core_principles_and_broad_narrow_topology(tmp_path):
+    """
+    验证三大整理核心原则的全局贯通：
+    1. 防御性递归原则 (Defensive Recursion Principle)：
+       原子狭义集体在源头完成剪枝封包，严禁零散碎文件泄露入栈。
+    2. 核心泛型机制：泛式大抽屉与狭义实体拓扑法则 (Generic Broad Umbrella vs. Narrow Entity Topology Law)：
+       父子语义落差优先裁决，大抽屉向下强行赋权上位语义，解禁非系统盘一级独立软件。
+    3. 同源同宿——源路径同构保全在全链条的贯通 (Source Umbrella Consistency)：
+       同源同宿映射保全，备份大抽屉下的完整归档包严禁误判为冗余。
+    """
+    from app.core.app_detector import AppDetector
+    from app.utils.file_helper import get_heuristic_redundant_tag
+
+    # --- 验证原则 2: 泛式大抽屉本身放行，子项向下赋权 ---
+    # 模拟 MovedApps (应用大抽屉)
+    moved_apps = tmp_path / "MovedApps"
+    moved_apps.mkdir()
+    # 大抽屉自身必须返回 None，放行扫描深入遍历
+    assert AppDetector.detect_directory_collective(moved_apps) is None
+
+    # 大抽屉下属具体子应用 (如 edge, my_tool)，无论有无 exe 均强制赋权为独立软件集体
+    edge_dir = moved_apps / "edge"
+    edge_dir.mkdir()
+    (edge_dir / "edge.dll").write_text("dummy", encoding="utf-8")
+    (edge_dir / "resources.pak").write_text("pak", encoding="utf-8")
+    edge_coll = AppDetector.detect_directory_collective(edge_dir)
+    assert edge_coll is not None
+    assert edge_coll["collective_type"] == "独立软件集体"
+    assert edge_coll["suggested_category"] == "软件安装与镜像 (Apps & Installers)"
+    assert edge_coll["recommended_subpath"] == "应用软件/edge"
+
+    # 模拟 backups (备份大抽屉)
+    backups_dir = tmp_path / "backups"
+    backups_dir.mkdir()
+    assert AppDetector.detect_directory_collective(backups_dir) is None
+
+    # 备份大抽屉下属快照/备份目录，内部纵使包含 package.json 等代码清单，也绝不反客为主
+    snapshot_dir = backups_dir / "snapshot_20261019_010203"
+    snapshot_dir.mkdir()
+    (snapshot_dir / "package.json").write_text('{"name": "code_manifest"}', encoding="utf-8")
+    (snapshot_dir / "index.js").write_text("console.log()", encoding="utf-8")
+    snap_coll = AppDetector.detect_directory_collective(snapshot_dir)
+    assert snap_coll is not None
+    assert snap_coll["collective_type"] == "历史快照集体"
+    assert snap_coll["suggested_category"] == "归档包与系统镜像 (Archives & Images)"
+    assert snap_coll["recommended_subpath"] == "归档备份/snapshot_20261019_010203"
+
+    # --- 验证原则 3: 同源同宿保全与备份免误判 ---
+    # 备份大抽屉下的完整归档压缩包，绝对不应被标记为冗余归档包
+    backup_tar = backups_dir / "lobsterai-backup-20261018.tar.gz"
+    backup_tar.write_bytes(b"tar gz archive content")
+    redundant_tag = get_heuristic_redundant_tag(str(backup_tar), backup_tar.name)
+    assert redundant_tag is None
+
+    # 非备份目录下的普通解压镜像仍按常规规则判断
+    temp_dir = tmp_path / "downloads"
+    temp_dir.mkdir()
+    zip_archive = temp_dir / "test_app.zip"
+    zip_archive.write_bytes(b"dummy")
+    unzipped_dir = temp_dir / "test_app"
+    unzipped_dir.mkdir()
+    # 此时存在同名解压目录，因此识别为已解压冗余
+    redundant_info = get_heuristic_redundant_tag(str(zip_archive), zip_archive.name)
+    assert redundant_info is not None
+    assert redundant_info[0] == "已解压冗余归档包"
+
+    # --- 验证原则 1: 防御性递归源头剪枝在 Scanner 中的贯通 ---
+    # 扫描 backups 目录：
+    # snapshot 目录内部包含 2 个文件，但在扫描时必须在源头被剪枝封包为 1 个独立资产单元，绝不逐层展开内部散装文件
+    from app.core.scanner import DirectoryScanTask
+
+    task_pruned = DirectoryScanTask(
+        target_paths=[str(backups_dir)],
+        skip_system_protected=False,
+        enable_duplicate_detection=False,
+        prune_collectives=True
+    )
+    scan_res = {}
+    task_pruned.finished_ok.connect(lambda r: scan_res.update(r))
+    task_pruned.run()
+
+    file_records = scan_res["all_scanned_files"]
+    paths = [r["path"] for r in file_records]
+
+    # 验证 snapshot 作为一个集体资产单元出现
+    assert str(snapshot_dir) in paths
+    # 内部文件 package.json 和 index.js 严禁泄漏入栈
+    assert str(snapshot_dir / "package.json") not in paths
+    assert str(snapshot_dir / "index.js") not in paths
+    # 验证 backup_tar 作为独立核心资产被保全
+    assert str(backup_tar) in paths
+    # 总资产项严格为 2 项（快照集体 + 归档包），0 散装碎文件泄露！
+    assert len(file_records) == 2
+
+
+
 
 
 

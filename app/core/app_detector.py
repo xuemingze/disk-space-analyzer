@@ -252,9 +252,9 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "description": "开发工程、代码库与工作区容器"
     },
     "app": {
-        "keywords": {"软件", "应用", "工具", "程序", "客户端", "绿色软件", "便携软件", "apps", "software", "tools", "utilities", "applications", "programs"},
+        "keywords": {"软件", "应用", "工具", "程序", "客户端", "绿色软件", "便携软件", "apps", "software", "tools", "utilities", "applications", "programs", "movedapps", "softwares", "myapps", "portable", "app", "tool"},
         "suggested_category": "软件安装与镜像 (Apps & Installers)",
-        "subpath_prefix": "应用工具",
+        "subpath_prefix": "应用软件",
         "description": "独立应用、安装程序与绿色工具包"
     },
     "media": {
@@ -276,7 +276,7 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "description": "独立游戏、单机游戏与游戏本体资产"
     },
     "finance": {
-        "keywords": {"财务", "合同", "商务", "订单", "薪酬", "工资", "税务", "finance", "contracts", "invoices", "bills", "accounting"},
+        "keywords": {"财务", "合同", "商务", "订单", "薪酬", "工资", "税务", "经控", "发票", "报销", "账单", "送货单", "对账单", "finance", "contracts", "invoices", "bills", "accounting"},
         "suggested_category": "文档与电子书 (Documents & Books)",
         "subpath_prefix": "财务商务",
         "description": "商务合同、财务报表、发票凭证与税务单据"
@@ -288,8 +288,8 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "description": "学术论文、知识文档、学习课件与业务报告"
     },
     "backup": {
-        "keywords": {"备份", "归档", "历史", "快照", "backup", "backups", "archive", "archives", "snapshots"},
-        "suggested_category": "文档与电子书 (Documents & Books)",
+        "keywords": {"备份", "归档", "历史", "快照", "backup", "backups", "archive", "archives", "snapshots", "snapshot", "bak"},
+        "suggested_category": "归档包与系统镜像 (Archives & Images)",
         "subpath_prefix": "归档备份",
         "description": "历史备份包、系统快照与归档数据"
     }
@@ -342,8 +342,8 @@ class AppDetector:
         # 1. 命中特定实体后缀（项目、工程、系统、平台、设计、查重、方案等）
         if NARROW_ENTITY_SUFFIX_PATTERN.match(name):
             return True
-        # 2. 如果父级是已确认的广义容器，且子级名称具有具体命名长度
-        if parent_broad_key and len(name) >= 3:
+        # 2. 如果父级是已确认的广义容器，且子级名称具有实体命名长度
+        if parent_broad_key and len(name) >= 2:
             return True
         return False
 
@@ -361,19 +361,32 @@ class AppDetector:
         if not p.is_dir():
             return None
 
-        # 保护系统核心与常用大容器根目录，避免误把 C:\ 或 Downloads 当成单个软件
+        # 0. 驱动器盘符根目录保护 (如 C:\, D:\)，绝不可作为单个软件/实体
+        if len(p.parts) <= 1:
+            return None
+
+        # 0.1 保护系统核心受保护路径
         if is_system_critical_path(str(p)):
             return None
 
         dname = p.name
         dname_lower = dname.lower()
-        if dname_lower in {
+
+        # 0.2 系统核心保留大容器与已知顶层系统目录黑名单
+        SYSTEM_CONTAINER_NAMES = {
             "downloads", "desktop", "documents", "user", "users", "administrator",
-            "program files", "program files (x86)", "appdata", "local", "roaming"
-        } or len(p.parts) <= 2:
+            "program files", "program files (x86)", "appdata", "local", "roaming",
+            "$recycle.bin", "system volume information", "windows", "perflogs",
+            "recovery", "boot"
+        }
+        if dname_lower in SYSTEM_CONTAINER_NAMES:
             return None
 
-        # 广义分类容器（如 "项目", "多媒体", "游戏", "电影", "设计", "财务", "学习"）属于大抽屉，绝不可作为独立单个实体剪枝！
+        # 若在 C 盘系统盘的一级根目录下 (如 C:\ProgramData)，保护不被误识别为单个实体
+        if len(p.parts) == 2 and p.parts[0].lower().startswith("c:"):
+            return None
+
+        # 0.3 广义分类容器（如 "项目", "多媒体", "游戏", "电影", "设计", "财务", "学习", "backups", "MovedApps"）属于大抽屉，绝不可作为独立单个实体剪枝！
         if cls.match_broad_container(dname):
             return None
 
@@ -501,8 +514,181 @@ class AppDetector:
                 "require_confirmation": True
             }
 
-        # 2. 检查开发工程项目清单 (Project Manifests)
-        # 2.1 Node.js / 前端项目 (package.json)
+        # 2. 核心泛型机制：父子语义广义-狭义落差拓扑佐证机制 (Semantic Granularity Hierarchy Corroboration)
+        # 最高仲裁法则：若父级或上层属于明确的广义分类大抽屉 (如 app/MovedApps, backup/backups, finance/财务/经控, design/Live2D)：
+        # 当前狭义业务实体必须优先继承其父级大类的上位语义！
+        # 严禁将 backups 下的历史快照因包含 requirements.txt 误判为活跃开发工程；
+        # 严禁将 MovedApps 下的应用软件因缺少主目录 exe 散落为碎片文件！
+        try:
+            parent_name = p.parent.name
+            parent_broad = cls.match_broad_container(parent_name)
+            # 若直接父级是版本/包装目录（如 soft-platform_v1.0），向上回溯一级寻找广义祖先
+            if not parent_broad and len(p.parents) >= 2:
+                grand_name = p.parents[1].name
+                parent_broad = cls.match_broad_container(grand_name)
+                if parent_broad:
+                    parent_name = grand_name
+
+            if parent_broad and cls.is_narrow_entity(dname, parent_broad[0]):
+                broad_key, broad_info = parent_broad
+                clean_name = sanitize_subpath(dname)
+                prefix = broad_info.get("subpath_prefix", parent_name)
+
+                # 2.1 归档与备份大抽屉 (backups, 归档备份, 历史备份) 下的实体
+                if broad_key == "backup":
+                    return {
+                        "is_collective": True,
+                        "collective_type": "历史快照集体",
+                        "software_name": f"{dname} (历史快照)",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": f"Snapshot Backup ({dname})",
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义归档容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为归档备份容器，当前目录 [{dname}] 判定为历史快照实体，整盘原子保全",
+                        "confidence": 0.98,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+
+                # 2.2 应用软件与工具大抽屉 (MovedApps, Apps, Tools, 软件, 工具) 下的实体
+                if broad_key == "app":
+                    return {
+                        "is_collective": True,
+                        "collective_type": "独立软件集体",
+                        "software_name": f"{dname} (应用软件)",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": f"Application ({dname})",
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义应用容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为应用软件容器，当前目录 [{dname}] 判定为独立应用实体，整盘原子保全",
+                        "confidence": 0.98,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+
+                # 2.3 财务商务大抽屉 (财务, 经控, 发票, 合同) 下的实体
+                if broad_key == "finance":
+                    return {
+                        "is_collective": True,
+                        "collective_type": "业务账套集体",
+                        "software_name": f"{dname} (财务商务)",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": dname,
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义财务容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为财务经控容器，当前目录 [{dname}] 判定为业务账套不可拆分集体，整盘原子保全",
+                        "confidence": 0.98,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+
+                # 2.4 图像设计与素材大抽屉 (设计, 素材, Live2D) 下的实体
+                if broad_key == "design":
+                    return {
+                        "is_collective": True,
+                        "collective_type": "业务实体集体",
+                        "software_name": f"{dname} ({broad_info['subpath_prefix']})",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": dname,
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义设计容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为设计资产容器，当前目录 [{dname}] 判定为狭义业务实体，整盘原子保全",
+                        "confidence": 0.95,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+
+                # 2.5 影视与多媒体大抽屉 (多媒体, 视频, 电影) 下的实体
+                if broad_key == "media":
+                    return {
+                        "is_collective": True,
+                        "collective_type": "业务实体集体",
+                        "software_name": f"{dname} ({broad_info['subpath_prefix']})",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": dname,
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义多媒体容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为影音媒体容器，当前目录 [{dname}] 判定为狭义业务实体，整盘原子保全",
+                        "confidence": 0.95,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+                # 2.6 知识文档大抽屉 (文档, 资料, 学习, 教程) 下的实体
+                if broad_key == "docs":
+                    return {
+                        "is_collective": True,
+                        "collective_type": "业务实体集体",
+                        "software_name": f"{dname} ({broad_info['subpath_prefix']})",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": dname,
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义文档容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为知识文档容器，当前目录 [{dname}] 判定为狭义业务实体，整盘原子保全",
+                        "confidence": 0.95,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+
+                # 2.7 游戏资产大抽屉 (游戏, 单机游戏, 网络游戏) 下的实体
+                if broad_key == "game":
+                    return {
+                        "is_collective": True,
+                        "collective_type": "业务实体集体",
+                        "software_name": f"{dname} ({broad_info['subpath_prefix']})",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": dname,
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义游戏容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为游戏资产容器，当前目录 [{dname}] 判定为狭义业务实体，整盘原子保全",
+                        "confidence": 0.95,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+
+                # 2.8 开发工程大抽屉 (项目, 工程, workspace, repos) 下具备狭义业务实体后缀
+                if broad_key == "project" and NARROW_ENTITY_SUFFIX_PATTERN.match(dname):
+                    return {
+                        "is_collective": True,
+                        "collective_type": "业务实体集体",
+                        "software_name": f"{dname} ({broad_info['subpath_prefix']})",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": dname,
+                        "manifest_project_name": dname,
+                        "signature_type": f"广义工程容器佐证 ({parent_name} -> {dname})",
+                        "suggested_category": broad_info["suggested_category"],
+                        "recommended_subpath": f"{prefix}/{clean_name}",
+                        "reason": f"父级 [{parent_name}] 判定为工程项目大抽屉，当前目录 [{dname}] 判定为狭义业务实体，整盘原子保全",
+                        "confidence": 0.95,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
+        except Exception:
+            pass
+
+        # 3. 检查开发工程项目清单 (Project Manifests)
+        # 3.1 Node.js / 前端项目 (package.json)
         pkg_json_path = p / "package.json"
         if pkg_json_path.exists() and pkg_json_path.is_file():
             proj_name = dname
@@ -740,42 +926,8 @@ class AppDetector:
                     "require_confirmation": True
                 }
 
-        # 4. 父子语义广义-狭义落差佐证机制 (Semantic Granularity Hierarchy Corroboration)
-        # 若父级目录是广义分类大抽屉（如 "项目"、"多媒体"、"电影"、"游戏"、"设计"、"财务"、"学习"），
-        # 且当前目录属于该大类下的狭义业务实体（如 "***项目"、"***设计"、"***查重"、"***电影"、或具有具体业务命名的文件夹）：
-        # 判定当前目录为“业务实体集体（Business Entity Collective）”，整盘原子保全平移！
+        # 5. 补充兜底：若目录名自身直接包含明确业务单据特征（发票、经控、送货单、账单、明细、账套等）
         try:
-            parent_name = p.parent.name
-            parent_broad = cls.match_broad_container(parent_name)
-            # 若直接父级是版本/包装目录（如 soft-platform_v1.0），向上回溯一级寻找广义祖先
-            if not parent_broad and len(p.parents) >= 2:
-                grand_name = p.parents[1].name
-                parent_broad = cls.match_broad_container(grand_name)
-                if parent_broad:
-                    parent_name = grand_name
-
-            if parent_broad and cls.is_narrow_entity(dname, parent_broad[0]):
-                broad_key, broad_info = parent_broad
-                clean_name = sanitize_subpath(dname)
-                c_type_label = "业务账套集体" if broad_key == "finance" else "业务实体集体"
-                return {
-                    "is_collective": True,
-                    "collective_type": c_type_label,
-                    "software_name": f"{dname} ({broad_info['subpath_prefix']})",
-                    "directory_name": dname,
-                    "primary_executable": "",
-                    "product_title": dname,
-                    "manifest_project_name": dname,
-                    "signature_type": f"语义层级佐证 ({parent_name} -> {dname})",
-                    "suggested_category": broad_info["suggested_category"],
-                    "recommended_subpath": f"{broad_info['subpath_prefix']}/{clean_name}",
-                    "reason": f"父级 [{parent_name}] 判定为广义类目容器，当前目录 [{dname}] 判定为狭义业务实体，整盘原子保全",
-                    "confidence": 0.95,
-                    "risk_level": "需人工确认",
-                    "require_confirmation": True
-                }
-
-            # 补充兜底：若目录名自身直接包含明确业务单据特征（发票、经控、送货单、账单、明细、账套等）
             # 必须排除软件包装目录（如 发票明细软件-v2.3.4）与含有可执行程序的目录
             if any(k in dname for k in ["发票", "经控", "送货单", "对账单", "报销单", "明细", "账套", "对账", "流水", "清单"]):
                 if not re.search(r"(软件|app|tool|v\d+|_v\d+)", dname, re.I) and not exe_files:

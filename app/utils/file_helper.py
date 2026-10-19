@@ -151,8 +151,13 @@ def get_heuristic_redundant_tag(file_path: str, file_name: Optional[str] = None,
 
     # 3. 冗余归档包与已解压镜像
     if ext in {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"}:
-        stem = Path(name).stem.lower()
         parent_p = Path(file_path).parent
+        parent_low = parent_p.name.lower()
+        # 原则三：同源同宿与归档资产保全。若已处于正规的备份/归档大抽屉目录下，属于用户主动存放的核心备份资产，严禁标记为“冗余”！
+        if any(b in parent_low for b in ["backup", "backups", "归档", "备份", "archive", "archives", "snapshot", "snapshots"]):
+            return None
+
+        stem = Path(name).stem.lower()
         # 检查同目录下是否存在同名解压目录
         try:
             for sibling in parent_p.iterdir():
