@@ -1001,7 +1001,11 @@ class AIService:
 
         cat_stats = summary.get("category_stats", {})
         for cat, stat in cat_stats.items():
-            lines.append(f"| **{cat}** | {format_size(stat['bytes'])} | {stat['percent']}% | {stat['count']:,} |")
+            if isinstance(stat, dict):
+                b = stat.get("bytes", 0)
+                p = stat.get("percent", round((b / total_b * 100), 1) if total_b > 0 else 0)
+                c = stat.get("count", stat.get("files", 0))
+                lines.append(f"| **{cat}** | {format_size(b)} | {p}% | {c:,} |")
 
         lines.extend([
             "",
@@ -1017,7 +1021,13 @@ class AIService:
                 is_c = tf.get("is_directory_collective", False)
                 morphology = "📦 原子实体集体" if is_c else "📄 独立单项"
                 fc = f"{tf.get('file_count', 1):,} 个" if is_c else "1 个"
-                lines.append(f"| #{idx} | `{tf['name']}` | {morphology} | {format_size(tf['size'])} | {fc} | `{tf['path']}` |")
+                display_name = tf['name']
+                if is_c:
+                    c_info = tf.get("collective_info") or {}
+                    sw_name = c_info.get("software_name")
+                    if sw_name and sw_name != display_name:
+                        display_name = f"{display_name} ({sw_name})"
+                lines.append(f"| #{idx} | `{display_name}` | {morphology} | {format_size(tf['size'])} | {fc} | `{tf['path']}` |")
         else:
             lines.append("| - | *当前无超过 300MB 阈值的超大资产* | - | - | - | - |")
 
