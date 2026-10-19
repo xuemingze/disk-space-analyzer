@@ -38,11 +38,9 @@ EXTENSION_CATEGORIES = {
 
 # 严格保护的系统关键路径白名单（绝对不可由 AI 或用户一键推荐误删）
 PROTECTED_SYSTEM_PATHS = [
-    r"c:\windows\system32",
-    r"c:\windows\syswow64",
-    r"c:\windows\winsxs",
-    r"c:\windows\boot",
-    r"c:\windows\system",
+    r"c:\windows",
+    r"c:\programdata\microsoft\windows",
+    r"c:\program files\common files",
     r"c:\recovery",
     r"c:\system volume information",
     r"c:\boot",
@@ -89,9 +87,14 @@ def categorize_file_by_ext(file_path: Path) -> str:
 
 def is_system_critical_path(file_path: str) -> bool:
     """判断路径是否属于 Windows 关键受保护系统目录"""
-    normalized = os.path.abspath(file_path).lower()
+    if not file_path:
+        return False
+    normalized = os.path.normpath(file_path).lower()
+    # 临时目录除外
+    if r"\windows\temp" in normalized or r"\appdata\local\temp" in normalized:
+        return False
     for protected in PROTECTED_SYSTEM_PATHS:
-        if normalized.startswith(protected.lower()):
+        if normalized.startswith(protected.lower()) or protected.lower() in normalized:
             return True
     return False
 

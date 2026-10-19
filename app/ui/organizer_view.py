@@ -16,6 +16,7 @@ from app.core.task_manager import global_task_manager, TaskType, TaskStatus
 from app.ui.components.organize_dialog import OrganizePreviewDialog
 from app.ui.home_view import AIWorker
 from app.core.scanner import DirectoryScanTask
+from app.core.organize_models import OrganizeOptions, OrganizeMode
 
 
 class OrganizerView(QWidget):
@@ -79,6 +80,40 @@ class OrganizerView(QWidget):
         self.btn_manage_categories = QPushButton("📂 管理全局自定义分类...")
         self.btn_manage_categories.clicked.connect(lambda: CategoryManagerDialog(self).exec())
         pref_layout.addRow("", self.btn_manage_categories)
+
+        # 整理模式
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("综合智能整理 (综合上下文与类型)", OrganizeMode.COMPREHENSIVE.value)
+        self.mode_combo.addItem("按文件类型分类 (文档/代码/多媒体/安装包)", OrganizeMode.BY_TYPE.value)
+        self.mode_combo.addItem("按文件名前缀/项目归类", OrganizeMode.BY_PREFIX.value)
+        self.mode_combo.addItem("按时间日期层级归档 (年/月)", OrganizeMode.BY_DATE.value)
+        self.mode_combo.addItem("按应用工具链/项目工程聚合", OrganizeMode.BY_APP.value)
+        saved_mode = app_config.get("org_mode", default=OrganizeMode.COMPREHENSIVE.value)
+        idx_mode = self.mode_combo.findData(saved_mode)
+        if idx_mode >= 0:
+            self.mode_combo.setCurrentIndex(idx_mode)
+        pref_layout.addRow("整理模式:", self.mode_combo)
+
+        # 建议目录语言
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItem("中文规范命名 (推荐)", "zh")
+        self.lang_combo.addItem("英文规范命名 (English)", "en")
+        saved_lang = app_config.get("org_language", default="zh")
+        idx_lang = self.lang_combo.findData(saved_lang)
+        if idx_lang >= 0:
+            self.lang_combo.setCurrentIndex(idx_lang)
+        pref_layout.addRow("建议目录语言:", self.lang_combo)
+
+        # 自定义整理指令
+        self.custom_prompt_input = QLineEdit()
+        self.custom_prompt_input.setPlaceholderText("例如：将发票和凭据按年份归档，把代码工程单独归入 Projects")
+        self.custom_prompt_input.setText(app_config.get("org_custom_prompt", default=""))
+        pref_layout.addRow("自定义整理指令:", self.custom_prompt_input)
+
+        # 内容样本抽样感知
+        self.chk_sample_content = QCheckBox("启用文件内容安全抽样 (仅限常见纯文本前 300 字节，默认关闭)")
+        self.chk_sample_content.setChecked(app_config.get("org_enable_sampling", default=False))
+        pref_layout.addRow("内容安全抽样:", self.chk_sample_content)
         
         # 场景偏好
         self.work_personal_slider = QSlider(Qt.Horizontal)
@@ -165,6 +200,10 @@ class OrganizerView(QWidget):
         app_config.set("org_allow_execute", self.chk_execute.isChecked())
         app_config.set("org_min_conf", self.spin_conf.value())
         app_config.set("org_high_risk_policy", self.high_risk_combo.currentIndex())
+        app_config.set("org_mode", self.mode_combo.currentData() or OrganizeMode.COMPREHENSIVE.value)
+        app_config.set("org_language", self.lang_combo.currentData() or "zh")
+        app_config.set("org_custom_prompt", self.custom_prompt_input.text().strip())
+        app_config.set("org_enable_sampling", self.chk_sample_content.isChecked())
 
     def start_ai_planning(self):
         src = self.dir_input.text().strip()
@@ -180,8 +219,8 @@ class OrganizerView(QWidget):
         self.btn_run.setEnabled(False)
         self.lbl_status.setText("🔍 阶段 1: 正在递归扫描目录结构...")
 
-        # 1. Start Directory Scan
-        self.scan_task = DirectoryScanTask([src], True, False, [])
+        # 1. Start Directory Scan (启用防御式剪枝，遇到软件/工程集体立即封包并停止深入扫描碎文件)
+        self.scan_task = DirectoryScanTask([src], True, False, [], prune_collectives=True)
         self.scan_task_id = global_task_manager.create_task("目录层级扫描", TaskType.SCAN, self.scan_task).task_id
         
         # We need to map signals from QRunnable, but DirectoryScanTask is QRunnable, it communicates via EventBus or we wrap it in a QObject.
@@ -223,7 +262,32 @@ class OrganizerView(QWidget):
             "conflict_policy": "auto_rename" if self.conflict_combo.currentIndex() == 0 else ("skip" if self.conflict_combo.currentIndex() == 1 else "overwrite")
         }
 
-        self.ai_worker = AIWorker("classify", all_scanned_files, destination_root=self.dest_input.text().strip(), prefs=prefs)
+        mode_str = self.mode_combo.currentData() or OrganizeMode.COMPREHENSIVE.value
+        try:
+            mode_enum = OrganizeMode(mode_str)
+        except Exception:
+            mode_enum = OrganizeMode.COMPREHENSIVE
+
+        options = OrganizeOptions(
+            mode=mode_enum,
+            language=self.lang_combo.currentData() or "zh",
+            custom_prompt=self.custom_prompt_input.text().strip(),
+            enable_content_sampling=self.chk_sample_content.isChecked(),
+            work_ratio=self.work_personal_slider.value() / 100.0,
+            personal_ratio=(100 - self.work_personal_slider.value()) / 100.0,
+            min_confidence=self.spin_conf.value() / 100.0,
+            conflict_policy="auto_rename" if self.conflict_combo.currentIndex() == 0 else ("skip" if self.conflict_combo.currentIndex() == 1 else "overwrite"),
+            unknown_policy="manual_confirm" if self.unknown_combo.currentIndex() == 0 else ("misc" if self.unknown_combo.currentIndex() == 1 else "skip"),
+            high_risk_policy="block" if self.high_risk_combo.currentIndex() == 0 else "allow_manual"
+        )
+
+        self.ai_worker = AIWorker(
+            "classify",
+            all_scanned_files,
+            destination_root=self.dest_input.text().strip(),
+            prefs=prefs,
+            options=options
+        )
         self.ai_task_id = global_task_manager.create_task("AI 目录级归档规划", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         self.ai_worker.classify_done.connect(self.on_ai_classify_done)
         self.ai_worker.failed.connect(self.on_ai_error)

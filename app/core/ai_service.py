@@ -1,8 +1,10 @@
 import os
 import json
 import requests
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Callable
 from urllib.parse import urljoin
 from dataclasses import dataclass, field
 
@@ -10,6 +12,9 @@ from app.utils.logger import app_logger
 from app.utils.file_helper import is_system_critical_path, categorize_file_by_ext, format_size
 from app.core.app_detector import AppDetector
 from app.core.category_manager import global_category_manager
+from app.core.organize_models import (
+    OrganizeOptions, OrganizeMode, sanitize_subpath, extract_file_content_sample
+)
 
 
 
@@ -31,8 +36,19 @@ class AIResponse:
 
 class AIService:
     @classmethod
-    def _calculate_target_path(cls, cat_name: str, app_name: str, dest_root_p: Path, orig_root_p: Path, is_dir: bool) -> Path:
+    def _calculate_target_path(
+        cls, cat_name: str, app_name: str, dest_root_p: Path, orig_root_p: Path, is_dir: bool, subpath: str = ""
+    ) -> Path:
         active_cats = global_category_manager.get_active()
+        clean_sub = sanitize_subpath(subpath)
+        
+        # 若提供了推荐的细粒度子目录层级，优先在主分类下构建该层级
+        if clean_sub:
+            if is_dir:
+                return dest_root_p / cat_name / Path(clean_sub) / orig_root_p.name
+            else:
+                return dest_root_p / cat_name / Path(clean_sub)
+
         for cat in active_cats:
             if cat["name"] == cat_name:
                 template = cat.get("target_path_template", "{archive_root}/{category_name}/{app_name}")
@@ -93,6 +109,9 @@ class AIService:
         app_logger.info(f"[AI-TASK-{task_id}] {task_desc}发起 {method.upper()} 请求: {url} | Model: {model_name} | Timeout: {conn_timeout}s/{read_timeout}s")
         
         last_err = None
+        resp_status = 0
+        resp_text_sample = ""
+
         for attempt in range(max_retries + 1):
             start_time = time.time()
             try:
@@ -104,6 +123,9 @@ class AIService:
                 elapsed = time.time() - start_time
                 app_logger.info(f"[AI-TASK-{task_id}] 尝试 {attempt+1}/{max_retries+1} 耗时: {elapsed:.2f}s, HTTP 状态: {resp.status_code}")
                 
+                resp_status = resp.status_code
+                resp_text_sample = resp.text[:500]
+
                 if resp.status_code == 200:
                     resp_json = resp.json()
                     if validator:
@@ -139,8 +161,16 @@ class AIService:
                 app_logger.warning(f"[AI-TASK-{task_id}] 第 {attempt+1} 次请求失败: {last_err}，等待 {backoff} 秒后重试...")
                 time.sleep(backoff)
                 
-        app_logger.error(f"[AI-TASK-{task_id}] 最终请求失败: {last_err}")
-        return False, {"error": last_err, "task_id": task_id}
+        if resp_status == 422 and ("sensitive" in resp_text_sample.lower() or "1026" in resp_text_sample):
+            app_logger.warning(f"[AI-TASK-{task_id}] 请求触发服务商内容合规审核 (HTTP 422 涉敏): {last_err}")
+        else:
+            app_logger.error(f"[AI-TASK-{task_id}] 最终请求失败: {last_err}")
+        return False, {
+            "error": last_err,
+            "task_id": task_id,
+            "status_code": resp_status,
+            "resp_text": resp_text_sample
+        }
 
     @classmethod
     def fetch_models(cls, base_url: str, api_key: str, timeout: int = 12) -> Tuple[bool, List[str], str]:
@@ -400,19 +430,48 @@ class AIService:
         model: str,
         file_items: List[Dict[str, Any]],
         destination_root: str,
-        weights: Optional[Dict[str, Any]] = None
+        weights: Optional[Dict[str, Any]] = None,
+        options: Optional[OrganizeOptions] = None,
+        progress_callback: Optional[Callable[[str], None]] = None
     ) -> List[Dict[str, Any]]:
         """
-        基于所属 App、软件或工具链特征，按父目录/工具根目录聚合为原子处理单元，并生成归档分类规划。
-        返回的是目录/工具级聚合单元列表（每个单元内包含完整子文件树）。
+        基于所属 App、软件或工具链特征，按父目录/工具根目录聚合为原子处理单元，并生成深度精准归档分类规划。
+        特性：
+        1. 吸收 FolderFox 模式：综合整理 / 按类型 / 按文件名前缀 / 按日期 / 按应用工具链；
+        2. 支持工作/私人偏好、中英文目录命名与用户自定义 Prompt 指令；
+        3. 按稳定 group_id 映射，支持全量分批请求、Token 预算控制与 JSON Schema 校验；
+        4. 精确输出多级子目录推荐 (recommended_subpath)、理由、置信度与安全风险评级；
+        5. 可选的内容抽样感知 (默认关闭，严格隐私脱敏)。
         """
         if not file_items:
             return []
 
-        # 1. 首先通过 AppDetector 将散装文件聚合为目录/工具整体单元
-        grouped_units = AppDetector.group_files_by_parent_or_tool(file_items, destination_root)
+        # 兼容旧版 weights 字典转换为 OrganizeOptions
+        if options is None:
+            if weights:
+                mode_val = weights.get("mode", OrganizeMode.COMPREHENSIVE)
+                if isinstance(mode_val, str):
+                    try:
+                        mode_val = OrganizeMode(mode_val)
+                    except ValueError:
+                        mode_val = OrganizeMode.COMPREHENSIVE
+                options = OrganizeOptions(
+                    mode=mode_val,
+                    naming_language=weights.get("naming_language", "zh"),
+                    custom_instructions=weights.get("custom_instructions", ""),
+                    work_personal_ratio=weights.get("work_ratio", 0.6),
+                    min_confidence=weights.get("min_conf", 0.75),
+                    sample_content_enabled=weights.get("sample_content_enabled", False),
+                    conflict_policy=weights.get("conflict_policy", "auto_rename"),
+                    batch_size=weights.get("batch_size", 25)
+                )
+            else:
+                options = OrganizeOptions()
 
-        # 2. 若配置了大模型，向 LLM 提交目录组特征进行深度 App 签名甄别与分类精炼
+        # 1. 首先通过 AppDetector 将散装文件聚合为目录/工具整体单元 (带离线特征与推荐子路径)
+        grouped_units = AppDetector.group_files_by_parent_or_tool(file_items, destination_root, options=options)
+
+        # 2. 若配置了大模型，向 LLM 提交目录组特征进行深度 App 签名甄别与分类精炼 (分批处理)
         if api_key and base_url and model and grouped_units:
             normalized_url = cls._normalize_base_url(base_url)
             endpoint = normalized_url
@@ -421,52 +480,158 @@ class AIService:
                 "Authorization": f"Bearer {api_key.strip()}"
             }
 
-            # 抽取前 40 个目录单元摘要送入大模型
-            group_summaries = []
-            for g in grouped_units[:40]:
-                sample_files = [sub["name"] for sub in g["sub_items"][:6]]
-                group_summaries.append({
-                    "original_root": g["original_root"],
-                    "is_directory": g["is_directory_group"],
-                    "file_count": g["file_count"],
-                    "total_size_mb": round(g["total_size"] / (1024 * 1024), 2),
-                    "initial_detected_app": g["app_name"],
-                    "sample_files": sample_files
-                })
-
-            sys_prefs = ""
-            if weights:
-                w = weights.get("work_ratio", 0.5)
-                sys_prefs = f"用户偏好：工作相关 {int(w*100)}%，私人相关 {100-int(w*100)}%，最低接受置信度 {weights.get('min_conf', 0.8)}\n"
-            
             active_cats = global_category_manager.get_active()
             cat_list_str = "\n".join([f"- {c['name']} (描述: {c['description']})" for c in active_cats])
-            if cat_list_str:
-                sys_prefs += f"\n【必须使用的有效分类白名单】\n你必须且只能从以下列表中选择最合适的分类名称（如果都不匹配，请使用 '未分类/待人工确认'）：\n{cat_list_str}\n"
+            whitelist_prompt = f"\n【必须使用的有效分类白名单】\n你必须且只能从以下列表中选择最合适的一级分类名称（如果都不匹配，请使用 '未分类/待人工确认'）：\n{cat_list_str}\n" if cat_list_str else ""
+
+            # 模式提示语
+            mode_guidances = {
+                OrganizeMode.COMPREHENSIVE: "【整理模式 - 综合整理】：综合权衡软件App生态、业务属性、文件类型、项目前缀与时间线，推荐最优雅合理的多级归档路径。",
+                OrganizeMode.BY_TYPE: "【整理模式 - 按格式类型】：优先按文件格式大类与用途细分（例如: 文档/发票, 媒体/设计图, 代码/工程）。",
+                OrganizeMode.BY_PREFIX: "【整理模式 - 按文件名前缀】：优先识别文件名开头的项目名、批次号或主题前缀，将同一前缀聚类至对应子目录。",
+                OrganizeMode.BY_DATE: "【整理模式 - 按修改日期】：优先推荐年份/月份层级（例如: 2026/2026-03 或 2025/2025-Q4）。",
+                OrganizeMode.BY_APP: "【整理模式 - 按应用工具链】：优先保持开发工具或软件生态（如 Node.js, Python, WeChat, Docker）原子目录完整性。"
+            }
+            mode_prompt = mode_guidances.get(options.mode, mode_guidances[OrganizeMode.COMPREHENSIVE])
+
+            lang_prompt = "【目录命名语言】：所有 recommended_subpath 必须使用中文目录命名（例如: 财务/发票/2026、开发工程/前端依赖）。" if options.naming_language == "zh" else "【Naming Language】: All recommended_subpath values MUST use English folder names (e.g. Finance/Invoices/2026, DevTools/NodeDependencies)."
+
+            custom_prompt = f"【用户特定个性化规则】：\n{options.custom_instructions}\n" if options.custom_instructions else ""
+
+            sys_prefs = f"用户偏好：工作相关 {int(options.work_personal_ratio * 100)}%，私人相关 {100 - int(options.work_personal_ratio * 100)}%，最低接受置信度 {options.min_confidence}\n"
 
             system_prompt = (
-                "你是一个专业的文件系统治理与软件生态识别专家。请分析待处理的目录与文件聚合单元：\n"
+                "你是一个专业的文件系统治理与软件生态架构专家。请分析待处理的目录与文件聚合单元并制定归档分类方案。\n"
                 "【核心原则】\n"
-                "1. 必须以目录或工具链为整体单元（如 ~/npm, node_modules, ~/.cache, AppData 下具体工具），严禁拆分内部单个文件；\n"
-                "2. 优先识别所属 App、软件或工具链（如 Node.js/npm, VS Code, Python/pip, 微信, Docker 等）；\n"
-                "3. 若无法明确识别所属 App，必须归入 '未分类杂项'，置信度设低并标记 require_confirmation=true；\n"
-                "4. 包含系统级受保护或关键配置文件时，风险等级必须设为 '高风险'。\n"
-                + sys_prefs +
-                "\n请严格以 JSON 格式输出: {\"groups\": [{\"original_root\": \"原根路径\", \"app_name\": \"软件名称\", \"suggested_category\": \"归档分类\", \"rationale\": \"依据\", \"confidence\": 0.95, \"risk_level\": \"低风险/中风险/高风险\", \"require_confirmation\": false}]}"
+                "1. 【软件/工程集体完整性】：对于 unit_type 为 '软件/工程集体' 的目录单元，它是一个完整的独立软件、运行环境或代码工程，内部所有文件严禁拆分；\n"
+                "2. 【依据软件外显铭牌分类】：对软件/工程集体，必须依据其软件名 (software_name)、主程序 (primary_executable)、产品标题 (product_title) 与项目清单 (manifest_project_name) 判定其软件归属，给出宏观分类（例如：开发工具/IDE与编辑器、实用工具/媒体播放器、代码工程/前端Vue项目等）；\n"
+                "3. 【散装独立文件细分】：对于 unit_type 为 '散装独立文件' 的单文件，依据其格式类型与业务前缀给出细分归档路径；\n"
+                "4. 【具体多级子目录推荐】：除 suggested_category（一级大类）外，必须在 recommended_subpath 中给出具体的建议子目录层级（例如 '开发工具/VSCode'、'财务/发票/2026'）；\n"
+                "5. 若无法明确识别，必须归入 '未分类/待人工确认'，置信度设低于 0.6 并标记 require_confirmation=true；\n"
+                "6. 【父子语义广义-狭义认知】：若输入单元所属父目录或上下文为广义分类词（如 '项目'、'多媒体'、'设计'、'游戏'、'财务'、'学习'），其所属子目录即为该领域下的狭义独立实体（如 'xxx项目'、'xxx设计'、'xxx查重'），必须以实体为单位整盘原子平移归档，绝不可因内部散杂格式而拆散实体；\n"
+                f"{mode_prompt}\n"
+                f"{lang_prompt}\n"
+                f"{custom_prompt}"
+                f"{sys_prefs}"
+                f"{whitelist_prompt}\n"
+                "【输出格式约束】\n"
+                "请严格以 JSON 格式输出，必须且只能包含 groups 数组，且必须包含输入时给定的 stable group_id：\n"
+                "{\n"
+                '  "groups": [\n'
+                '    {\n'
+                '      "group_id": "对应输入的稳定 group_id (如 grp_0001，严禁遗漏或修改)",\n'
+                '      "app_name": "识别的软件或工具名称",\n'
+                '      "suggested_category": "归档一级分类（必须选自白名单）",\n'
+                '      "recommended_subpath": "具体多级子目录路径（若无特殊细分可留空）",\n'
+                '      "rationale": "归档与分类依据简述（限20字内）",\n'
+                '      "confidence": 0.95,\n'
+                '      "risk_level": "低风险/中风险/高风险",\n'
+                '      "require_confirmation": false\n'
+                '    }\n'
+                '  ]\n'
+                "}"
             )
 
-            payload = {
-                "model": model.strip(),
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"待分类目录聚合单元:\n{json.dumps(group_summaries, ensure_ascii=False, indent=2)}"}
-                ],
-                "temperature": 0.2
-            }
-            if "gpt" in model.lower() or "deepseek" in model.lower():
-                payload["response_format"] = {"type": "json_object"}
+            # 按 batch_size 分批提交请求，防止超出单次上下文与 Token 预算
+            dest_root_p = Path(destination_root)
+            batch_size = max(1, options.batch_size)
 
-            try:
+            def _apply_ai_prediction_to_group(g: dict, r: dict) -> None:
+                g["app_name"] = r.get("app_name", g["app_name"])
+                new_cat = r.get("suggested_category", g["suggested_category"])
+                g["suggested_category"] = new_cat
+
+                # 推荐子路径规范化清洗
+                raw_sub = r.get("recommended_subpath", g.get("recommended_subpath", ""))
+                new_sub = sanitize_subpath(raw_sub)
+                g["recommended_subpath"] = new_sub
+
+                g["rationale"] = r.get("rationale", g["rationale"])
+                conf = float(r.get("confidence", g["confidence"]))
+                g["confidence"] = conf
+                risk = r.get("risk_level", g["risk_level"])
+                g["risk_level"] = risk
+
+                req_conf = bool(r.get("require_confirmation", g["require_confirmation"]))
+                # 安全防护：若置信度低于阈值或风险较高，强制人工确认
+                if conf < options.min_confidence or risk in ["高风险", "需人工确认"]:
+                    req_conf = True
+                g["require_confirmation"] = req_conf
+                g["action"] = "归档" if not req_conf else "需确认"
+                g["source"] = "AI"
+
+                # 结合 recommended_subpath 重新计算目标路径
+                root_p = Path(g["original_root"])
+                new_target_base = cls._calculate_target_path(
+                    new_cat, r.get("app_name", g.get("app_name", "")),
+                    dest_root_p, root_p, g.get("is_directory_group", False),
+                    subpath=new_sub
+                )
+                g["target_root"] = str(new_target_base)
+
+                for sub in g["sub_items"]:
+                    if g.get("is_directory_group", False):
+                        sub["target_path"] = str(new_target_base / Path(sub["relative_path"]))
+                    else:
+                        sub["target_path"] = str(new_target_base / Path(sub["name"]))
+
+            def _mark_as_sensitive_fallback(g: dict, detail: str = "") -> None:
+                g["source"] = "本地规则(涉敏降级)"
+                orig_rat = g.get("rationale", "")
+                reason_tag = f"触发模型安全审查 (422 Sensitive: {detail})" if detail else "触发模型安全审查 (422 Sensitive)"
+                fallback_msg = f"{reason_tag}，已安全降级为本地离线启发式规则。"
+                g["rationale"] = f"{fallback_msg} 原判定依据: {orig_rat}" if orig_rat else fallback_msg
+                g["require_confirmation"] = True
+                g["action"] = "需确认"
+                if g.get("risk_level") == "低风险":
+                    g["risk_level"] = "中风险"
+                g["confidence"] = min(float(g.get("confidence", 0.5)), 0.5)
+
+            def _send_sub_batch(sub_batch: List[Dict[str, Any]], batch_label: str, depth: int = 0) -> None:
+                if not sub_batch:
+                    return
+
+                batch_summaries = []
+                for g in sub_batch:
+                    c_info = g.get("collective_info") or {}
+                    summary_item = {
+                        "group_id": g["group_id"],
+                        "total_size_mb": round(g["total_size"] / (1024 * 1024), 2),
+                        "initial_suggested_category": g["suggested_category"],
+                        "initial_subpath": g.get("recommended_subpath", ""),
+                    }
+                    if g.get("is_directory_group"):
+                        summary_item["unit_type"] = "软件/工程集体 (Directory Collective)"
+                        summary_item["directory_name"] = g["name"]
+                        summary_item["software_name"] = c_info.get("software_name") or g.get("app_name") or g["name"]
+                        if c_info.get("primary_executable"):
+                            summary_item["primary_executable"] = c_info["primary_executable"]
+                        if c_info.get("product_title"):
+                            summary_item["product_title"] = c_info["product_title"]
+                        if c_info.get("manifest_project_name"):
+                            summary_item["manifest_project_name"] = c_info["manifest_project_name"]
+                        if c_info.get("signature_type"):
+                            summary_item["signature_type"] = c_info["signature_type"]
+                    else:
+                        summary_item["unit_type"] = "散装独立文件 (Single File)"
+                        summary_item["file_name"] = g["name"]
+                        summary_item["extension"] = Path(g["name"]).suffix.lower()
+                        summary_item["initial_detected_app"] = g.get("app_name", "")
+                        if options.sample_content_enabled and g.get("content_samples"):
+                            summary_item["content_samples"] = g["content_samples"]
+                    batch_summaries.append(summary_item)
+
+                payload = {
+                    "model": model.strip(),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"待分类目录聚合单元批次 [{batch_label}] (共 {len(sub_batch)} 项):\n{json.dumps(batch_summaries, ensure_ascii=False, indent=2)}"}
+                    ],
+                    "temperature": 0.2
+                }
+                if "gpt" in model.lower() or "deepseek" in model.lower():
+                    payload["response_format"] = {"type": "json_object"}
+
                 def validator(resp_json):
                     ai_resp = cls._parse_ai_response(resp_json)
                     if ai_resp.parse_status == "MISSING_FINAL_TEXT":
@@ -478,11 +643,17 @@ class AIService:
                         return False, "未找到 JSON 内容", None
                     try:
                         parsed = json.loads(clean_str, strict=False)
+                        if not isinstance(parsed, dict) or "groups" not in parsed:
+                            return False, "缺少根键 groups", None
                         return True, "", parsed
                     except Exception as e:
                         return False, f"JSON 解析失败: {e}", None
-                
-                success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, validator=validator)
+
+                success, result = cls._execute_with_retry(
+                    "post", endpoint, {"headers": headers, "json": payload},
+                    task_desc=f"AI 分类批次 [{batch_label}]", validator=validator
+                )
+
                 if success:
                     parsed = result.get("parsed_data")
                     if parsed is None and "data" in result:
@@ -492,35 +663,89 @@ class AIService:
                             parsed = json.loads(clean_str, strict=False)
                         except Exception:
                             parsed = None
-                    if parsed and "groups" in parsed and isinstance(parsed["groups"], list):
-                        res_map = {item["original_root"]: item for item in parsed["groups"] if "original_root" in item}
-                        
-                        # 用大模型的精炼识别结果更新目录单元
-                        dest_root_p = Path(destination_root)
-                        for g in grouped_units:
-                            orig_root = g["original_root"]
-                            if orig_root in res_map:
-                                r = res_map[orig_root]
-                                g["app_name"] = r.get("app_name", g["app_name"])
-                                new_cat = r.get("suggested_category", g["suggested_category"])
-                                g["suggested_category"] = new_cat
-                                g["rationale"] = r.get("rationale", g["rationale"])
-                                g["confidence"] = float(r.get("confidence", g["confidence"]))
-                                g["risk_level"] = r.get("risk_level", g["risk_level"])
-                                g["require_confirmation"] = bool(r.get("require_confirmation", g["require_confirmation"]))
-                                g["source"] = "AI"
-                                
-                                # 更新目标根路径与子项目标路径
-                                root_p = Path(orig_root)
-                                new_target_base = cls._calculate_target_path(new_cat, r.get("app_name", g.get("app_name", "")), dest_root_p, root_p, g.get("is_directory_group", False))
-                                g["target_root"] = str(new_target_base)
 
-                                for sub in g["sub_items"]:
-                                    sub["target_path"] = str(new_target_base / Path(sub["relative_path"]))
-            except Exception as e:
-                app_logger.error(f"AI 目录聚合分类请求失败，使用内置规则引擎: {e}")
-                for g in grouped_units:
-                    g["source"] = "offline_rule"
+                    if parsed and "groups" in parsed and isinstance(parsed["groups"], list):
+                        res_map_by_id = {item["group_id"]: item for item in parsed["groups"] if "group_id" in item}
+                        res_map_by_path = {item["original_root"]: item for item in parsed["groups"] if "original_root" in item}
+
+                        for g in sub_batch:
+                            gid = g["group_id"]
+                            r = res_map_by_id.get(gid) or res_map_by_path.get(g["original_root"])
+                            if r:
+                                _apply_ai_prediction_to_group(g, r)
+                    return
+
+                # 若请求失败，检测是否属于内容安全合规拦截 (422 Sensitive / 1026 等)
+                err_str = str(result.get("error", "")).lower()
+                status_code = result.get("status_code", 0)
+                is_sensitive = (
+                    status_code == 422
+                    or "sensitive" in err_str
+                    or "1026" in err_str
+                    or "content_filter" in err_str
+                    or "safety" in err_str
+                    or "合规" in err_str
+                    or "涉敏" in err_str
+                    or "审查" in err_str
+                )
+
+                if is_sensitive:
+                    if len(sub_batch) > 1 and depth < 4:
+                        app_logger.warning(
+                            f"批次 [{batch_label}] (共 {len(sub_batch)} 项) 触发服务商安全审查 (422 Sensitive)，"
+                            f"启动二分子批次隔离重试 (层级 {depth+1})..."
+                        )
+                        mid = len(sub_batch) // 2
+                        left = sub_batch[:mid]
+                        right = sub_batch[mid:]
+                        _send_sub_batch(left, f"{batch_label}-A", depth + 1)
+                        _send_sub_batch(right, f"{batch_label}-B", depth + 1)
+                    else:
+                        for g in sub_batch:
+                            app_logger.warning(
+                                f"单元 [{g['group_id']}: {g['name']}] 触发模型内容安全拦截 (422 Sensitive)，"
+                                f"安全隔离并降级为本地离线规则"
+                            )
+                            _mark_as_sensitive_fallback(g, "input new_sensitive")
+                else:
+                    app_logger.warning(
+                        f"批次 [{batch_label}] AI 分类未成功 ({result.get('error', '未知错误')})，"
+                        f"已保留本地离线启发式规则"
+                    )
+
+            batches = [grouped_units[i:i + batch_size] for i in range(0, len(grouped_units), batch_size)]
+            total_batches = len(batches)
+
+            if progress_callback:
+                progress_callback(f"正在并发规划 {len(grouped_units)} 个集体与文件 (共 {total_batches} 批)...")
+
+            done_count = 0
+            progress_lock = threading.Lock()
+
+            def _batch_worker(b_items, b_num):
+                nonlocal done_count
+                try:
+                    _send_sub_batch(b_items, str(b_num), depth=0)
+                except Exception as e:
+                    app_logger.error(f"批次 [{b_num}] AI 处理异常: {e}")
+                finally:
+                    with progress_lock:
+                        done_count += 1
+                        if progress_callback:
+                            progress_callback(f"已完成 {done_count}/{total_batches} 批并发归类...")
+
+            max_threads = min(3, max(1, total_batches))
+            with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                futures = [
+                    executor.submit(_batch_worker, batch, idx + 1)
+                    for idx, batch in enumerate(batches)
+                ]
+                for f in as_completed(futures):
+                    try:
+                        f.result()
+                    except Exception as ex:
+                        app_logger.error(f"并发执行异常: {ex}")
+
         return grouped_units
 
     @classmethod
@@ -603,77 +828,7 @@ class AIService:
         if parsed and "recommended_items" in parsed and isinstance(parsed["recommended_items"], list):
             return parsed["recommended_items"]
         elif parsed and "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
-            # Fallback for older formats
             return [{"path": p, "risk_level": "未知", "confidence": 0.5, "reason": "格式兼容"} for p in parsed["recommended_paths"]]
-
-        return []
-
-
-        samples = candidate_files[:120]
-        summary_items = [
-            {
-                "path": item["path"],
-                "name": item["name"],
-                "size_mb": round(item["size"] / (1024 * 1024), 2),
-                "tag": item.get("tag", ""),
-                "is_duplicate_copy": item.get("is_duplicate_copy", False)
-            }
-            for item in samples
-        ]
-
-        system_prompt = (
-            "你是一个专业的操作系统磁盘存储与清理专家。请甄别以下文件路径与特征，严格排除任何操作系统关键组件、核心运行库。"
-            "仅推荐可以安全清理（如临时文件、安装包残留、日志、历史快照、多余重复副本）的文件。"
-            "请以严格的 JSON 格式输出: {\"recommended_paths\": [\"路径1\", \"路径2\"]}"
-        )
-
-        normalized_url = cls._normalize_base_url(base_url)
-        endpoint = normalized_url
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key.strip()}"
-        }
-        payload = {
-            "model": model.strip(),
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"待分析文件清单:\n{json.dumps(summary_items, ensure_ascii=False, indent=2)}"}
-            ],
-            "temperature": 0.2
-        }
-        if "gpt" in model.lower() or "deepseek" in model.lower():
-            payload["response_format"] = {"type": "json_object"}
-
-        def validator(resp_json):
-            ai_resp = cls._parse_ai_response(resp_json)
-            if ai_resp.parse_status == "MISSING_FINAL_TEXT":
-                return False, "缺少最终回复 (可能仅包含思考内容)", None
-            if ai_resp.parse_status != "SUCCESS":
-                return False, ai_resp.error_message, None
-            clean_str = cls._clean_json_response(ai_resp.final_text)
-            if not clean_str:
-                return False, "未找到 JSON 内容", None
-            try:
-                parsed = json.loads(clean_str, strict=False)
-                return True, "", parsed
-            except Exception as e:
-                return False, f"JSON 解析失败: {e}", None
-
-        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="智能推荐", validator=validator)
-        if not success:
-            app_logger.error(f"AI 冗余文件分析调用失败: {result.get('error')}")
-            return []
-            
-        parsed = result.get("parsed_data")
-        if parsed is None and "data" in result:
-            ai_resp = cls._parse_ai_response(result.get("data", {}))
-            clean_str = cls._clean_json_response(ai_resp.final_text or "")
-            try:
-                parsed = json.loads(clean_str, strict=False)
-            except Exception:
-                parsed = None
-        if parsed and "recommended_paths" in parsed and isinstance(parsed["recommended_paths"], list):
-            return parsed["recommended_paths"]
 
         return []
 

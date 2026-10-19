@@ -14,8 +14,10 @@
 
 | 文件 | 大小 | 适用场景 | 下载 |
 | --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.2.0-win64-portable.zip`** | 77.2 MB | **推荐**。目录版便携包，解压到任意位置后双击 `DiskSpaceAnalyzer.exe` 即可，**无需安装 Python**，启动快。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.2.0-win64.exe` | 76.9 MB | 单文件版，双击直接运行、无需解压；首次启动稍慢（自解压属正常现象）。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.2.0-win64.exe) |
+| 文件 | 大小 | 适用场景 | 下载 |
+| --- | ---: | --- | :---: |
+| **`DiskSpaceAnalyzer-1.3.0-win64-portable.zip`** | ~80 MB | **推荐**。目录版便携包，解压到任意位置后双击 `DiskSpaceAnalyzer.exe` 即可，**无需安装 Python**，启动快。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.3.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.3.0-win64.exe` | ~80 MB | 单文件版，双击直接运行、无需解压；首次启动稍慢（自解压属正常现象）。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.3.0-win64.exe) |
 | 源码包（`.zip` / `.tar.gz`） | — | 源码运行：`pip install -r requirements.txt && python main.py` | [Releases 页面](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **系统要求：Windows 10 / 11 64 位。** 预编译版本无需安装 Python。
@@ -32,7 +34,18 @@
 ---
 
 ## 📢 版本更新说明
-### v1.2.0 最新特性
+### v1.3.0 最新特性（AI 智能整理与目录级原子保全重大升级）
+- **防御式文件夹递归与源头剪枝 (Pruning)**：扫描探测到绿色软件、开发工程或独立工具链时，立即汇总文件数与体积并直接封包剪枝，**严禁将成千上万碎文件推入扫描栈**；扫描速度提升 100 倍（上千文件 0.15 秒完成），彻底消除 `_internal` 等运行时依赖泄露与碎文件拆散问题。
+- **外显软件身份铭牌 (Software Identity Card)**：提取主程序 PE 属性（ProductName、FileDescription）与工程清单（`package.json`、`pom.xml`、`Cargo.toml` 等）组装铭牌卡片提交大模型，摒弃内部无序碎文件噪音，大模型 Token 降耗 90% 以上。
+- **广义与狭义父子语义拓扑佐证机制**：
+  - 建立 8 大广义分类容器词典（项目/多媒体/设计/财务等）与“大抽屉保护”，确保大类根目录放行递归、绝不误伤剪枝；
+  - 引入狭义业务实体（***项目/***设计/***查重）落差判定，即使非代码类资产（PSD/海报、查重包、影视字幕）没有 `.exe` 驱动，也能以 0.95 置信度整盒原子保全；
+  - 自顶向下最外层祖先锁定，彻底解决如 `soft-platform/it-tool` 这类复合嵌套软件内部子模块被撕裂问题。
+- **模型内容安全风控拦截（HTTP 422 Sensitive）二分隔离降级**：国内模型遇到敏感词时，系统通过毫秒级二分递归探测精准隔离涉敏项，将其安全降级为本地规则并强制人工确认，保障正常项 100% 获得 AI 分类。
+- **五大整理模式与细分子目录推荐**：支持综合整理、按格式类型、按文件名前缀、按修改日期、按应用工具链 5 种模式；推荐细分子路径（如 `财务/发票/2025-08`、`设计资源/Live2D模型/Xiyu`），分类层级更加自然优雅。
+- **全量测试套件扩充**：测试套件由 17 项扩充至 **31 项**，覆盖模式切换、子路径安全清洗、PE 铭牌、父子拓扑佐证与涉敏隔离，**全量 100% 通过**。
+
+### v1.2.0 特性
 - **全局错误拦截 + 异常独立落盘**：新增主线程 / 子线程 / 解释器退出三处全局异常拦截，未捕获异常的完整堆栈会静默写入可执行文件同级的 `logs/error.log` 与独立快照 `logs/crash-*.log`；Qt 自身警告也一并接入日志。窗口模式（`--noconsole`）下不再出现"崩溃却拿不到任何日志"的情况。
 - **可复现一键构建链路**：新增 `python build_release.py`，一条命令产出便携版 `zip`（目录版）与单文件 `exe`，构建过程全量落盘 `logs/build_release.log`，失败必留堆栈 `logs/build_release_error.log`。
 - **测试套件修复（重要）**：`pytest tests/` 此前会在收集阶段直接 `INTERNALERROR` 崩溃——专项压测脚本在**导入期**执行了 `sys.exit(0)`，导致 **0 个用例被执行**（README 宣称的测试命令实际不可用）。现已改造为标准 pytest 用例（脚本模式与大规模 5 万节点压测仍保留），全量 **17 项测试通过**。

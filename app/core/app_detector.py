@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional, Set
@@ -6,6 +7,9 @@ from collections import defaultdict
 
 from app.utils.file_helper import is_system_critical_path, format_size, categorize_file_by_ext
 from app.utils.logger import app_logger
+from app.core.organize_models import (
+    OrganizeOptions, OrganizeMode, extract_file_content_sample, sanitize_subpath
+)
 
 # 已知软件、工具链及生态的特征规则库
 KNOWN_APP_PATTERNS = [
@@ -205,11 +209,528 @@ KNOWN_APP_PATTERNS = [
 ]
 
 
+def _extract_pe_version_info(exe_path: str) -> Tuple[str, str]:
+    """提取 Windows PE 可执行文件的 ProductName 和 FileDescription（外显软件铭牌信息）。"""
+    prod_name = ""
+    file_desc = ""
+    try:
+        import win32api
+        trans = win32api.GetFileVersionInfo(exe_path, "\\VarFileInfo\\Translation")
+        if trans:
+            for lang, codepage in trans:
+                str_path = f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\"
+                try:
+                    p = win32api.GetFileVersionInfo(exe_path, str_path + "ProductName")
+                    if p and not prod_name:
+                        prod_name = str(p).strip()
+                except Exception:
+                    pass
+                try:
+                    d = win32api.GetFileVersionInfo(exe_path, str_path + "FileDescription")
+                    if d and not file_desc:
+                        file_desc = str(d).strip()
+                except Exception:
+                    pass
+                if prod_name or file_desc:
+                    break
+    except Exception:
+        pass
+
+    if prod_name:
+        prod_name = re.sub(r'[^\w\s\-.\(\)]', '', prod_name).strip()
+    if file_desc:
+        file_desc = re.sub(r'[^\w\s\-.\(\)]', '', file_desc).strip()
+    return prod_name, file_desc
+
+
+# 广义分类容器特征词典（大抽屉 / 顶层分类大区）
+BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
+    "project": {
+        "keywords": {"项目", "工程", "开发", "代码", "源码", "workspace", "projects", "repos", "repositories", "code", "dev"},
+        "suggested_category": "代码项目与依赖 (Dev & Code)",
+        "subpath_prefix": "工程项目",
+        "description": "开发工程、代码库与工作区容器"
+    },
+    "app": {
+        "keywords": {"软件", "应用", "工具", "程序", "客户端", "绿色软件", "便携软件", "apps", "software", "tools", "utilities", "applications", "programs"},
+        "suggested_category": "软件安装与镜像 (Apps & Installers)",
+        "subpath_prefix": "应用工具",
+        "description": "独立应用、安装程序与绿色工具包"
+    },
+    "media": {
+        "keywords": {"多媒体", "媒体", "视频", "影视", "电影", "电视剧", "动漫", "动画", "音乐", "音频", "录音", "videos", "movies", "tv", "media", "music", "audio"},
+        "suggested_category": "音视频与多媒体 (Media & Videos)",
+        "subpath_prefix": "影音媒体",
+        "description": "影视剧集、音视频剪辑与录音素材"
+    },
+    "design": {
+        "keywords": {"设计", "素材", "图片", "图像", "照片", "壁纸", "插画", "模型", "贴图", "资产", "design", "assets", "images", "photos", "textures", "models"},
+        "suggested_category": "图像设计与素材 (Design & Assets)",
+        "subpath_prefix": "设计资产",
+        "description": "平面美术、UI设计、三维模型与视觉素材"
+    },
+    "game": {
+        "keywords": {"游戏", "单机游戏", "网络游戏", "模拟器", "手游", "端游", "games", "gaming", "game"},
+        "suggested_category": "游戏娱乐与资产 (Games & Entertainment)",
+        "subpath_prefix": "游戏项目",
+        "description": "独立游戏、单机游戏与游戏本体资产"
+    },
+    "finance": {
+        "keywords": {"财务", "账单", "发票", "报销", "合同", "商务", "订单", "薪酬", "工资", "税务", "finance", "contracts", "invoices", "bills", "accounting"},
+        "suggested_category": "文档与电子书 (Documents & Books)",
+        "subpath_prefix": "财务商务",
+        "description": "商务合同、财务报表、发票凭证与税务单据"
+    },
+    "docs": {
+        "keywords": {"文档", "资料", "文稿", "文章", "报告", "学习", "教程", "课件", "笔记", "书籍", "电子书", "论文", "学术", "docs", "documents", "books", "study", "learning"},
+        "suggested_category": "文档与电子书 (Documents & Books)",
+        "subpath_prefix": "知识文档",
+        "description": "学术论文、知识文档、学习课件与业务报告"
+    },
+    "backup": {
+        "keywords": {"备份", "归档", "历史", "快照", "backup", "backups", "archive", "archives", "snapshots"},
+        "suggested_category": "文档与电子书 (Documents & Books)",
+        "subpath_prefix": "归档备份",
+        "description": "历史备份包、系统快照与归档数据"
+    }
+}
+
+NARROW_ENTITY_SUFFIX_PATTERN = re.compile(
+    r"^(.+?)(项目|工程|系统|平台|助手|工具|客户端|设计|查重|初稿|终稿|报告|汇总|方案|复盘|模版|清单|合集|三部曲|全集|汉化版|免安装版|绿色版|特别版|完整版|正式版|v\d+.*|\d{4}.*)$",
+    re.IGNORECASE
+)
+
+
 class AppDetector:
     """
     负责智能识别文件/目录所属的 App、软件或工具链，
     并将文件集合按照父目录/工具根目录聚合为原子处理单元（Atomic Directory Groups）。
     """
+
+    @classmethod
+    def match_broad_container(cls, name: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+        """
+        判断一个目录名是否属于“广义分类容器”（如：项目、多媒体、电影、游戏、设计、财务、学习）。
+        返回: (分类标识, 分类配置字典) 或 None
+        """
+        if not name:
+            return None
+        n_clean = name.strip().lower()
+        for key, info in BROAD_CONTAINER_TAXONOMY.items():
+            if n_clean in info["keywords"]:
+                return key, info
+            for kw in info["keywords"]:
+                if len(kw) >= 2 and (n_clean == kw or n_clean.endswith(kw) or n_clean.startswith(kw)):
+                    if len(n_clean) <= len(kw) + 3:
+                        return key, info
+        return None
+
+    @classmethod
+    def is_narrow_entity(cls, name: str, parent_broad_key: Optional[str] = None) -> bool:
+        """
+        判断一个子目录是否属于“狭义业务实体”（如：***项目、***设计、***查重、具体的软件名或影视名）。
+        """
+        if not name or len(name) < 2:
+            return False
+        # 如果子目录自身也是纯广义词（如 多媒体/视频），则不是狭义实体
+        if cls.match_broad_container(name):
+            return False
+        # 1. 命中特定实体后缀（项目、工程、系统、平台、设计、查重、方案等）
+        if NARROW_ENTITY_SUFFIX_PATTERN.match(name):
+            return True
+        # 2. 如果父级是已确认的广义容器，且子级名称具有具体命名长度
+        if parent_broad_key and len(name) >= 3:
+            return True
+        return False
+
+    @classmethod
+    def detect_directory_collective(cls, dir_path: str | Path) -> Optional[Dict[str, Any]]:
+        """
+        自顶向下防御式探测：检测指定目录是否属于不可拆分的“软件/工程/工具链原子集体”。
+        若命中，返回提炼的外显身份卡片（Software Identity Card），供剪枝与高层归类使用。
+        """
+        try:
+            p = Path(dir_path).resolve()
+        except Exception:
+            return None
+
+        if not p.is_dir():
+            return None
+
+        # 保护系统核心与常用大容器根目录，避免误把 C:\ 或 Downloads 当成单个软件
+        if is_system_critical_path(str(p)):
+            return None
+
+        dname = p.name
+        dname_lower = dname.lower()
+        if dname_lower in {
+            "downloads", "desktop", "documents", "user", "users", "administrator",
+            "program files", "program files (x86)", "appdata", "local", "roaming"
+        } or len(p.parts) <= 2:
+            return None
+
+        # 广义分类容器（如 "项目", "多媒体", "游戏", "电影", "设计", "财务", "学习"）属于大抽屉，绝不可作为独立单个实体剪枝！
+        if cls.match_broad_container(dname):
+            return None
+
+        # 附属/内部私有依赖目录（如 _internal, __pycache__）绝不可作为独立集体输出，必须溯源归属至主程序父目录
+        if dname_lower in {"_internal", "internal", "__pycache__"}:
+            return None
+
+        # 1. 检测依赖生态与缓存工具链原子目录 (如 node_modules, .git, venv)
+        if dname_lower == "node_modules":
+            return {
+                "is_collective": True,
+                "collective_type": "生态工具链/依赖集体",
+                "software_name": "Node.js 依赖库 (node_modules)",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": "Node.js Package Modules",
+                "manifest_project_name": "node_modules",
+                "signature_type": "Node.js Dependencies",
+                "suggested_category": "开发工具链/node_modules",
+                "recommended_subpath": "开发依赖/node_modules",
+                "reason": "包含项目级 node_modules 第三方依赖库",
+                "confidence": 0.98,
+                "risk_level": "低风险",
+                "require_confirmation": False
+            }
+
+        if dname_lower == ".git":
+            return {
+                "is_collective": True,
+                "collective_type": "代码版本管理集体",
+                "software_name": "Git 版本仓库 (.git)",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": "Git Repository",
+                "manifest_project_name": ".git",
+                "signature_type": "Git Version Control",
+                "suggested_category": "代码版本管理/Git",
+                "recommended_subpath": "版本管理/Git",
+                "reason": "包含核心 Git 版本仓库，严禁拆分内部对象",
+                "confidence": 0.98,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
+
+        # 检查 Python 虚拟运行环境
+        if (p / "pyvenv.cfg").exists() or dname_lower in {".venv", "venv", ".virtualenvs"}:
+            return {
+                "is_collective": True,
+                "collective_type": "运行环境集体",
+                "software_name": f"Python 虚拟环境 ({dname})",
+                "directory_name": dname,
+                "primary_executable": "python.exe",
+                "product_title": "Python Virtualenv",
+                "manifest_project_name": dname,
+                "signature_type": "Python venv/pyvenv.cfg",
+                "suggested_category": "开发工具链/Python环境与缓存",
+                "recommended_subpath": f"运行环境/Python/{dname}",
+                "reason": "检测到 pyvenv.cfg 配置文件，属于独立 Python 虚拟环境",
+                "confidence": 0.96,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
+
+        # 检查匹配 KNOWN_APP_PATTERNS
+        for rule in KNOWN_APP_PATTERNS:
+            for pat in rule["patterns"]:
+                pat_clean = pat.lower().strip("\\/")
+                if pat_clean == dname_lower:
+                    return {
+                        "is_collective": True,
+                        "collective_type": "生态工具链/依赖集体",
+                        "software_name": rule["app_name"],
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": rule["app_name"],
+                        "manifest_project_name": dname,
+                        "signature_type": rule["app_name"],
+                        "suggested_category": rule["category"],
+                        "recommended_subpath": sanitize_subpath(rule["app_name"]),
+                        "reason": rule["rationale_template"],
+                        "confidence": 0.95,
+                        "risk_level": rule["default_risk"],
+                        "require_confirmation": (rule["default_risk"] != "低风险")
+                    }
+
+        # 2. 检查开发工程项目清单 (Project Manifests)
+        # 2.1 Node.js / 前端项目 (package.json)
+        pkg_json_path = p / "package.json"
+        if pkg_json_path.exists() and pkg_json_path.is_file():
+            proj_name = dname
+            desc = ""
+            framework_tag = "前端/Node"
+            try:
+                with open(pkg_json_path, "r", encoding="utf-8", errors="ignore") as f:
+                    pj = json.load(f)
+                    if isinstance(pj, dict):
+                        proj_name = pj.get("name") or proj_name
+                        desc = pj.get("description", "")
+                        deps = {**pj.get("dependencies", {}), **pj.get("devDependencies", {})}
+                        if "vue" in deps: framework_tag = "Vue 前端"
+                        elif "react" in deps or "next" in deps: framework_tag = "React 前端"
+                        elif "electron" in deps: framework_tag = "Electron 客户端"
+                        elif "express" in deps or "koa" in deps or "nest" in deps: framework_tag = "Node 后端服务"
+                        elif "vite" in deps: framework_tag = "Vite 前端"
+            except Exception:
+                pass
+            clean_proj_name = sanitize_subpath(proj_name)
+            return {
+                "is_collective": True,
+                "collective_type": "开发工程集体",
+                "software_name": f"{proj_name} ({framework_tag})",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": f"{proj_name} - {desc}" if desc else proj_name,
+                "manifest_project_name": proj_name,
+                "signature_type": f"Node.js ({framework_tag})",
+                "suggested_category": "代码项目与依赖 (Dev & Code)",
+                "recommended_subpath": f"前端工程/{clean_proj_name}",
+                "reason": f"检测到 package.json 清单文件 (工程名: {proj_name})",
+                "confidence": 0.95,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
+
+        # 2.2 Java Maven 工程 (pom.xml)
+        pom_path = p / "pom.xml"
+        if pom_path.exists() and pom_path.is_file():
+            artifact_id = dname
+            try:
+                content = pom_path.read_text(encoding="utf-8", errors="ignore")
+                m = re.search(r"<artifactId>(.*?)</artifactId>", content)
+                if m: artifact_id = m.group(1).strip()
+            except Exception:
+                pass
+            clean_art = sanitize_subpath(artifact_id)
+            return {
+                "is_collective": True,
+                "collective_type": "开发工程集体",
+                "software_name": f"{artifact_id} (Java/Maven)",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": artifact_id,
+                "manifest_project_name": artifact_id,
+                "signature_type": "Java (Maven)",
+                "suggested_category": "代码项目与依赖 (Dev & Code)",
+                "recommended_subpath": f"Java工程/{clean_art}",
+                "reason": f"检测到 pom.xml 构建配置 (构件: {artifact_id})",
+                "confidence": 0.95,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
+
+        # 2.3 Rust 工程 (Cargo.toml)
+        cargo_path = p / "Cargo.toml"
+        if cargo_path.exists() and cargo_path.is_file():
+            pkg_name = dname
+            try:
+                content = cargo_path.read_text(encoding="utf-8", errors="ignore")
+                m = re.search(r'name\s*=\s*["\']([^"\']+)["\']', content)
+                if m: pkg_name = m.group(1).strip()
+            except Exception:
+                pass
+            clean_pkg = sanitize_subpath(pkg_name)
+            return {
+                "is_collective": True,
+                "collective_type": "开发工程集体",
+                "software_name": f"{pkg_name} (Rust/Cargo)",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": pkg_name,
+                "manifest_project_name": pkg_name,
+                "signature_type": "Rust (Cargo)",
+                "suggested_category": "代码项目与依赖 (Dev & Code)",
+                "recommended_subpath": f"Rust工程/{clean_pkg}",
+                "reason": f"检测到 Cargo.toml 清单 (包名: {pkg_name})",
+                "confidence": 0.95,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
+
+        # 2.4 Go 工程 (go.mod)
+        gomod_path = p / "go.mod"
+        if gomod_path.exists() and gomod_path.is_file():
+            mod_name = dname
+            try:
+                content = gomod_path.read_text(encoding="utf-8", errors="ignore")
+                m = re.search(r'module\s+([^\s]+)', content)
+                if m: mod_name = m.group(1).strip().split("/")[-1]
+            except Exception:
+                pass
+            clean_mod = sanitize_subpath(mod_name)
+            return {
+                "is_collective": True,
+                "collective_type": "开发工程集体",
+                "software_name": f"{mod_name} (Go/Golang)",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": mod_name,
+                "manifest_project_name": mod_name,
+                "signature_type": "Go (go.mod)",
+                "suggested_category": "代码项目与依赖 (Dev & Code)",
+                "recommended_subpath": f"Go工程/{clean_mod}",
+                "reason": f"检测到 go.mod 模块配置 (模块名: {mod_name})",
+                "confidence": 0.95,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
+
+        # 2.5 Python 工程 (pyproject.toml 或 requirements.txt)
+        if (p / "pyproject.toml").exists() or (p / "requirements.txt").exists():
+            clean_py = sanitize_subpath(dname)
+            return {
+                "is_collective": True,
+                "collective_type": "开发工程集体",
+                "software_name": f"{dname} (Python 工程)",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": dname,
+                "manifest_project_name": dname,
+                "signature_type": "Python (requirements/pyproject)",
+                "suggested_category": "代码项目与依赖 (Dev & Code)",
+                "recommended_subpath": f"Python工程/{clean_py}",
+                "reason": "检测到 Python 工程依赖配置文件",
+                "confidence": 0.92,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
+
+        # 3. 检查独立绿色软件主程序与特征 (Standalone Executable / App Collectives)
+        # 兼容 PyInstaller 6+ (_internal), Nuitka, Electron, Qt, JRE, 及常见中英文伴生资源子目录
+        APP_COMPANION_DIRS = {
+            "_internal", "internal", "runtime", "app", "resources", "res",
+            "locales", "plugins", "platforms", "modules", "lib", "libs",
+            "bin", "share", "assets", "translations", "data", "database",
+            "组件", "插件", "模块", "部件", "数据", "配置", "资源"
+        }
+
+        exe_files: List[Path] = []
+        has_accompanying_dll = False
+        has_companion_folder = False
+        has_sub_dll = False
+
+        try:
+            with os.scandir(str(p)) as it:
+                for entry in it:
+                    if entry.is_file():
+                        low = entry.name.lower()
+                        if low.endswith(".exe"):
+                            exe_files.append(Path(entry.path))
+                        elif low.endswith(".dll") or low.endswith(".pyd"):
+                            has_accompanying_dll = True
+                    elif entry.is_dir():
+                        low = entry.name.lower()
+                        if low in APP_COMPANION_DIRS:
+                            has_companion_folder = True
+                        if not has_sub_dll:
+                            try:
+                                with os.scandir(entry.path) as sub_it:
+                                    for sub_e in sub_it:
+                                        if sub_e.is_file():
+                                            slow = sub_e.name.lower()
+                                            if slow.endswith(".dll") or slow.endswith(".pyd") or slow.endswith(".so"):
+                                                has_sub_dll = True
+                                                break
+                            except Exception:
+                                pass
+
+            # 若根目录没有 exe，探查 bin/ 子目录
+            if not exe_files and (p / "bin").is_dir():
+                with os.scandir(str(p / "bin")) as it_bin:
+                    for entry in it_bin:
+                        if entry.is_file() and entry.name.lower().endswith(".exe"):
+                            exe_files.append(Path(entry.path))
+                            has_companion_folder = True
+        except Exception:
+            pass
+
+        if exe_files:
+            helper_pattern = re.compile(r"^(unins\w*|uninstall|setup|install|update|crashpad\w*|elevate)\.exe$", re.I)
+            main_exes = [e for e in exe_files if not helper_pattern.match(e.name)] or exe_files
+
+            best_exe = main_exes[0]
+            for e in main_exes:
+                if e.stem.lower() in dname_lower or dname_lower in e.stem.lower():
+                    best_exe = e
+                    break
+
+            prod_title, file_desc = _extract_pe_version_info(str(best_exe))
+            sw_name = prod_title or file_desc or best_exe.stem
+
+            has_pyinstaller = (p / "_internal").is_dir() or (p / "base_library.zip").exists()
+            name_matches_dir = (best_exe.stem.lower() in dname_lower or dname_lower in best_exe.stem.lower())
+            has_lnk_or_asar = (p / f"{best_exe.stem}.lnk").exists() or (p / "electron.asar").exists()
+
+            is_app_collective = (
+                has_accompanying_dll
+                or has_companion_folder
+                or has_sub_dll
+                or has_pyinstaller
+                or len(exe_files) > 1
+                or has_lnk_or_asar
+                or name_matches_dir
+            )
+
+            if is_app_collective:
+                clean_sw = sanitize_subpath(sw_name)
+                sig = f"PyInstaller 独立应用 ({best_exe.name})" if has_pyinstaller else f"独立应用 ({best_exe.name})"
+                return {
+                    "is_collective": True,
+                    "collective_type": "独立软件集体",
+                    "software_name": sw_name,
+                    "directory_name": dname,
+                    "primary_executable": best_exe.name,
+                    "product_title": prod_title or file_desc or best_exe.name,
+                    "manifest_project_name": sw_name,
+                    "signature_type": sig,
+                    "suggested_category": "软件安装与镜像 (Apps & Installers)",
+                    "recommended_subpath": f"应用软件/{clean_sw}",
+                    "reason": f"检测到核心主程序 {best_exe.name} 及配套软件依赖/资源目录，判定为不可拆分独立软件整体",
+                    "confidence": 0.98,
+                    "risk_level": "需人工确认",
+                    "require_confirmation": True
+                }
+
+        # 4. 父子语义广义-狭义落差佐证机制 (Semantic Granularity Hierarchy Corroboration)
+        # 若父级目录是广义分类大抽屉（如 "项目"、"多媒体"、"电影"、"游戏"、"设计"、"财务"、"学习"），
+        # 且当前目录属于该大类下的狭义业务实体（如 "***项目"、"***设计"、"***查重"、"***电影"、或具有具体业务命名的文件夹）：
+        # 判定当前目录为“业务实体集体（Business Entity Collective）”，整盘原子保全平移！
+        try:
+            parent_name = p.parent.name
+            parent_broad = cls.match_broad_container(parent_name)
+            # 若直接父级是版本/包装目录（如 soft-platform_v1.0），向上回溯一级寻找广义祖先
+            if not parent_broad and len(p.parents) >= 2:
+                grand_name = p.parents[1].name
+                parent_broad = cls.match_broad_container(grand_name)
+                if parent_broad:
+                    parent_name = grand_name
+
+            if parent_broad and cls.is_narrow_entity(dname, parent_broad[0]):
+                broad_key, broad_info = parent_broad
+                clean_name = sanitize_subpath(dname)
+                return {
+                    "is_collective": True,
+                    "collective_type": "业务实体集体",
+                    "software_name": f"{dname} ({broad_info['subpath_prefix']})",
+                    "directory_name": dname,
+                    "primary_executable": "",
+                    "product_title": dname,
+                    "manifest_project_name": dname,
+                    "signature_type": f"语义层级佐证 ({parent_name} -> {dname})",
+                    "suggested_category": broad_info["suggested_category"],
+                    "recommended_subpath": f"{broad_info['subpath_prefix']}/{clean_name}",
+                    "reason": f"父级 [{parent_name}] 判定为广义类目容器，当前目录 [{dname}] 判定为狭义业务实体，整盘原子保全",
+                    "confidence": 0.95,
+                    "risk_level": "需人工确认",
+                    "require_confirmation": True
+                }
+        except Exception:
+            pass
+
+        return None
 
     @classmethod
     def detect_app_for_path(cls, path_str: str) -> Dict[str, Any]:
@@ -219,6 +740,42 @@ class AppDetector:
         """
         norm_path = os.path.normpath(path_str).lower()
         p = Path(path_str)
+
+        # 0. 优先检测系统受保护核心目录与安全敏感凭证
+        if is_system_critical_path(path_str):
+            return {
+                "app_name": "Windows 系统核心",
+                "suggested_category": "系统关键/需人工确认",
+                "reason": "系统受保护关键目录或底层核心文件",
+                "confidence": 0.20,
+                "risk_level": "高风险",
+                "require_confirmation": True,
+                "is_recognized": True
+            }
+
+        from app.core.organize_models import SENSITIVE_FILENAME_PATTERNS
+        fname_lower = p.name.lower()
+        if any(pattern.search(fname_lower) for pattern in SENSITIVE_FILENAME_PATTERNS):
+            return {
+                "app_name": "安全凭证与私钥",
+                "suggested_category": "安全凭证与私钥",
+                "reason": f"文件名 {p.name} 匹配安全凭证与敏感私钥特征",
+                "confidence": 0.30,
+                "risk_level": "高风险",
+                "require_confirmation": True,
+                "is_recognized": True
+            }
+
+        if p.suffix.lower() == ".raw" and any(k in fname_lower for k in ["dump", "memory", "segment", "hex", "bin"]):
+            return {
+                "app_name": "内存/底层二进制转储",
+                "suggested_category": "未分类/待人工确认",
+                "reason": "包含内存转储关键字与底层 raw 二进制特征",
+                "confidence": 0.35,
+                "risk_level": "需人工确认",
+                "require_confirmation": True,
+                "is_recognized": False
+            }
 
         # 1. 优先匹配已知 App 规则库
         for rule in KNOWN_APP_PATTERNS:
@@ -288,37 +845,49 @@ class AppDetector:
             pass
 
         # 3. 启发式父目录探测 (例如 Downloads, Desktop, Documents, Videos, Pictures)
-        parts_lower = [part.lower() for part in p.parts]
-        if "downloads" in parts_lower:
+        from app.utils.file_helper import EXTENSION_CATEGORIES
+        is_known_ext = any(p.suffix.lower() in ext_set for ext_set in EXTENSION_CATEGORIES.values())
+        if not is_known_ext and p.suffix:
             return {
-                "app_name": "系统下载中心",
-                "suggested_category": "个人与通用/下载暂存",
-                "reason": "位于用户个人 Downloads 目录",
-                "confidence": 0.85,
-                "risk_level": "低风险",
-                "require_confirmation": False,
-                "is_recognized": True
-            }
-        elif "desktop" in parts_lower:
-            return {
-                "app_name": "桌面快捷暂存",
-                "suggested_category": "个人与通用/桌面文件",
-                "reason": "位于用户桌面 Desktop 目录",
-                "confidence": 0.75,
-                "risk_level": "中风险",
+                "app_name": "未识别格式/待人工确认",
+                "suggested_category": "未分类/待人工确认",
+                "reason": f"未识别的文件格式 ({p.suffix})，需人工核对",
+                "confidence": 0.35,
+                "risk_level": "需人工确认",
                 "require_confirmation": True,
-                "is_recognized": True
+                "is_recognized": False
             }
-        elif "documents" in parts_lower:
-            return {
-                "app_name": "个人文档库",
-                "suggested_category": "个人与通用/文档库",
-                "reason": "位于用户 Documents 目录",
-                "confidence": 0.80,
-                "risk_level": "低风险",
-                "require_confirmation": False,
-                "is_recognized": True
-            }
+
+        parts_lower = [part.lower() for part in p.parts]
+        if "downloads" in parts_lower or "desktop" in parts_lower or "documents" in parts_lower:
+            from app.utils.file_helper import EXTENSION_CATEGORIES
+            safe_download_categories = {"视频与音频", "压缩包与镜像", "安装包与程序", "文档与办公", "图像与设计", "代码与工程"}
+            ext_category = None
+            for cat_name, ext_set in EXTENSION_CATEGORIES.items():
+                if p.suffix.lower() in ext_set:
+                    ext_category = cat_name
+                    break
+
+            if ext_category and ext_category in safe_download_categories:
+                return {
+                    "app_name": "系统下载中心" if "downloads" in parts_lower else ("桌面快捷暂存" if "desktop" in parts_lower else "个人文档库"),
+                    "suggested_category": "个人与通用/下载暂存" if "downloads" in parts_lower else ("个人与通用/桌面文件" if "desktop" in parts_lower else "个人与通用/文档库"),
+                    "reason": f"位于用户个人常用目录，格式属于 {ext_category}",
+                    "confidence": 0.85,
+                    "risk_level": "低风险",
+                    "require_confirmation": False,
+                    "is_recognized": True
+                }
+            else:
+                return {
+                    "app_name": "未识别格式/待人工确认",
+                    "suggested_category": "未分类/待人工确认",
+                    "reason": f"文件扩展名 ({p.suffix}) 无法作为常规个人文件自动确认，需人工审核",
+                    "confidence": 0.35,
+                    "risk_level": "需人工确认",
+                    "require_confirmation": True,
+                    "is_recognized": False
+                }
 
         # 4. 无法可靠识别所属 App 或工具
         return {
@@ -355,37 +924,283 @@ class AppDetector:
         return False, None
 
     @classmethod
+    def generate_heuristic_subpath(
+        cls,
+        group_key: str,
+        items: List[Dict[str, Any]],
+        app_info: Dict[str, Any],
+        is_dir_group: bool,
+        mode: OrganizeMode = OrganizeMode.COMPREHENSIVE,
+        lang: str = "zh"
+    ) -> str:
+        """
+        根据整理模式 (综合/按类型/按前缀/按日期/按应用) 与命名语言，
+        生成高质量的离线推荐多级子目录层级 (recommended_subpath)。
+        """
+        is_en = (lang.lower() == "en")
+        p = Path(group_key)
+        
+        # 1. 按修改日期模式
+        if mode == OrganizeMode.BY_DATE:
+            # 搜集时间戳
+            mtimes = []
+            for it in items:
+                m = it.get("mtime")
+                if m and isinstance(m, (int, float)) and m > 0:
+                    mtimes.append(m)
+                else:
+                    try:
+                        fpath = it.get("path") or it.get("original_path", "")
+                        if fpath and os.path.exists(fpath):
+                            mtimes.append(os.path.getmtime(fpath))
+                    except Exception:
+                        pass
+            
+            if mtimes:
+                import datetime
+                # 取中位数时间以防单个文件偏差
+                median_mtime = sorted(mtimes)[len(mtimes) // 2]
+                dt = datetime.datetime.fromtimestamp(median_mtime)
+                return f"{dt.year}/{dt.strftime('%Y-%m')}"
+            return "2026/2026-Q1" if not is_en else "2026/2026-Q1"
+
+        # 2. 按前缀模式
+        if mode == OrganizeMode.BY_PREFIX:
+            names = [it.get("name", Path(it.get("path", "")).name) for it in items if it.get("name") or it.get("path")]
+            if len(names) >= 2:
+                # 寻找最长公共前缀
+                prefix = os.path.commonprefix(names)
+                # 清洗前缀末尾的下划线、减号、点
+                prefix = re.sub(r'[\s_\-\.]+$', '', prefix).strip()
+                if len(prefix) >= 3 and not prefix.isdigit():
+                    return sanitize_subpath(prefix)
+            elif len(names) == 1 and names[0]:
+                stem = Path(names[0]).stem
+                prefix_match = re.match(r'^([a-zA-Z\u4e00-\u9fa50-9]{3,})[_\-\s]', stem)
+                if prefix_match:
+                    return sanitize_subpath(prefix_match.group(1))
+
+        # 3. 按文件类型模式
+        if mode == OrganizeMode.BY_TYPE:
+            ext_counts: Dict[str, int] = defaultdict(int)
+            for it in items:
+                fpath = it.get("path") or it.get("original_path", "")
+                ext = Path(fpath).suffix.lower()
+                if ext:
+                    ext_counts[ext] += 1
+            top_ext = max(ext_counts.items(), key=lambda x: x[1])[0] if ext_counts else ""
+            
+            # 扩展名到语义子目录映射
+            if top_ext in [".pdf", ".doc", ".docx", ".wps", ".odt"]:
+                return "Documents" if is_en else "文档资料"
+            elif top_ext in [".xls", ".xlsx", ".csv", ".et"]:
+                return "Spreadsheets" if is_en else "财务表格"
+            elif top_ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".psd"]:
+                return "Images" if is_en else "图像图片"
+            elif top_ext in [".mp4", ".mkv", ".avi", ".mov", ".flv", ".mp3", ".wav"]:
+                return "Media" if is_en else "音视频"
+            elif top_ext in [".zip", ".rar", ".7z", ".tar", ".gz"]:
+                return "Archives" if is_en else "压缩包"
+            elif top_ext in [".exe", ".msi", ".iso", ".dmg"]:
+                return "Installers" if is_en else "安装程序"
+            elif top_ext in [".py", ".js", ".ts", ".html", ".css", ".java", ".cpp", ".rs", ".go"]:
+                return "SourceCode" if is_en else "代码工程"
+
+        # 4. 按应用工具链模式
+        if mode == OrganizeMode.BY_APP:
+            app_name = app_info.get("app_name", "")
+            if app_name and "未识别" not in app_name:
+                # 简化应用名称作为子路径
+                clean_app = app_name.split("(")[0].strip().replace("/", "-")
+                return sanitize_subpath(clean_app)
+
+        # 5. 综合整理模式 (Comprehensive)
+        # 针对特定业务关键词智能细化（发票、合同、简历、日志等）
+        p_name = Path(group_key).name.lower()
+        names_text = (p_name + " " + " ".join([it.get("name", "") for it in items[:10]])).lower()
+
+        # 父子语义广义容器佐证：若所在目录或父目录为广义容器（如 财务、设计、媒体、项目），结合上下文细分
+        parent_broad = cls.match_broad_container(p.name if p.is_dir() else p.parent.name)
+        if parent_broad:
+            broad_key, broad_info = parent_broad
+            prefix = broad_info["subpath_prefix"]
+            if any(k in names_text for k in ["invoice", "发票", "receipt", "报销", "税"]):
+                return "Finance/Invoices" if is_en else f"{prefix}/发票"
+            if any(k in names_text for k in ["contract", "合同", "agreement", "协议"]):
+                return "Business/Contracts" if is_en else f"{prefix}/合同"
+            if any(k in names_text for k in ["poster", "海报", "banner", "kv", "视觉"]):
+                return "Design/Posters" if is_en else f"{prefix}/海报"
+            if any(k in names_text for k in ["icon", "图标", "logo"]):
+                return "Design/Icons" if is_en else f"{prefix}/图标"
+            if any(k in names_text for k in ["paper", "论文", "查重"]):
+                return "Docs/Thesis" if is_en else f"{prefix}/论文查重"
+
+        if any(k in names_text for k in ["invoice", "发票", "receipt", "报销", "税"]):
+            return "Finance/Invoices" if is_en else "财务/发票"
+        if any(k in names_text for k in ["contract", "合同", "agreement", "协议"]):
+            return "Business/Contracts" if is_en else "商务/合同"
+        if any(k in names_text for k in ["resume", "简历", "cv"]):
+            return "HR/Resumes" if is_en else "人事/简历"
+        if any(k in names_text for k in ["report", "汇报", "总结", "方案", "规划", "prd", "手册", "指南", "纪要"]):
+            return "Office/Reports" if is_en else "办公/方案汇报"
+        if any(k in names_text for k in ["screenshot", "截图", "snip"]):
+            return "Screenshots" if is_en else "屏幕截图"
+        if any(k in names_text for k in ["cache", "缓存", "dump", "temp", "临时", "scratch", "autosave"]):
+            return "Caches/Temp" if is_en else "缓存与临时"
+        if any(k in names_text for k in ["log", "日志", "crash", "trace"]):
+            return "Logs" if is_en else "运行日志"
+        if any(k in names_text for k in ["secret", "credential", "id_rsa", ".env", "token", "password", "key", "pem", "kdbx"]):
+            return "Security/Credentials" if is_en else "安全凭证/密钥"
+        if any(k in names_text for k in ["system32", "kernel32", "syswow64", "bootmgfw", "ntdll", "regedit", "cmd.exe", "hosts"]):
+            return "System/Components" if is_en else "系统核心组件"
+
+        # 若是已识别的应用工具链目录，给出应用级层级
+        app_name = app_info.get("app_name", "")
+        if app_name and "未识别" not in app_name:
+            clean_app = app_name.split("(")[0].strip().replace("/", "-")
+            return sanitize_subpath(clean_app)
+
+        # 结合文件扩展名进行格式语义子目录划分 (兜底智能推断)
+        ext_counts: Dict[str, int] = defaultdict(int)
+        for it in items:
+            fpath = it.get("path") or it.get("original_path", "")
+            ext = Path(fpath).suffix.lower()
+            if ext:
+                ext_counts[ext] += 1
+        top_ext = max(ext_counts.items(), key=lambda x: x[1])[0] if ext_counts else ""
+
+        if top_ext in [".pdf", ".doc", ".docx", ".wps", ".odt", ".txt", ".md"]:
+            return "Documents" if is_en else "文档资料"
+        elif top_ext in [".xls", ".xlsx", ".csv", ".et"]:
+            return "Spreadsheets" if is_en else "财务表格"
+        elif top_ext in [".ppt", ".pptx", ".dps"]:
+            return "Presentations" if is_en else "演示汇报"
+        elif top_ext in [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".psd", ".ai", ".cr2", ".arw"]:
+            return "Media/Images" if is_en else "媒体/图像设计"
+        elif top_ext in [".mp4", ".mkv", ".avi", ".mov", ".flv"]:
+            return "Media/Videos" if is_en else "媒体/视频素材"
+        elif top_ext in [".mp3", ".wav", ".flac", ".m4a"]:
+            return "Media/Audio" if is_en else "媒体/音频录音"
+        elif top_ext in [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"]:
+            return "Archives" if is_en else "归档压缩包"
+        elif top_ext in [".exe", ".msi", ".dmg", ".pkg"]:
+            return "Installers" if is_en else "安装程序"
+        elif top_ext in [".iso", ".img"]:
+            return "OS_Images" if is_en else "系统镜像"
+        elif top_ext in [".py", ".js", ".ts", ".html", ".css", ".java", ".cpp", ".rs", ".go"]:
+            return "SourceCode" if is_en else "代码工程"
+        elif top_ext in [".log", ".tmp", ".dmp", ".dump"]:
+            return "Logs_Temp" if is_en else "日志与临时"
+
+        return ""
+
+    @classmethod
     def group_files_by_parent_or_tool(
         cls,
         file_items: List[Dict[str, Any]],
-        destination_root: str
+        destination_root: str,
+        options: Optional[OrganizeOptions] = None
     ) -> List[Dict[str, Any]]:
         """
         将散装文件列表按照“所属 App / 工具根目录”或“父目录树”聚合为整体处理单元。
-        
-        例如：
-        - ~/npm 下的 1000 个 .js/.json 聚合为一个名为 "~/npm (Node.js / npm)" 的目录单元；
-        - node_modules 目录作为一个整体；
-        - 散装单文件（若处于普通目录）独立保留为单文件单元。
+        支持 OrganizeOptions（模式选择、中英文命名、内容抽样与细粒度子目录推荐）。
         """
+        if options is None:
+            options = OrganizeOptions()
+
         dest_root_path = Path(destination_root)
         
+        # 构建扫描文件集合内的项目工程根目录快速索引
+        project_marker_names = {
+            "package.json": ("Node.js", "代码项目与依赖 (Dev & Code)"),
+            "cargo.toml": ("Rust / Cargo", "代码项目与依赖 (Dev & Code)"),
+            "pyproject.toml": ("Python", "代码项目与依赖 (Dev & Code)"),
+            "requirements.txt": ("Python", "代码项目与依赖 (Dev & Code)"),
+            "pom.xml": ("Java / Maven", "代码项目与依赖 (Dev & Code)"),
+            "build.gradle": ("Java / Gradle", "代码项目与依赖 (Dev & Code)"),
+            "build.gradle.kts": ("Java / Gradle", "代码项目与依赖 (Dev & Code)"),
+            "go.mod": ("Go / Golang", "代码项目与依赖 (Dev & Code)"),
+            "cmakelists.txt": ("C++ / CMake", "代码项目与依赖 (Dev & Code)"),
+            "dockerfile": ("Docker", "代码项目与依赖 (Dev & Code)"),
+            "docker-compose.yml": ("Docker", "代码项目与依赖 (Dev & Code)"),
+        }
+
+        discovered_project_roots: Dict[str, Tuple[str, Tuple[str, str]]] = {}
+        for it in file_items:
+            fpath = it.get("path") or it.get("original_path", "")
+            fname = (it.get("name") or Path(fpath).name).lower()
+            if fname in project_marker_names:
+                p = Path(fpath)
+                p_parent = p.parent
+                if p_parent and str(p_parent) != str(p_parent.parent):
+                    discovered_project_roots[str(p_parent).lower()] = (str(p_parent), project_marker_names[fname])
+
         # 1. 查找每个文件所属的“最佳聚合根目录”
-        # 规则：如果一个文件处于已知工具规则目录（如 .npm, .cache, node_modules, pip\cache）下，
-        # 则将该工具目录作为聚合根（Group Root）。
         file_to_group_root: Dict[str, str] = {}
         group_root_info: Dict[str, Dict[str, Any]] = {}
+
+        common_container_names = {
+            "downloads", "desktop", "documents", "misc", "finance", "contracts",
+            "office", "videos", "audio", "assets", "installers", "design"
+        }
 
         for item in file_items:
             fpath = item.get("path") or item.get("original_path", "")
             p = Path(fpath)
-            
+
+            # 0. 优先识别已被扫描层剪枝标记的“软件/工程/工具链原子集体”
+            if item.get("is_directory_collective"):
+                c_info = item.get("collective_info") or {}
+                group_key = fpath
+                file_to_group_root[fpath] = group_key
+                group_root_info[group_key] = {
+                    "root_path": group_key,
+                    "is_directory_group": True,
+                    "app_info": {
+                        "app_name": c_info.get("software_name", item.get("name")),
+                        "suggested_category": c_info.get("suggested_category", item.get("category", "代码项目与依赖 (Dev & Code)")),
+                        "reason": c_info.get("reason", "识别为不可拆分独立软件/工程集体"),
+                        "confidence": c_info.get("confidence", 0.95),
+                        "risk_level": c_info.get("risk_level", "需人工确认"),
+                        "require_confirmation": c_info.get("require_confirmation", True),
+                        "is_recognized": True,
+                        "recommended_subpath": c_info.get("recommended_subpath", ""),
+                        "collective_info": c_info
+                    },
+                    "items": [item]
+                }
+                continue
+
             detected = cls.detect_app_for_path(fpath)
             
-            # 尝试在祖先路径中定位工具根目录
+            # 尝试在祖先路径中定位工具根目录或工程根目录
             matched_tool_root = None
-            if detected["is_recognized"] and detected["app_name"] != "未识别工具/待分类":
-                # 向上查找哪一级匹配了 pattern
+            matched_collective_info = None
+
+            # 1. 优先自顶向下检查祖先路径中最外层的“软件/工程集体”特征探测器 (detect_directory_collective)
+            # 优先锚定最外层项目工程根，防止嵌套子工具(如 it-tool)被从父项目集体中撕裂
+            for parent in reversed(list(p.parents)):
+                if str(parent) == str(parent.parent) or len(parent.parts) <= 2:
+                    continue
+                c_cand = cls.detect_directory_collective(parent)
+                if c_cand:
+                    matched_tool_root = str(parent)
+                    matched_collective_info = c_cand
+                    detected = {
+                        "app_name": c_cand.get("software_name", parent.name),
+                        "suggested_category": c_cand.get("suggested_category", "代码项目与依赖 (Dev & Code)"),
+                        "reason": c_cand.get("reason", f"在项目根目录 {parent.name} 中检测到软件/工程集体"),
+                        "confidence": c_cand.get("confidence", 0.95),
+                        "risk_level": c_cand.get("risk_level", "需人工确认"),
+                        "require_confirmation": c_cand.get("require_confirmation", True),
+                        "is_recognized": True,
+                        "recommended_subpath": c_cand.get("recommended_subpath", ""),
+                        "collective_info": c_cand
+                    }
+                    break
+
+            # 2. 其次匹配已知 App 规则库 (例如 ~/.npm, ~/AppData/Local/pip/cache 等全局工具生态目录)
+            if not matched_tool_root and detected["is_recognized"] and detected["app_name"] != "未识别工具/待分类":
                 for parent in [p] + list(p.parents):
                     parent_str = str(parent)
                     for rule in KNOWN_APP_PATTERNS:
@@ -399,13 +1214,35 @@ class AppDetector:
                     if matched_tool_root:
                         break
 
-            # 如果没有匹配到专门的工具根，但文件在同一个直接父目录下
+            # 3. 再次匹配独立项目工程根目录索引
+            if not matched_tool_root:
+                for parent in [p] + list(p.parents):
+                    parent_str_lower = str(parent).lower()
+                    if parent_str_lower in discovered_project_roots:
+                        matched_proj_path, (proj_app, proj_cat) = discovered_project_roots[parent_str_lower]
+                        matched_tool_root = matched_proj_path
+                        if not detected["is_recognized"] or "未识别" in detected["app_name"]:
+                            detected = {
+                                "app_name": f"{proj_app}",
+                                "suggested_category": proj_cat,
+                                "reason": f"在父目录 {parent.name} 中检测到工程配置",
+                                "confidence": 0.92,
+                                "risk_level": "需人工确认",
+                                "require_confirmation": True,
+                                "is_recognized": True
+                            }
+                        break
+
+            # 如果没有匹配到专门的工具根
             if matched_tool_root:
                 group_key = matched_tool_root
                 is_dir_group = True
             else:
-                # 若文件处于独立文件夹中，以直接父目录作为聚合键
-                if p.parent and len(p.parent.parts) > 1:
+                is_in_common_container = (
+                    p.parent.name.lower() in common_container_names or
+                    len(p.parent.parts) <= 2
+                )
+                if not is_in_common_container and p.parent and len(p.parent.parts) > 1:
                     group_key = str(p.parent)
                     is_dir_group = True
                 else:
@@ -425,7 +1262,15 @@ class AppDetector:
         # 2. 生成结构化分组单元列表
         grouped_results: List[Dict[str, Any]] = []
 
-        for group_key, gdata in group_root_info.items():
+        # 先按总大小从大到小排序，确保稳定编号
+        sorted_keys = sorted(
+            group_root_info.keys(),
+            key=lambda k: sum(int(it.get("size", 0)) for it in group_root_info[k]["items"]),
+            reverse=True
+        )
+
+        for idx, group_key in enumerate(sorted_keys):
+            gdata = group_root_info[group_key]
             items_in_group = gdata["items"]
             root_p = Path(gdata["root_path"])
             app_info = gdata["app_info"]
@@ -454,12 +1299,44 @@ class AppDetector:
                 require_conf = app_info["require_confirmation"]
                 confidence = app_info["confidence"]
 
+            # 如果置信度低于阈值，强制要求人工确认
+            if confidence < options.min_confidence:
+                require_conf = True
+
+            # 生成高质量的推荐子路径
+            recommended_subpath = cls.generate_heuristic_subpath(
+                group_key=group_key,
+                items=items_in_group,
+                app_info=app_info,
+                is_dir_group=gdata["is_directory_group"],
+                mode=options.mode,
+                lang=options.naming_language
+            )
+
             # 建议目标路径
             cat_name = app_info["suggested_category"]
             if gdata["is_directory_group"]:
-                target_base_dir = dest_root_path / cat_name / root_p.name
+                if recommended_subpath:
+                    target_base_dir = dest_root_path / cat_name / Path(recommended_subpath) / root_p.name
+                else:
+                    target_base_dir = dest_root_path / cat_name / root_p.name
             else:
-                target_base_dir = dest_root_path / cat_name
+                if recommended_subpath:
+                    target_base_dir = dest_root_path / cat_name / Path(recommended_subpath)
+                else:
+                    target_base_dir = dest_root_path / cat_name
+
+            # 内容样本抽取 (仅当明确开启时)
+            content_samples = []
+            if options.sample_content_enabled:
+                for it in items_in_group[:2]:
+                    fpath = it.get("path") or it.get("original_path", "")
+                    sample = extract_file_content_sample(fpath, options.sample_content_max_bytes)
+                    if sample:
+                        content_samples.append({
+                            "name": it.get("name", Path(fpath).name),
+                            "sample": sample
+                        })
 
             # 构建每个子项的原路径与目标相对路径
             sub_items_detail = []
@@ -482,8 +1359,9 @@ class AppDetector:
                     "scan_root": it.get("scan_root", "")
                 })
 
+            file_count = sum(int(it.get("file_count", 1)) for it in items_in_group)
             group_unit = {
-                "group_id": f"GRP_{abs(hash(group_key)) % 1000000:06d}",
+                "group_id": f"grp_{idx+1:04d}",
                 "name": root_p.name or group_key,
                 "original_root": gdata["root_path"],
                 "scan_root": items_in_group[0].get("scan_root", "") if items_in_group else "",
@@ -493,17 +1371,19 @@ class AppDetector:
                 "symlink_target": link_target or "",
                 "app_name": app_info["app_name"],
                 "suggested_category": cat_name,
+                "recommended_subpath": recommended_subpath,
                 "rationale": app_info["reason"],
                 "confidence": confidence,
                 "risk_level": risk_level,
                 "require_confirmation": require_conf,
+                "action": "归档" if not require_conf else "需确认",
                 "file_count": file_count,
                 "total_size": total_size,
+                "content_samples": content_samples,
                 "sub_items": sub_items_detail,
+                "collective_info": app_info.get("collective_info"),
                 "source": "离线规则"
             }
             grouped_results.append(group_unit)
 
-        # 按总占用容量降序排序
-        grouped_results.sort(key=lambda x: x["total_size"], reverse=True)
         return grouped_results

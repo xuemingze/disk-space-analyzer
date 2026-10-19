@@ -54,11 +54,12 @@ class DirectoryScanTask(BaseScanTask):
     progress_updated = Signal(str, object, object)
     finished_ok = Signal(dict)
 
-    def __init__(self, target_paths, skip_system_protected, enable_duplicate_detection, ignore_folders=None, parent=None):
+    def __init__(self, target_paths, skip_system_protected, enable_duplicate_detection, ignore_folders=None, prune_collectives=False, parent=None):
         super().__init__(parent)
         self.target_paths = target_paths
         self.skip_system_protected = skip_system_protected
         self.enable_duplicate_detection = enable_duplicate_detection
+        self.prune_collectives = prune_collectives
         import os
         self.ignore_folders = [os.path.normcase(os.path.normpath(p)) for p in (ignore_folders or []) if p.strip()]
 
@@ -85,6 +86,8 @@ class DirectoryScanTask(BaseScanTask):
             last_ui_update = time.time()
             throttle_interval = app_config.get("perf_options", "ui_throttle_ms", default=60) / 1000.0
 
+            norm_target_roots = {os.path.normcase(os.path.normpath(tp)) for tp in self.target_paths}
+
             for root_path in self.target_paths:
                 if not self.check_pause_cancel(): return
                 stack = [root_path]
@@ -96,6 +99,52 @@ class DirectoryScanTask(BaseScanTask):
                         if not hasattr(self, 'skipped_ignored_count'): self.skipped_ignored_count = 0
                         self.skipped_ignored_count += 1
                         continue
+
+                    # 防御式文件夹递归：若启用 prune_collectives，探测当前目录是否为软件/工程/运行环境原子集体
+                    curr_norm = os.path.normcase(os.path.normpath(curr_dir))
+                    if self.prune_collectives:
+                        from app.core.app_detector import AppDetector
+                        c_info = AppDetector.detect_directory_collective(curr_dir)
+                        if c_info:
+                            c_size = 0
+                            c_files = 0
+                            c_mtime = 0
+                            try:
+                                for w_root, _, w_files in os.walk(curr_dir):
+                                    if not self.check_pause_cancel(): return
+                                    for wf in w_files:
+                                        c_files += 1
+                                        try:
+                                            st = os.stat(os.path.join(w_root, wf))
+                                            c_size += st.st_size
+                                            c_mtime = max(c_mtime, st.st_mtime)
+                                        except OSError:
+                                            pass
+                            except Exception:
+                                pass
+
+                            c_mtime = c_mtime or time.time()
+                            total_files += c_files
+                            total_bytes += c_size
+                            cat = c_info.get("suggested_category", "代码项目与依赖 (Dev & Code)")
+                            category_bytes[cat] += c_size
+                            category_counts[cat] += 1
+
+                            finfo = {
+                                "name": Path(curr_dir).name,
+                                "path": curr_dir,
+                                "size": c_size,
+                                "file_count": c_files,
+                                "category": cat,
+                                "mtime": c_mtime,
+                                "ext": "",
+                                "scan_root": root_path,
+                                "is_directory_collective": True,
+                                "collective_info": c_info
+                            }
+                            all_scanned_files.append(finfo)
+                            # 触发剪枝，严禁继续入栈其子目录，避免扫描内部成千上万碎文件
+                            continue
                     try:
                         with os.scandir(curr_dir) as it:
                             for entry in it:

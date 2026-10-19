@@ -19,6 +19,7 @@ from app.core.category_manager import global_category_manager
 from pathlib import Path
 from app.core.cleaner import ArchiveWorker
 from app.utils.file_helper import format_size
+from app.core.organize_models import sanitize_subpath
 
 
 class OrganizePreviewDialog(QDialog):
@@ -269,6 +270,9 @@ class OrganizePreviewDialog(QDialog):
             font.setBold(True)
             if source == "AI":
                 group_item.setForeground(1, QBrush(QColor("#38BDF8")))
+            elif "涉敏" in source or "降级" in source:
+                group_item.setForeground(1, QBrush(QColor("#F59E0B")))  # 琥珀橙提示风控降级
+                group_item.setToolTip(1, "触发大模型内容安全审查 (422 Sensitive)，已安全保留本地离线启发式规则")
             else:
                 group_item.setForeground(1, QBrush(QColor("#94A3B8")))
             group_item.setFont(1, font)
@@ -287,8 +291,18 @@ class OrganizePreviewDialog(QDialog):
             combo.currentTextChanged.connect(lambda txt, it=group_item: self._on_category_changed(it, txt))
             self.tree.setItemWidget(group_item, 2, combo)
             
+            rec_subpath = group.get("recommended_subpath", "")
             group_item.setText(3, group.get("target_root", ""))
-            group_item.setText(4, group.get("rationale", ""))
+            if rec_subpath:
+                group_item.setToolTip(3, f"目标规划路径: {group.get('target_root', '')}\n推荐细分子层级: {rec_subpath}")
+                rationale_text = group.get("rationale", "")
+                if rec_subpath not in rationale_text:
+                    group_item.setText(4, f"[{rec_subpath}] {rationale_text}")
+                else:
+                    group_item.setText(4, rationale_text)
+                group_item.setToolTip(4, f"推荐细分子层级: {rec_subpath}\n识别依据: {rationale_text}")
+            else:
+                group_item.setText(4, group.get("rationale", ""))
             
             total_size = sum(s.get("size", 0) for s in sub_items)
             size_str = f"{len(sub_items)} 项 ({format_size(total_size)})"
@@ -350,28 +364,37 @@ class OrganizePreviewDialog(QDialog):
         # Recalculate target root
         dest_root_p = Path(self.destination_root)
         orig_root_p = Path(group.get("original_root", ""))
-        
-        # Calculate new target base
-        active_cats = global_category_manager.get_active()
-        template = "{archive_root}/{category_name}/{app_name}"
-        for cat in active_cats:
-            if cat["name"] == new_cat_name:
-                template = cat.get("target_path_template", template)
-                break
+        rec_subpath = group.get("recommended_subpath", "")
+        clean_sub = sanitize_subpath(rec_subpath) if rec_subpath else ""
+
+        if clean_sub:
+            if group.get("is_directory_group", True):
+                new_target_base = dest_root_p / new_cat_name / Path(clean_sub) / orig_root_p.name
+            else:
+                new_target_base = dest_root_p / new_cat_name / Path(clean_sub)
+        else:
+            active_cats = global_category_manager.get_active()
+            template = "{archive_root}/{category_name}/{app_name}"
+            for cat in active_cats:
+                if cat["name"] == new_cat_name:
+                    template = cat.get("target_path_template", template)
+                    break
+                    
+            app_name = group.get("app_name", orig_root_p.name)
+            res = template.replace("{archive_root}", str(dest_root_p))
+            res = res.replace("{category_name}", new_cat_name)
+            res = res.replace("{app_name}", app_name)
+            
+            new_target_base = Path(res)
+            if not group.get("is_directory_group", True):
+                if "{app_name}" not in template:
+                    new_target_base = dest_root_p / new_cat_name
                 
         app_name = group.get("app_name", orig_root_p.name)
-        res = template.replace("{archive_root}", str(dest_root_p))
-        res = res.replace("{category_name}", new_cat_name)
-        res = res.replace("{app_name}", app_name)
-        
-        new_target_base = Path(res)
-        if not group.get("is_directory_group", True):
-            # For loose files, the group root might just be the dest folder
-            if "{app_name}" not in template:
-                new_target_base = dest_root_p / new_cat_name
-                
         group["target_root"] = str(new_target_base)
         group_item.setText(3, str(new_target_base))
+        if clean_sub:
+            group_item.setToolTip(3, f"目标规划路径: {new_target_base}\n推荐细分子层级: {clean_sub}")
         group_item.setText(1, f"{app_name} [User]")
         group_item.setForeground(1, QBrush(QColor("#F59E0B"))) # Warn color for manual
         
@@ -385,10 +408,12 @@ class OrganizePreviewDialog(QDialog):
             if c_data and c_data.get("type") == "file":
                 sub = c_data["data"]
                 rel = sub.get("relative_path", "")
-                if rel:
+                if rel and group.get("is_directory_group", True):
                     new_sub_target = new_target_base / Path(rel)
-                    sub["target_path"] = str(new_target_base / Path(rel))
-                    child.setText(3, str(new_sub_target))
+                else:
+                    new_sub_target = new_target_base / Path(sub.get("name", Path(rel).name if rel else "unnamed"))
+                sub["target_path"] = str(new_sub_target)
+                child.setText(3, str(new_sub_target))
                 child.setText(2, new_cat_name)
                 
         self.tree.viewport().update()

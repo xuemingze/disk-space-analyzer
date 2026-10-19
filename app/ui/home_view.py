@@ -73,9 +73,13 @@ class AIWorker(QThread):
                 self.report_done.emit(ai_response)
             elif self.action == "classify":
                 dest_root = self.kwargs.get("destination_root", "D:/归档备份")
+                options = self.kwargs.get("options")
+                prefs = self.kwargs.get("prefs", {"work_ratio": 0.6, "personal_ratio": 0.4})
                 classified = AIService.classify_files_with_ai(
                     base_url, api_key, model, self.data, dest_root,
-                    weights=self.kwargs.get("prefs", {"work_ratio": 0.6, "personal_ratio": 0.4})
+                    weights=prefs,
+                    options=options,
+                    progress_callback=lambda p: self.phase_changed.emit(p)
                 )
                 self.classify_done.emit(classified)
             elif self.action == "process_report":

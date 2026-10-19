@@ -106,3 +106,17 @@ context-export-*.json
 # 本地随手记录的说明文件（正式内容已并入 docs/使用说明.md）
 使用方法.txt
 文件清理助手使用说明.txt
+
+# 开发期临时与补丁脚本（仅根目录）
+/patch*.py
+/fix*.py
+/benchmark*.py
+/scratch*.py
+/gen_fix.py
+/check_replace.py
+/find_prompt.py
+/add_import.py
+/model.py
+/verify_phase4*.py
+/test_*.py
+app/scratch_*.py
