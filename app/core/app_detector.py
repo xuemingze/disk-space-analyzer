@@ -264,7 +264,7 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "description": "影视剧集、音视频剪辑与录音素材"
     },
     "design": {
-        "keywords": {"设计", "素材", "图片", "图像", "照片", "壁纸", "插画", "模型", "贴图", "资产", "design", "assets", "images", "photos", "textures", "models"},
+        "keywords": {"设计", "素材", "图片", "图像", "照片", "壁纸", "插画", "模型", "贴图", "资产", "live2d", "live2d模型", "ai模型", "checkpoint", "lora", "角色素材", "design", "assets", "images", "photos", "textures", "models"},
         "suggested_category": "图像设计与素材 (Design & Assets)",
         "subpath_prefix": "设计资产",
         "description": "平面美术、UI设计、三维模型与视觉素材"
@@ -276,7 +276,7 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "description": "独立游戏、单机游戏与游戏本体资产"
     },
     "finance": {
-        "keywords": {"财务", "账单", "发票", "报销", "合同", "商务", "订单", "薪酬", "工资", "税务", "finance", "contracts", "invoices", "bills", "accounting"},
+        "keywords": {"财务", "合同", "商务", "订单", "薪酬", "工资", "税务", "finance", "contracts", "invoices", "bills", "accounting"},
         "suggested_category": "文档与电子书 (Documents & Books)",
         "subpath_prefix": "财务商务",
         "description": "商务合同、财务报表、发票凭证与税务单据"
@@ -296,7 +296,7 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
 }
 
 NARROW_ENTITY_SUFFIX_PATTERN = re.compile(
-    r"^(.+?)(项目|工程|系统|平台|助手|工具|客户端|设计|查重|初稿|终稿|报告|汇总|方案|复盘|模版|清单|合集|三部曲|全集|汉化版|免安装版|绿色版|特别版|完整版|正式版|v\d+.*|\d{4}.*)$",
+    r"^(.+?)(项目|工程|系统|平台|助手|工具|客户端|设计|查重|初稿|终稿|报告|汇总|方案|复盘|模版|清单|明细|账套|对账|流水|合集|三部曲|全集|汉化版|免安装版|绿色版|特别版|完整版|正式版|发票|账单|送货单|经控|模型|素材|角色|\d+月.*|v\d+.*|\d{4}.*)$",
     re.IGNORECASE
 )
 
@@ -316,6 +316,10 @@ class AppDetector:
         if not name:
             return None
         n_clean = name.strip().lower()
+        # 若带有明确日期、月份、版本（如 10月发票, 2026财务, v1.0, 7月），说明是具体业务账套或实例，绝非广义大抽屉容器
+        if re.search(r"(\d+月|\d{4}|v\d+|_v\d+)", n_clean):
+            return None
+
         for key, info in BROAD_CONTAINER_TAXONOMY.items():
             if n_clean in info["keywords"]:
                 return key, info
@@ -454,6 +458,48 @@ class AppDetector:
                         "risk_level": rule["default_risk"],
                         "require_confirmation": (rule["default_risk"] != "低风险")
                     }
+
+        # 1.5 检查 Live2D 虚拟角色模型与 AI 媒体实体资产 (.model3.json, .model.json, physics3.json)
+        model_file = None
+        try:
+            for item_f in p.iterdir():
+                if item_f.is_file():
+                    low_f = item_f.name.lower()
+                    if low_f.endswith(".model3.json") or low_f.endswith(".model.json") or low_f.endswith(".cdi3.json") or low_f.endswith(".physics3.json"):
+                        model_file = item_f.name
+                        break
+            if not model_file:
+                for sub_d in p.iterdir():
+                    if sub_d.is_dir():
+                        for sub_f in sub_d.iterdir():
+                            if sub_f.is_file():
+                                low_sf = sub_f.name.lower()
+                                if low_sf.endswith(".model3.json") or low_sf.endswith(".model.json"):
+                                    model_file = sub_f.name
+                                    break
+                        if model_file:
+                            break
+        except Exception:
+            pass
+
+        if model_file:
+            clean_m = sanitize_subpath(dname)
+            return {
+                "is_collective": True,
+                "collective_type": "Live2D模型集体",
+                "software_name": f"{dname} (Live2D模型)",
+                "directory_name": dname,
+                "primary_executable": "",
+                "product_title": f"Live2D Model ({dname})",
+                "manifest_project_name": dname,
+                "signature_type": f"Live2D Model ({model_file})",
+                "suggested_category": "图像设计与素材 (Design & Assets)",
+                "recommended_subpath": f"Live2D模型/{clean_m}",
+                "reason": f"检测到 Live2D 角色模型核心清单 {model_file}，属于不可拆分模型资产整体",
+                "confidence": 0.98,
+                "risk_level": "需人工确认",
+                "require_confirmation": True
+            }
 
         # 2. 检查开发工程项目清单 (Project Manifests)
         # 2.1 Node.js / 前端项目 (package.json)
@@ -711,9 +757,10 @@ class AppDetector:
             if parent_broad and cls.is_narrow_entity(dname, parent_broad[0]):
                 broad_key, broad_info = parent_broad
                 clean_name = sanitize_subpath(dname)
+                c_type_label = "业务账套集体" if broad_key == "finance" else "业务实体集体"
                 return {
                     "is_collective": True,
-                    "collective_type": "业务实体集体",
+                    "collective_type": c_type_label,
                     "software_name": f"{dname} ({broad_info['subpath_prefix']})",
                     "directory_name": dname,
                     "primary_executable": "",
@@ -727,6 +774,28 @@ class AppDetector:
                     "risk_level": "需人工确认",
                     "require_confirmation": True
                 }
+
+            # 补充兜底：若目录名自身直接包含明确业务单据特征（发票、经控、送货单、账单、明细、账套等）
+            # 必须排除软件包装目录（如 发票明细软件-v2.3.4）与含有可执行程序的目录
+            if any(k in dname for k in ["发票", "经控", "送货单", "对账单", "报销单", "明细", "账套", "对账", "流水", "清单"]):
+                if not re.search(r"(软件|app|tool|v\d+|_v\d+)", dname, re.I) and not exe_files:
+                    clean_name = sanitize_subpath(dname)
+                    return {
+                        "is_collective": True,
+                        "collective_type": "业务账套集体",
+                        "software_name": f"{dname} (财务商务)",
+                        "directory_name": dname,
+                        "primary_executable": "",
+                        "product_title": dname,
+                        "manifest_project_name": dname,
+                        "signature_type": f"业务账套命名特征 ({dname})",
+                        "suggested_category": "文档与电子书 (Documents & Books)",
+                        "recommended_subpath": f"财务商务/{clean_name}",
+                        "reason": f"目录名命中财务/经控单据关键特征，判定为业务账套不可拆分集体",
+                        "confidence": 0.95,
+                        "risk_level": "需人工确认",
+                        "require_confirmation": True
+                    }
         except Exception:
             pass
 

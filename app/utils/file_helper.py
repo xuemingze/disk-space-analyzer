@@ -85,6 +85,32 @@ def categorize_file_by_ext(file_path: Path) -> str:
     return "其他文件"
 
 
+def normalize_unified_category(cat: str) -> str:
+    """将底层扩展名分类与业务高阶分类归一化收敛为统一高阶全景资产分类"""
+    c = (cat or "").strip()
+    if not c:
+        return "其他与通用文件 (Misc & General)"
+    if any(k in c for k in ["代码", "工程", "依赖", "Dev", "Code"]):
+        return "代码项目与依赖 (Dev & Code)"
+    if any(k in c for k in ["软件", "安装", "程序", "Apps", "Installers"]):
+        return "软件安装与程序 (Apps & Installers)"
+    if any(k in c for k in ["设计", "图像", "图片", "素材", "Design", "Assets", "Live2D", "模型"]):
+        return "图像设计与模型 (Design & Models)"
+    if any(k in c for k in ["文档", "办公", "财务", "发票", "经控", "商务", "电子书", "Books", "Documents", "Finance"]):
+        return "文档报表与账套 (Docs & Business)"
+    if any(k in c for k in ["视频", "音频", "影音", "媒体", "Media", "Videos"]):
+        return "音视频与多媒体 (Media & Videos)"
+    if any(k in c for k in ["压缩", "镜像", "归档", "Archives", "OS_Images"]):
+        return "归档包与系统镜像 (Archives & Images)"
+    if any(k in c for k in ["游戏", "Games"]):
+        return "游戏娱乐与资产 (Games & Entertainment)"
+    if any(k in c for k in ["临时", "日志", "缓存", "Temp", "Logs", "Caches"]):
+        return "系统运行与临时缓存 (System & Temp)"
+    if any(k in c for k in ["系统", "核心", "System"]):
+        return "系统核心运行数据 (System Core)"
+    return "其他与通用文件 (Misc & General)"
+
+
 def is_system_critical_path(file_path: str) -> bool:
     """判断路径是否属于 Windows 关键受保护系统目录"""
     if not file_path:
@@ -99,35 +125,85 @@ def is_system_critical_path(file_path: str) -> bool:
     return False
 
 
-def get_heuristic_redundant_tag(file_path: str) -> Optional[Tuple[str, str]]:
-    """启发式分析文件是否属于高冗余/可清理推荐文件，返回 (标签, 理由)"""
+import re
+
+INSTALLER_PATTERN = re.compile(r'(setup|installer|install|安装包|_setup|-setup|\.msi$)', re.IGNORECASE)
+CONFLICT_PATTERN = re.compile(r'(\.sync-conflict-|\s*-\s*副本|_\s*副本|\(\d+\)|_copy)', re.IGNORECASE)
+
+
+def get_heuristic_redundant_tag(file_path: str, file_name: Optional[str] = None, file_size: int = 0) -> Optional[Tuple[str, str, bool]]:
+    """启发式分析文件是否属于高冗余/可清理推荐文件，返回 (标签, 理由, 是否推荐治理)"""
     if is_system_critical_path(file_path):
         return None
     
     path_lower = file_path.lower()
-    
-    # 特殊大 zip 归档包
-    if path_lower.endswith(".zip") or path_lower.endswith(".tar.gz"):
-        if "appdata" in path_lower or "users" in path_lower:
-            return ("冗余归档包", "位于用户或应用数据目录下的独立大型压缩包，建议确认后清理或移入归档")
+    name = file_name or Path(file_path).name
+    ext = Path(name).suffix.lower()
 
-    # 路径匹配
+    # 1. 同步冲突与带编号的冗余副本 (如 .sync-conflict-xxx, 集团、循环电脑(1).xls)
+    if CONFLICT_PATTERN.search(name):
+        return ("同步与历史副本", "检测为云同步冲突或多次保存的带编号冗余副本，建议比对确认后处理", True)
+
+    # 2. 软件独立安装包与安装程序残留 (如 SteamSetup.exe, windowscleaner...setup.exe, Everything-Setup.exe)
+    if ext in {".exe", ".msi", ".pkg", ".dmg", ".deb", ".rpm"}:
+        if INSTALLER_PATTERN.search(name) or ext == ".msi":
+            return ("软件安装程序", "检测为独立软件离线安装程序或安装引导包，软件安装后该安装包可归档或清理", True)
+
+    # 3. 冗余归档包与已解压镜像
+    if ext in {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"}:
+        stem = Path(name).stem.lower()
+        parent_p = Path(file_path).parent
+        # 检查同目录下是否存在同名解压目录
+        try:
+            for sibling in parent_p.iterdir():
+                if sibling.is_dir():
+                    sib_name = sibling.name.lower()
+                    if sib_name == stem or stem.startswith(sib_name) or sib_name.startswith(stem):
+                        return ("已解压冗余归档包", f"同目录下已存在解压后的对应实体目录 [{sibling.name}]，压缩包为冗余副本", True)
+        except Exception:
+            pass
+        if "appdata" in path_lower or "users" in path_lower or file_size > 50 * 1024 * 1024:
+            return ("冗余归档包", "大型历史压缩归档包，建议确认后移入长期冷备份", False)
+
+    # 4. 路径特征匹配 (系统临时目录、开发包缓存等)
     for pattern, desc in KNOWN_REDUNDANT_PATTERNS:
         if pattern.lower() in path_lower:
-            return ("安全可清理", desc)
+            return ("安全可清理", desc, True)
             
-    # 后缀匹配
-    ext = Path(file_path).suffix.lower()
+    # 5. 后缀特征匹配 (临时文件、日志等)
     if ext in {".tmp", ".temp", ".log", ".dmp", ".bak", ".old", ".part", ".crdownload"}:
-        return ("临时与日志", f"属于 {ext} 临时或诊断日志文件，通常可直接释放")
+        return ("临时与日志", f"属于 {ext} 临时或诊断日志文件，通常可直接释放", True)
         
     return None
 
 
 def calculate_file_hash(file_path: str, algorithm: str = "md5", chunk_size: int = 1024 * 1024) -> Optional[str]:
     """
-    分块读取文件并计算完整哈希值，防止大文件溢出内存 (严格控制在 chunk_size 内存)
+    分块读取文件并计算完整哈希值 (若为目录集体，计算所有内部相对路径、大小与首部采样的深度指纹)，防止大文件溢出内存
     """
+    if os.path.isdir(file_path):
+        hasher = hashlib.md5() if algorithm.lower() == "md5" else hashlib.sha256()
+        try:
+            for root, dirs, files in os.walk(file_path):
+                dirs.sort()
+                for f in sorted(files):
+                    fp = os.path.join(root, f)
+                    rel = os.path.relpath(fp, file_path)
+                    try:
+                        st = os.stat(fp)
+                        sz = st.st_size
+                    except OSError:
+                        sz = 0
+                    hasher.update(f"{rel}:{sz}".encode("utf-8", errors="ignore"))
+                    try:
+                        with open(fp, "rb") as sub_f:
+                            hasher.update(sub_f.read(4096))
+                    except Exception:
+                        pass
+            return hasher.hexdigest()
+        except Exception:
+            return None
+
     hasher = hashlib.md5() if algorithm.lower() == "md5" else hashlib.sha256()
     try:
         with open(file_path, "rb") as f:
@@ -143,8 +219,31 @@ def calculate_file_hash(file_path: str, algorithm: str = "md5", chunk_size: int 
 
 def calculate_partial_hash(file_path: str, sample_size: int = 8192) -> Optional[str]:
     """
-    快速读取文件头部 8KB 样本哈希，用于初步过滤相同大小的文件
+    快速读取文件头部 8KB 样本哈希 (若为目录集体，采样前 20 个子文件的相对路径与大小)，用于初步过滤相同大小的文件
     """
+    if os.path.isdir(file_path):
+        hasher = hashlib.md5()
+        try:
+            entries = []
+            for root, dirs, files in os.walk(file_path):
+                dirs.sort()
+                for f in sorted(files):
+                    fp = os.path.join(root, f)
+                    rel = os.path.relpath(fp, file_path)
+                    try:
+                        sz = os.path.getsize(fp)
+                    except OSError:
+                        sz = 0
+                    entries.append(f"{rel}:{sz}")
+                    if len(entries) >= 20:
+                        break
+                if len(entries) >= 20:
+                    break
+            hasher.update("|".join(entries).encode("utf-8", errors="ignore"))
+            return hasher.hexdigest()
+        except Exception:
+            return None
+
     hasher = hashlib.md5()
     try:
         with open(file_path, "rb") as f:

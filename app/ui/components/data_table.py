@@ -19,7 +19,7 @@ class FileTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._data = data_list
         self._is_selectable = is_selectable
-        self._headers = ["勾选", "文件名", "分类", "大小", "处理阶段", "冗余/推荐标记", "查重分组", "修改时间", "完整绝对路径"]
+        self._headers = ["勾选", "资产项 / 实体名称", "高阶全景分类", "占用大小", "治理形态与阶段", "治理标记 / 建议", "查重分组", "修改时间", "完整绝对路径"]
         self.checked_paths: Set[str] = set()
         self.checked_bytes: int = 0
 
@@ -37,11 +37,68 @@ class FileTableModel(QAbstractTableModel):
         col = index.column()
 
         if role == Qt.DisplayRole:
-            if col == 1: return item.get("name", "")
-            elif col == 2: return item.get("category", "其他")
+            if col == 1:
+                name = item.get("name", "")
+                if item.get("is_directory_collective"):
+                    c_info = item.get("collective_info") or {}
+                    c_type = c_info.get("type", "") or c_info.get("collective_type", "")
+                    app_name = c_info.get("app_name") or c_info.get("project_name") or c_info.get("software_name")
+                    f_count = item.get("file_count", 1)
+                    if "缓存" in c_type or c_info.get("is_cache") is True:
+                        prefix = f"🗑️ [缓存集体: {app_name}] " if app_name else "🗑️ [缓存集体] "
+                    elif "软件" in c_type or c_type == "standalone_app":
+                        prefix = f"📦 [独立软件: {app_name}] " if app_name else "📦 [独立软件] "
+                    elif "工程" in c_type or c_type == "dev_project":
+                        prefix = f"💻 [工程代码: {app_name}] " if app_name else "💻 [工程代码] "
+                    elif "Live2D" in c_type or "模型" in c_type:
+                        prefix = f"🎨 [Live2D模型: {name}] "
+                    elif "账套" in c_type or "发票" in c_type:
+                        prefix = f"📂 [业务账套: {name}] "
+                    elif "业务实体" in c_type or c_type == "business_entity":
+                        prefix = f"📂 [业务实体: {name}] "
+                    else:
+                        prefix = "📁 [实体集体] "
+                    return f"{prefix}{name} ({f_count:,} 个子文件)"
+                # 语义化外显标识：根据资产类型与治理标记动态展示专属前缀
+                tag = item.get("tag", "")
+                cat = item.get("category", "")
+                if "安装" in tag or "安装" in cat or "程序" in tag:
+                    prefix = "📦 [安装程序] "
+                elif "归档" in tag or "压缩" in cat:
+                    prefix = "🗜️ [归档包] "
+                elif "账套" in tag or "单据" in tag or "文档" in cat or "发票" in tag:
+                    prefix = "📑 [业务单据] "
+                elif "代码" in tag or "代码" in cat or "工程" in cat:
+                    prefix = "💻 [代码文件] "
+                elif "设计" in tag or "图像" in cat or "模型" in tag:
+                    prefix = "🎨 [设计素材] "
+                elif "视频" in cat or "音频" in cat or "媒体" in cat:
+                    prefix = "🎬 [多媒体] "
+                elif "副本" in tag or "冲突" in tag:
+                    prefix = "⚠️ [副本冲突] "
+                elif "临时" in tag or "日志" in tag or "缓存" in tag:
+                    prefix = "🗑️ [临时日志] "
+                else:
+                    prefix = "📄 [独立资产] "
+                return f"{prefix}{name}"
+            elif col == 2:
+                cat = item.get("category", "其他")
+                if item.get("is_directory_collective"):
+                    f_count = item.get("file_count", 1)
+                    return f"{cat} [{f_count:,} 子文件]"
+                return cat
             elif col == 3: return format_size(item.get("size", 0))
-            elif col == 4: return item.get("phase_status", "阶段一: 大小已归类")
-            elif col == 5: return item.get("tag", "-")
+            elif col == 4:
+                if item.get("is_directory_collective"):
+                    return item.get("phase_status", "阶段一已归类 (原子保全)")
+                return item.get("phase_status", "阶段一已归类 (独立单项)")
+            elif col == 5:
+                tag = item.get("tag", "")
+                if not tag or tag == "-":
+                    if item.get("is_directory_collective"):
+                        return "原子保全 (防撕裂整体)"
+                    return "标准资产 (保留)"
+                return tag
             elif col == 6: 
                 gid = item.get("duplicate_group_id", "")
                 return gid if gid else "-"
@@ -61,19 +118,27 @@ class FileTableModel(QAbstractTableModel):
             if col == 3: return int(Qt.AlignRight | Qt.AlignVCenter)
             
         elif role == Qt.ForegroundRole:
-            if col == 4:
+            if col == 1 and item.get("is_directory_collective"):
+                return QBrush(QColor("#A78BFA"))
+            elif col == 4:
                 status = item.get("phase_status", "")
                 if "哈希已确认" in status: return QBrush(QColor("#10B981"))
-                elif "规则" in status: return QBrush(QColor("#38BDF8"))
+                elif "原子保全" in status or "规则" in status: return QBrush(QColor("#38BDF8"))
                 else: return QBrush(QColor("#94A3B8"))
             elif col == 5:
                 tag = item.get("tag", "")
                 if "重复副本" in tag: return QBrush(QColor("#F59E0B"))
                 elif "安全可清理" in tag or "临时" in tag: return QBrush(QColor("#10B981"))
+                elif "防撕裂" in tag or "保全" in tag: return QBrush(QColor("#818CF8"))
                 elif "归档" in tag: return QBrush(QColor("#38BDF8"))
                 
         elif role == Qt.ToolTipRole:
-            if col == 1 or col == 8: return item.get("path", "")
+            if col == 1 or col == 8:
+                p = item.get("path", "")
+                if item.get("is_directory_collective"):
+                    c_info = item.get("collective_info") or {}
+                    return f"{p}\n[原子实体集体] 文件数: {item.get('file_count', 1):,} | 类型: {c_info.get('type', 'collective')} | 推荐泛归类: {item.get('category', '')}"
+                return p
             if col == 5: return item.get("reason", "")
             
         return None
@@ -311,10 +376,17 @@ class FileDataGridWidget(QWidget):
     def _update_stats_label(self):
         total = self.source_model.rowCount()
         visible = self.proxy_model.rowCount()
-        if total == visible:
-            self.stats_label.setText(f"共 {total} 个项目")
+        if total == 0:
+            self.stats_label.setText("暂无资产项 (若为 Top 100 选项卡，则说明当前无超过 300MB 的大文件/集体资产)")
         else:
-            self.stats_label.setText(f"显示 {visible} / {total} 个项目")
+            c_cnt = sum(1 for it in self.source_model._data if it.get("is_directory_collective"))
+            c_files = sum(it.get("file_count", 1) for it in self.source_model._data if it.get("is_directory_collective"))
+            f_cnt = total - c_cnt
+            c_info_str = f" (含 {c_cnt} 个原子实体集体 [底层封包聚合 {c_files:,} 个碎片文件], {f_cnt} 个独立单项资产)" if c_cnt > 0 else f" (共 {total} 个独立单项资产)"
+            if total == visible:
+                self.stats_label.setText(f"共 {total} 个资产单元{c_info_str}")
+            else:
+                self.stats_label.setText(f"显示 {visible} / {total} 个资产单元{c_info_str}")
 
     def select_all(self, checked: bool = True):
         self.source_model.select_all(checked)

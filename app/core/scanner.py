@@ -13,6 +13,7 @@ from app.config import app_config
 from app.core.hash_cache import hash_cache
 from app.utils.file_helper import (
     categorize_file_by_ext,
+    normalize_unified_category,
     is_system_critical_path,
     get_heuristic_redundant_tag,
     calculate_file_hash,
@@ -54,12 +55,13 @@ class DirectoryScanTask(BaseScanTask):
     progress_updated = Signal(str, object, object)
     finished_ok = Signal(dict)
 
-    def __init__(self, target_paths, skip_system_protected, enable_duplicate_detection, ignore_folders=None, prune_collectives=False, parent=None):
+    def __init__(self, target_paths, skip_system_protected, enable_duplicate_detection, ignore_folders=None, prune_collectives=True, min_top_file_size=300 * 1024 * 1024, parent=None):
         super().__init__(parent)
         self.target_paths = target_paths
         self.skip_system_protected = skip_system_protected
         self.enable_duplicate_detection = enable_duplicate_detection
         self.prune_collectives = prune_collectives
+        self.min_top_file_size = min_top_file_size
         import os
         self.ignore_folders = [os.path.normcase(os.path.normpath(p)) for p in (ignore_folders or []) if p.strip()]
 
@@ -126,10 +128,11 @@ class DirectoryScanTask(BaseScanTask):
                             c_mtime = c_mtime or time.time()
                             total_files += c_files
                             total_bytes += c_size
-                            cat = c_info.get("suggested_category", "代码项目与依赖 (Dev & Code)")
+                            cat = normalize_unified_category(c_info.get("suggested_category", "代码项目与依赖 (Dev & Code)"))
                             category_bytes[cat] += c_size
                             category_counts[cat] += 1
 
+                            c_tag = c_info.get("collective_type", "实体集体")
                             finfo = {
                                 "name": Path(curr_dir).name,
                                 "path": curr_dir,
@@ -139,10 +142,26 @@ class DirectoryScanTask(BaseScanTask):
                                 "mtime": c_mtime,
                                 "ext": "",
                                 "scan_root": root_path,
+                                "tag": f"原子保全 ({c_tag})",
+                                "reason": c_info.get("reason", "检测为不可拆分原子实体集体，整盘保全"),
+                                "phase_status": "阶段一已归类 (原子保全)",
                                 "is_directory_collective": True,
                                 "collective_info": c_info
                             }
                             all_scanned_files.append(finfo)
+
+                            # 支持集体查重：若启用查重，将集体推入 size_candidates (利用深度指纹哈希)
+                            if self.enable_duplicate_detection and c_size > 1024:
+                                size_candidates[c_size].append(finfo)
+
+                            # 严格门槛：原子集体整体大小 >= min_top_file_size (300MB) 时，作为独立整体资产推入 Top 100 堆
+                            if c_size >= self.min_top_file_size:
+                                if len(top_heap) < 100:
+                                    heapq.heappush(top_heap, (c_size, finfo["path"], finfo))
+                                else:
+                                    if c_size > top_heap[0][0]:
+                                        heapq.heappushpop(top_heap, (c_size, finfo["path"], finfo))
+
                             # 触发剪枝，严禁继续入栈其子目录，避免扫描内部成千上万碎文件
                             continue
                     try:
@@ -161,21 +180,33 @@ class DirectoryScanTask(BaseScanTask):
                                         total_files += 1
                                         total_bytes += f_size
                                         
-                                        category = categorize_file_by_ext(Path(entry.name))
+                                        raw_cat = categorize_file_by_ext(Path(entry.name))
+                                        category = normalize_unified_category(raw_cat)
                                         category_bytes[category] += f_size
                                         category_counts[category] += 1
                                         
+                                        heuristic = get_heuristic_redundant_tag(entry.path, entry.name, f_size)
+                                        f_tag = heuristic[0] if heuristic else f"独立资产项"
+                                        f_reason = heuristic[1] if heuristic else f"标准{category}单项文件"
+                                        f_phase = f"规则识别 ({heuristic[0]})" if heuristic else "阶段一已归类"
+                                        f_is_rec = heuristic[2] if (heuristic and len(heuristic) > 2) else False
+
                                         finfo = {
                                             "name": entry.name, "path": entry.path, "size": f_size,
                                             "category": category, "mtime": mtime, "ext": Path(entry.name).suffix.lower(),
-                                            "scan_root": root_path
+                                            "scan_root": root_path,
+                                            "tag": f_tag, "reason": f_reason,
+                                            "phase_status": f_phase,
+                                            "is_recommended": f_is_rec
                                         }
                                         
-                                        if len(top_heap) < 100:
-                                            heapq.heappush(top_heap, (f_size, finfo["path"], finfo))
-                                        else:
-                                            if f_size > top_heap[0][0]:
-                                                heapq.heappushpop(top_heap, (f_size, finfo["path"], finfo))
+                                        # 严格门槛：仅当单项大小 >= min_top_file_size (300MB) 时，才入选 Top 100，杜绝无门槛凑数
+                                        if f_size >= self.min_top_file_size:
+                                            if len(top_heap) < 100:
+                                                heapq.heappush(top_heap, (f_size, finfo["path"], finfo))
+                                            else:
+                                                if f_size > top_heap[0][0]:
+                                                    heapq.heappushpop(top_heap, (f_size, finfo["path"], finfo))
                                                 
                                         if self.enable_duplicate_detection and f_size > 1024:
                                             size_candidates[f_size].append(finfo)
@@ -197,11 +228,16 @@ class DirectoryScanTask(BaseScanTask):
             dup_candidates_count = sum(len(group) for size, group in size_candidates.items() if len(group) > 1 and size > 1024)
             dup_candidate_groups_count = len([g for s, g in size_candidates.items() if len(g) > 1 and s > 1024])
 
+            collective_items = [f for f in all_scanned_files if f.get("is_directory_collective")]
+            standalone_items = [f for f in all_scanned_files if not f.get("is_directory_collective")]
+
             self.finished_ok.emit({
                 "elapsed_seconds": p1_duration,
                 "skipped_ignored_count": getattr(self, 'skipped_ignored_count', 0),
                 "total_files": total_files,
                 "total_bytes": total_bytes,
+                "collective_count": len(collective_items),
+                "standalone_file_count": len(standalone_items),
                 "category_stats": {
                     cat: {"bytes": cb, "count": category_counts[cat], "percent": round((cb/total_bytes*100), 2) if total_bytes>0 else 0.0}
                     for cat, cb in sorted(category_bytes.items(), key=lambda x: x[1], reverse=True)
@@ -358,18 +394,82 @@ class AggregateTask(BaseScanTask):
             for i, finfo in enumerate(self.all_scanned_files):
                 if not self.check_pause_cancel(): return
                 fpath = finfo["path"]
+                is_collective = finfo.get("is_directory_collective", False)
                 dup_info = self.file_to_duplicate_group.get(fpath)
-                heuristic = get_heuristic_redundant_tag(fpath)
+                heuristic = get_heuristic_redundant_tag(fpath, finfo.get("name"), finfo.get("size", 0))
                 
                 is_duplicate = dup_info is not None
                 is_duplicate_copy = (dup_info is not None and not dup_info["is_original"])
+
+                # 集体防撕裂保护：如果是原子实体集体（如软件目录、工程包、业务实体）
+                if is_collective:
+                    c_info = finfo.get("collective_info") or {}
+                    # 1. 检查是否为重复软件/实体集体
+                    if is_duplicate_copy:
+                        tag = "重复软件/集体副本"
+                        reason = f"与独立集体相同 ({dup_info['group_id']})"
+                        redundant_list.append({
+                            "name": finfo["name"], "path": fpath, "size": finfo["size"],
+                            "file_count": finfo.get("file_count", 1),
+                            "category": finfo["category"], "ext": finfo["ext"], "mtime": finfo["mtime"],
+                            "scan_root": finfo.get("scan_root", ""),
+                            "tag": tag, "reason": reason, "is_duplicate": True,
+                            "duplicate_group_id": dup_info["group_id"],
+                            "is_duplicate_copy": True, "is_recommended": False,
+                            "is_directory_collective": True,
+                            "collective_info": c_info,
+                            "phase_status": "哈希已确认 (实体集体)"
+                        })
+                    elif is_duplicate:
+                        tag = "重复原件 (集体基准)"
+                        reason = f"作为查重基准源 ({dup_info['group_id']})"
+                        redundant_list.append({
+                            "name": finfo["name"], "path": fpath, "size": finfo["size"],
+                            "file_count": finfo.get("file_count", 1),
+                            "category": finfo["category"], "ext": finfo["ext"], "mtime": finfo["mtime"],
+                            "scan_root": finfo.get("scan_root", ""),
+                            "tag": tag, "reason": reason, "is_duplicate": True,
+                            "duplicate_group_id": dup_info["group_id"],
+                            "is_duplicate_copy": False, "is_recommended": False,
+                            "is_directory_collective": True,
+                            "collective_info": c_info,
+                            "phase_status": "哈希已确认 (集体原件)"
+                        })
+
+                    # 2. 检查集体是否本身为可释放的缓存或临时目录 (如 npm-cache, pip-cache, Temp, caches)
+                    is_cache_collective = (
+                        c_info.get("is_cache") is True
+                        or "缓存" in finfo["category"]
+                        or "Temp" in finfo["category"]
+                        or (heuristic is not None and heuristic[0] in ["安全可清理", "临时与日志", "冗余归档包"])
+                    )
+                    if is_cache_collective and not is_duplicate:
+                        c_tag = "安全可清理 (缓存整体)" if c_info.get("risk_level") == "低风险" else "临时运行缓存 (建议确认)"
+                        c_reason = c_info.get("reason") or (heuristic[1] if heuristic else "检测为应用或依赖临时缓存目录整体")
+                        is_rec = (c_info.get("risk_level") == "低风险")
+                        redundant_list.append({
+                            "name": finfo["name"], "path": fpath, "size": finfo["size"],
+                            "file_count": finfo.get("file_count", 1),
+                            "category": finfo["category"], "ext": finfo["ext"], "mtime": finfo["mtime"],
+                            "scan_root": finfo.get("scan_root", ""),
+                            "tag": c_tag, "reason": c_reason, "is_duplicate": False,
+                            "duplicate_group_id": "",
+                            "is_duplicate_copy": False, "is_recommended": is_rec,
+                            "is_directory_collective": True,
+                            "collective_info": c_info,
+                            "phase_status": "规则识别 (缓存集体)"
+                        })
+                        if is_rec:
+                            reclaimable_bytes += finfo["size"]
+                    continue
                 
                 if is_duplicate or heuristic is not None:
                     tag = "重复副本" if is_duplicate_copy else ("重复原件" if is_duplicate else heuristic[0])
                     reason = f"与同组副本相同 ({dup_info['group_id']})" if is_duplicate_copy else (
                         f"作为查重基准源 ({dup_info['group_id']})" if is_duplicate else heuristic[1]
                     )
-                    is_recommended = is_duplicate_copy or (heuristic is not None and heuristic[0] in ["安全可清理", "临时与日志", "冗余归档包"])
+                    heuristic_rec = heuristic[2] if (heuristic and len(heuristic) > 2) else (heuristic is not None and heuristic[0] in ["安全可清理", "临时与日志", "冗余归档包", "软件安装程序", "已解压冗余归档包", "同步与历史副本"])
+                    is_recommended = is_duplicate_copy or (heuristic_rec and not is_duplicate)
                     
                     redundant_list.append({
                         "name": finfo["name"], "path": fpath, "size": finfo["size"],
@@ -378,7 +478,7 @@ class AggregateTask(BaseScanTask):
                         "tag": tag, "reason": reason, "is_duplicate": is_duplicate,
                         "duplicate_group_id": dup_info["group_id"] if dup_info else "",
                         "is_duplicate_copy": is_duplicate_copy, "is_recommended": is_recommended,
-                        "phase_status": "哈希已确认" if is_duplicate else "规则已识别"
+                        "phase_status": "哈希已确认" if is_duplicate else f"规则识别 ({tag})"
                     })
                     if is_recommended:
                         reclaimable_bytes += finfo["size"]
@@ -389,13 +489,18 @@ class AggregateTask(BaseScanTask):
             total_elapsed = round(time.time() - self.total_start_time, 2)
             total_bytes = sum(f["size"] for f in self.all_scanned_files)
             
+            collective_items = [f for f in self.all_scanned_files if f.get("is_directory_collective")]
+            standalone_items = [f for f in self.all_scanned_files if not f.get("is_directory_collective")]
+
             self.finished_ok.emit({
                 "target_paths": self.target_paths,
                 "total_elapsed_seconds": total_elapsed,
                 "phase1_duration": self.p1_duration,
-                "phase2_duration": self.p2_duration,
-                "total_files": len(self.all_scanned_files),
+                "total_files": sum(f.get("file_count", 1) for f in self.all_scanned_files),
+                "total_assets": len(self.all_scanned_files),
                 "total_bytes": total_bytes,
+                "collective_count": len(collective_items),
+                "standalone_file_count": len(standalone_items),
                 "redundant_files": sorted(redundant_list, key=lambda x: x["size"], reverse=True),
                 "duplicate_groups_count": len(self.duplicate_groups),
                 "duplicate_wasted_bytes": sum(g[0]["size"] * (len(g)-1) for g in self.duplicate_groups.values()) if self.duplicate_groups else 0,
@@ -420,7 +525,7 @@ class ScanWorker(QObject):
     phase_changed = Signal(str)
     scan_error = Signal(str)
 
-    def __init__(self, target_paths, enable_duplicate_detection=True, hash_algorithm="md5", skip_system_protected=True, concurrency=4, ignore_folders=None, task_id=None, parent=None):
+    def __init__(self, target_paths, enable_duplicate_detection=True, hash_algorithm="md5", skip_system_protected=True, concurrency=4, ignore_folders=None, task_id=None, prune_collectives=True, min_top_file_size=300 * 1024 * 1024, parent=None):
         super().__init__(parent)
         self.target_paths = target_paths
         self.enable_duplicate_detection = enable_duplicate_detection
@@ -429,6 +534,8 @@ class ScanWorker(QObject):
         self.concurrency = concurrency
         self.ignore_folders = ignore_folders if ignore_folders is not None else app_config.get("ignore_folders", default=[])
         self.task_id = task_id
+        self.prune_collectives = prune_collectives
+        self.min_top_file_size = min_top_file_size
         
         self.current_task: Optional[BaseScanTask] = None
         self._is_running = False
@@ -475,7 +582,9 @@ class ScanWorker(QObject):
             self.target_paths, 
             self.skip_system_protected, 
             self.enable_duplicate_detection,
-            ignore_folders=self.ignore_folders
+            ignore_folders=self.ignore_folders,
+            prune_collectives=self.prune_collectives,
+            min_top_file_size=self.min_top_file_size
         )
         self.current_task.progress_updated.connect(self.progress_updated)
         self.current_task.finished_ok.connect(self._on_phase1_finished)
@@ -486,7 +595,7 @@ class ScanWorker(QObject):
         if self._is_canceled: return
         
         self.phase1_cache = result
-        emit_result = {k: v for k, v in result.items() if k not in ["all_scanned_files", "size_candidates"]}
+        emit_result = {k: v for k, v in result.items() if k not in ["size_candidates"]}
         self.phase1_completed.emit(emit_result)
         
         if self.enable_duplicate_detection:
@@ -522,6 +631,7 @@ class ScanWorker(QObject):
     def _on_phase3_finished(self, result: dict):
         if self._is_canceled: return
         self._is_running = False
+        result["all_scanned_files"] = self.phase1_cache.get("all_scanned_files", [])
         result["category_stats"] = self.phase1_cache.get("category_stats", {})
         result["top_100_files"] = self.phase1_cache.get("top_100_files", [])
         result["skipped_ignored_count"] = self.phase1_cache.get("skipped_ignored_count", 0)

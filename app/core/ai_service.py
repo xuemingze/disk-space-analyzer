@@ -862,25 +862,31 @@ class AIService:
         }
         
         system_prompt = (
-            "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据与冗余文件列表，"
-            "进行深度分析，并严格以 JSON 格式输出结果。\n"
+            "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据（含原子实体集体与独立资产单元）与冗余列表，"
+            "进行深度全景分析，并严格以 JSON 格式输出结果。\n"
             "输出 JSON 格式要求: {\"markdown_report\": \"完整的 Markdown 格式报告文本\", \"chart_categories\": [{\"category\": \"分类名称\", \"bytes\": \"占用字节数(整数)\", \"percent\": \"占比(浮点数)\"}]}\n"
             "注意：在 JSON 中，markdown_report 字符串中的所有换行符必须严格转义为 \\n，严禁出现真实换行符。不能使用未转义的多行字符串。\n"
+            "【核心原则】：系统采用原子实体集体（软件/工程/模型/账套/缓存）防撕裂与聚合保全机制，对于目录集体资产必须作为一个整体提出治理建议，严禁建议拆散其内部子文件。\n"
             "报告必须包含：\n"
-            "1. 磁盘现状与健康度评估(0-100分与等级)\n"
+            "1. 磁盘现状与健康度评估(0-100分与等级，含资产单元总数、实体集体数与底层碎片聚合数)\n"
             "2. 空间构成与类型特征\n"
-            "3. 大文件与冗余分布\n"
-            "4. 重复文件浪费分析\n"
+            "3. 大资产与冗余分布(Top 超大资产清单及形态)\n"
+            "4. 重复资产浪费分析\n"
             "5. 分级治理与清理优化建议\n"
-            "6. 【核心执行清单】：必须输出一个 Markdown 表格，列出推荐处理的文件，表头必须包含：文件名、文件大小(GiB)、类别、路径摘要、原始绝对路径、风险等级、建议操作(如归档/清理/保留)、分析建议。"
+            "6. 【核心执行清单】：必须输出一个 Markdown 表格，列出推荐处理的资产单元，表头必须包含：资产名称、治理形态、资产大小、类别、路径摘要、原始绝对路径、风险等级、建议操作(如归档/清理/保留)、分析建议。"
         )
 
         redundant_samples = scan_summary.get("redundant_files", [])
         if len(redundant_samples) > 100:
             redundant_samples = [f for f in redundant_samples if f.get("is_recommended")] or redundant_samples[:100]
 
+        c_cnt = scan_summary.get("collective_count", 0)
+        s_cnt = scan_summary.get("standalone_file_count", 0)
         condensed = {
             "total_files": scan_summary.get("total_files"),
+            "collective_count": c_cnt,
+            "standalone_file_count": s_cnt,
+            "total_assets_count": c_cnt + s_cnt,
             "total_bytes": scan_summary.get("total_bytes"),
             "category_stats": scan_summary.get("category_stats"),
             "top_10_large_files": scan_summary.get("top_100_files", [])[:10],
@@ -960,6 +966,9 @@ class AIService:
         reclaim_b = summary.get("reclaimable_bytes", 0)
         dup_wasted_b = summary.get("duplicate_wasted_bytes", 0)
         total_files = summary.get("total_files", 0)
+        c_cnt = summary.get("collective_count", 0)
+        s_cnt = summary.get("standalone_file_count", 0)
+        tot_assets = c_cnt + s_cnt if (c_cnt + s_cnt) > 0 else total_files
         paths_str = ", ".join(summary.get("target_paths", []))
         
         redundancy_ratio = (reclaim_b + dup_wasted_b) / total_b if total_b > 0 else 0
@@ -969,6 +978,8 @@ class AIService:
         from datetime import datetime
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        asset_summary_str = f"`{tot_assets:,}` 项 (含 `{c_cnt}` 个原子实体集体, `{s_cnt}` 个独立单项资产，底层聚合 `{total_files:,}` 个物理碎片文件)" if c_cnt > 0 else f"`{total_files:,}` 个独立单项资产"
+
         lines = [
             "# 📊 磁盘空间全景深度分析与治理报告",
             "",
@@ -977,14 +988,14 @@ class AIService:
             "## 一、 磁盘存储健康度评估",
             "",
             f"- **综合健康度评分**：`{health_score} / 100` （评级：**{health_level}**）",
-            f"- **已扫描总文件数**：`{total_files:,}` 个",
+            f"- **扫描治理资产单元**：{asset_summary_str}",
             f"- **已扫描总数据量**：`{format_size(total_b)}`",
             f"- **检测到冗余与重复浪费**：`{format_size(reclaim_b + dup_wasted_b)}`",
             f"- **预期可释放空间比例**：`{redundancy_ratio*100:.2f}%`",
             "",
             "## 二、 空间占用类型分布",
             "",
-            "| 文件分类 | 占用空间 | 占用比例 | 文件数量 |",
+            "| 资产分类 | 占用空间 | 占用比例 | 资产单元数量 |",
             "| :--- | :--- | :--- | :--- |"
         ]
 
@@ -994,29 +1005,35 @@ class AIService:
 
         lines.extend([
             "",
-            "## 三、 全局 Top 10 超大文件排行",
+            "## 三、 全局 Top 10 超大资产排行 (>300MB 门槛筛选)",
             "",
-            "| 排名 | 文件名 | 类别 | 文件大小 | 绝对路径 |",
-            "| :--- | :--- | :--- | :--- | :--- |"
+            "| 排名 | 资产名称 | 治理形态 | 占用大小 | 包含子文件数 | 绝对路径 |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- |"
         ])
 
         top_files = summary.get("top_100_files", [])[:10]
-        for idx, tf in enumerate(top_files, 1):
-            lines.append(f"| #{idx} | `{tf['name']}` | {tf['category']} | {format_size(tf['size'])} | `{tf['path']}` |")
+        if top_files:
+            for idx, tf in enumerate(top_files, 1):
+                is_c = tf.get("is_directory_collective", False)
+                morphology = "📦 原子实体集体" if is_c else "📄 独立单项"
+                fc = f"{tf.get('file_count', 1):,} 个" if is_c else "1 个"
+                lines.append(f"| #{idx} | `{tf['name']}` | {morphology} | {format_size(tf['size'])} | {fc} | `{tf['path']}` |")
+        else:
+            lines.append("| - | *当前无超过 300MB 阈值的超大资产* | - | - | - | - |")
 
         lines.extend([
             "",
-            "## 四、 重复文件与冗余分析",
+            "## 四、 重复资产与冗余分析",
             "",
-            f"- **重复文件分组数**：`{summary.get('duplicate_groups_count', 0)}` 组",
+            f"- **确认重复资产组数**：`{summary.get('duplicate_groups_count', 0)}` 组",
             f"- **重复副本浪费空间**：`{format_size(dup_wasted_b)}`",
-            f"- **候选冗余文件清单数**：`{len(summary.get('redundant_files', []))}` 个",
+            f"- **候选可释放资产项**：`{len(summary.get('redundant_files', []))}` 项",
             "",
             "## 五、 智能治理与优化建议",
             "",
-            "1. **以工具链与目录为整体进行归档**：针对 Node.js / npm、pnpm、pip、Docker 等大型工具缓存，建议以目录为单位统一归档或清理，避免拆散文件破坏工具链完整性。",
-            "2. **优先处理重复副本与临时文件**：针对清单中已确认的重复副本进行安全清理或归档，可实现无损空间释放。",
-            "3. **超大归档包与媒体迁移**：针对 Top 大文件中的视频与安装包，建议利用「智能迁移」转移到空间充裕的独立磁盘。"
+            "1. **以原子实体集体为最小单位进行归档迁移**：针对独立软件目录、开发工程代码、Live2D虚拟角色及业务账套，必须保持整盘原子保全，严禁拆散内部关联文件。",
+            "2. **及时处置冗余归档包与安装程序**：针对同目录下已解压的 zip 冗余压缩包及已完成部署的 setup 安装程序，建议确认后迁移至独立备份盘或直接释放。",
+            "3. **优先处理重复副本与临时文件**：针对清单中已哈希确认的重复副本及临时缓存目录进行安全清理，实现无损空间释放。"
         ])
 
         return "\n".join(lines)

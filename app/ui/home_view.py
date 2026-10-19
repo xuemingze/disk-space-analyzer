@@ -262,22 +262,27 @@ class HomeView(QWidget):
         self.tabs = QTabWidget()
         
         self.chart_widget = SpaceDistributionChartWidget()
-        self.tabs.addTab(self.chart_widget, "📊 空间全景图与类型分布 (阶段一即显)")
+        self.tabs.addTab(self.chart_widget, "📊 空间全景图与景深分布 (阶段一即显)")
         
+        self.global_detail_table = FileDataGridWidget(is_selectable=True)
+        self.global_detail_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
+        self.global_detail_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
+        self.tabs.addTab(self.global_detail_table, "📑 全局扫描资产明细 (阶段一即显)")
+
         self.duplicate_table = FileDataGridWidget(is_selectable=True)
         self.duplicate_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.duplicate_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
-        self.tabs.addTab(self.duplicate_table, "📋 重复文件明细 (哈希确认)")
+        self.tabs.addTab(self.duplicate_table, "🔄 重复资产明细 (哈希确认)")
         
         self.releasable_table = FileDataGridWidget(is_selectable=True)
         self.releasable_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.releasable_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
-        self.tabs.addTab(self.releasable_table, "🗑️ 可释放文件明细 (规则识别)")
+        self.tabs.addTab(self.releasable_table, "🗑️ 可释放资产明细 (规则识别)")
         
         self.top100_table = FileDataGridWidget(is_selectable=True)
         self.top100_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.top100_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
-        self.tabs.addTab(self.top100_table, "🏆 全局 Top 100 超大文件 (阶段一即显)")
+        self.tabs.addTab(self.top100_table, "🏆 全局 Top 100 超大资产 (>300MB) (阶段一即显)")
         
         self.rollback_tab = RollbackWidget()
         self.tabs.addTab(self.rollback_tab, "🔙 归档快照与安全回滚 (安全审计)")
@@ -510,12 +515,14 @@ class HomeView(QWidget):
     def get_active_table(self) -> FileDataGridWidget:
         idx = self.tabs.currentIndex()
         if idx == 1:
-            return self.duplicate_table
+            return self.global_detail_table
         elif idx == 2:
-            return self.releasable_table
+            return self.duplicate_table
         elif idx == 3:
+            return self.releasable_table
+        elif idx == 4:
             return self.top100_table
-        return self.duplicate_table
+        return self.global_detail_table
 
     def open_task_manager(self):
         dlg = TaskManagerDialog(self)
@@ -594,7 +601,7 @@ class HomeView(QWidget):
     def on_scan_progress(self, current_dir: str, file_count: object, total_bytes: object):
         f_cnt = int(file_count)
         t_byt = int(total_bytes)
-        self.current_path_label.setText(f"已扫: {f_cnt:,} 文件 ({format_size(t_byt)}) | {str(current_dir)[:50]}...")
+        self.current_path_label.setText(f"已扫: {f_cnt:,} 个碎片文件 ({format_size(t_byt)}) | {str(current_dir)[:50]}...")
         if self.scan_task_id:
             global_task_manager.update_task_progress(
                 self.scan_task_id,
@@ -609,15 +616,35 @@ class HomeView(QWidget):
 
     def on_phase1_completed(self, p1_result: dict):
         self.phase_label.setText(f"✅ 阶段一完成 (耗时 {p1_result['elapsed_seconds']}s) - 正在进入阶段二哈希比对...")
+        c_cnt = p1_result.get("collective_count", 0)
+        s_cnt = p1_result.get("standalone_file_count", 0)
+        tot_assets = c_cnt + s_cnt
+        total_phys = p1_result.get("total_files", 0)
+        if c_cnt > 0:
+            files_str = f"{tot_assets:,} 项 ({c_cnt} 集体 / {s_cnt} 独立单项)"
+        else:
+            files_str = f"{total_phys:,} 个独立单项资产"
+
         self.stat_cards.update_stats(
             total_bytes_str=format_size(p1_result["total_bytes"]),
             reclaimable_str="比对中...",
-            files_count_str=f"{p1_result['total_files']:,} 个",
+            files_count_str=files_str,
             dup_waste_str="比对中...",
             dup_groups_count=p1_result.get("dup_candidate_groups_count", 0)
         )
+        self.stat_cards.card_total_files.title_label.setText("扫描资产单元总数")
+        if c_cnt > 0:
+            self.stat_cards.card_total_files.subtext_label.setText(f"已聚合封包 {total_phys:,} 碎片文件")
+
         self.chart_widget.update_chart(p1_result.get("category_stats", {}))
-        self.top100_table.populate_data(p1_result.get("top_100_files", []), p1_result["total_bytes"])
+        
+        all_files = p1_result.get("all_scanned_files", [])
+        self.global_detail_table.populate_data(all_files, p1_result["total_bytes"])
+        self.tabs.setTabText(1, f"📑 全局扫描资产明细 [{len(all_files)}]")
+
+        top_files = p1_result.get("top_100_files", [])
+        self.top100_table.populate_data(top_files, p1_result["total_bytes"])
+        self.tabs.setTabText(4, f"🏆 全局 Top 100 超大资产 (>300MB) [{len(top_files)}]")
         self.tabs.setCurrentIndex(0)
 
     def on_phase2_progress(self, proc_b: object, tot_b: object, speed: str, eta: int, cur_g: int, tot_g: int):
@@ -645,28 +672,50 @@ class HomeView(QWidget):
         self.phase_label.setText(f"🎉 全流程扫描完成 (总耗时 {result['total_elapsed_seconds']}s)")
         self.speed_label.setText("")
 
+        c_cnt = result.get("collective_count", 0)
+        s_cnt = result.get("standalone_file_count", 0)
+        tot_assets = c_cnt + s_cnt
+        total_phys = result.get("total_files", 0)
+        if c_cnt > 0:
+            files_str = f"{tot_assets:,} 项 ({c_cnt} 集体 / {s_cnt} 独立单项)"
+        else:
+            files_str = f"{total_phys:,} 个独立单项资产"
+
         self.stat_cards.update_stats(
             total_bytes_str=format_size(result["total_bytes"]),
             reclaimable_str=format_size(result["reclaimable_bytes"]),
-            files_count_str=f"{result['total_files']:,} 个",
+            files_count_str=files_str,
             dup_waste_str=format_size(result["duplicate_wasted_bytes"]),
             dup_groups_count=result["duplicate_groups_count"]
         )
+        self.stat_cards.card_total_files.title_label.setText("扫描资产单元总数")
+        if c_cnt > 0:
+            self.stat_cards.card_total_files.subtext_label.setText(f"已聚合封包 {total_phys:,} 碎片文件")
+
         all_redundant = result.get("redundant_files", [])
         duplicate_files = [f for f in all_redundant if f.get("is_duplicate")]
         releasable_files = [f for f in all_redundant if not f.get("is_duplicate")]
         
         self.duplicate_table.populate_data(duplicate_files, result["total_bytes"])
         self.releasable_table.populate_data(releasable_files, result["total_bytes"])
+        self.tabs.setTabText(2, f"🔄 重复资产明细 (哈希确认) [{len(duplicate_files)}]")
+        self.tabs.setTabText(3, f"🗑️ 可释放资产明细 (规则识别) [{len(releasable_files)}]")
+
+        all_files = result.get("all_scanned_files", [])
+        if all_files:
+            self.global_detail_table.populate_data(all_files, result["total_bytes"])
+            self.tabs.setTabText(1, f"📑 全局扫描资产明细 [{len(all_files)}]")
 
         if getattr(self, "scan_task_id", None):
             global_task_manager.set_task_status(self.scan_task_id, TaskStatus.COMPLETED)
             self.scan_task_id = None
 
         if duplicate_files:
-            self.tabs.setCurrentIndex(1)
-        elif releasable_files:
             self.tabs.setCurrentIndex(2)
+        elif releasable_files:
+            self.tabs.setCurrentIndex(3)
+        elif all_files:
+            self.tabs.setCurrentIndex(1)
 
         # 自动触发 AI 分析
         self.report_text_edit.setPlainText("⏳ 等待分析: 正在准备后台分析任务...")
@@ -674,7 +723,8 @@ class HomeView(QWidget):
 
         msg = (
             f"空间全景深度扫描已全部完成！\n"
-            f"索引文件: {result['total_files']:,} 个 ({format_size(result['total_bytes'])})\n"
+            f"共识别资产单元: {tot_assets:,} 项 (含 {c_cnt} 个原子实体集体, {s_cnt} 个独立单项资产)\n"
+            f"底层碎片文件聚合: {total_phys:,} 个 (总存储占用: {format_size(result['total_bytes'])})\n"
         )
         skipped = result.get("skipped_ignored_count", 0)
         if skipped > 0:
@@ -701,13 +751,28 @@ class HomeView(QWidget):
         self.progress_bar.setVisible(False)
 
     def on_redundant_selection_changed(self, count: object, total_bytes: object):
-        self.selection_stat_label.setText(f"已选中: {int(count)} 个文件 ({format_size(int(total_bytes))})")
+        table = self.get_active_table()
+        checked_paths = table.get_checked_paths()
+        c_sel = 0
+        for item in table.source_model._data:
+            if item.get("path") in checked_paths and item.get("is_directory_collective"):
+                c_sel += 1
+        f_sel = len(checked_paths) - c_sel
+        if c_sel > 0:
+            self.selection_stat_label.setText(
+                f"已选中: {len(checked_paths)} 个资产项 (含 {c_sel} 集体, {f_sel} 独立单项) | 容量: {format_size(int(total_bytes))}"
+            )
+        else:
+            self.selection_stat_label.setText(
+                f"已选中: {len(checked_paths)} 个独立单项资产 | 容量: {format_size(int(total_bytes))}"
+            )
 
     def open_migration_dialog_for_paths(self, paths: List[str]):
         if not paths:
             return
         dlg = MigrationDialog(selected_paths=paths, parent=self)
         if dlg.exec():
+            self.global_detail_table.remove_paths(paths)
             self.duplicate_table.remove_paths(paths)
             self.releasable_table.remove_paths(paths)
             self.top100_table.remove_paths(paths)
@@ -728,8 +793,10 @@ class HomeView(QWidget):
 
         llm_cfg = app_config.get("llm", default={})
         if not llm_cfg.get("api_key") or not llm_cfg.get("base_url"):
+            self.global_detail_table.select_recommended_only()
             self.duplicate_table.select_recommended_only()
             self.releasable_table.select_recommended_only()
+            self.top100_table.select_recommended_only()
             QMessageBox.information(self, "智能推荐", "已根据本地安全启发式规则完成推荐勾选！")
             return
 
@@ -786,8 +853,10 @@ class HomeView(QWidget):
                     
             safe_paths = [i["path"] for i in safe_items]
             
+            self.global_detail_table.select_ai_recommended_paths(safe_paths)
             self.duplicate_table.select_ai_recommended_paths(safe_paths)
             self.releasable_table.select_ai_recommended_paths(safe_paths)
+            self.top100_table.select_ai_recommended_paths(safe_paths)
             
             msg = f"大模型智能甄别已完成！\\n\\n"
             msg += f"✅ 自动勾选 (安全/低风险): {len(safe_paths)} 项\\n"
@@ -801,8 +870,10 @@ class HomeView(QWidget):
             msg += "\\n(注: 未执行任何删除/归档，您可继续在列表中修改勾选)"
             QMessageBox.information(self, "AI 推荐就绪与拦截报告", msg)
         else:
+            self.global_detail_table.select_recommended_only()
             self.duplicate_table.select_recommended_only()
             self.releasable_table.select_recommended_only()
+            self.top100_table.select_recommended_only()
             QMessageBox.information(self, "智能推荐", "已根据本地安全启发式规则完成推荐勾选！")
 
 
@@ -870,6 +941,7 @@ class HomeView(QWidget):
                     if "original_path" in item
                 ]
                 if processed_paths:
+                    self.global_detail_table.remove_paths(processed_paths)
                     self.duplicate_table.remove_paths(processed_paths)
                     self.releasable_table.remove_paths(processed_paths)
                     self.top100_table.remove_paths(processed_paths)
@@ -970,7 +1042,7 @@ class HomeView(QWidget):
 
         reply = QMessageBox.question(
             self, "确认后台归档",
-            f"即将把 {len(checked_paths)} 个勾选文件移入后台归档队列至:\n{archive_dir}\n\n"
+            f"即将把 {len(checked_paths)} 个勾选资产单元移入后台归档队列至:\n{archive_dir}\n\n"
             "归档将在后台多线程执行，界面将保持流畅无卡顿。是否立即启动？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
         )
@@ -1010,11 +1082,13 @@ class HomeView(QWidget):
         self.speed_label.setText("")
         self.phase_label.setText("✅ 归档任务已完成")
         
-        table = self.get_active_table()
-        # 从表格中安全移除
+        # 从四张表格中同步安全移除
         migrated = [item["original_path"] for item in summary.get("items", []) if "original_path" in item]
         if migrated:
-            table.remove_paths(migrated)
+            self.global_detail_table.remove_paths(migrated)
+            self.duplicate_table.remove_paths(migrated)
+            self.releasable_table.remove_paths(migrated)
+            self.top100_table.remove_paths(migrated)
 
         msg = (
             f"后台归档执行完成！\n"
@@ -1033,12 +1107,12 @@ class HomeView(QWidget):
         table = self.get_active_table()
         checked_paths = table.get_checked_paths()
         if not checked_paths:
-            QMessageBox.warning(self, "提示", "您尚未勾选任何需要清理的文件！")
+            QMessageBox.warning(self, "提示", "您尚未勾选任何需要清理的文件或实体！")
             return
 
         reply = QMessageBox.question(
             self, "确认清理",
-            f"您已选择清理 {len(checked_paths)} 个文件。\n\n"
+            f"您已选择清理 {len(checked_paths)} 个资产项。\n\n"
             f"点击「Yes」移入回收站（可撤销恢复）\n"
             f"点击「No」执行永久彻底删除（不可撤销）\n"
             f"点击「Cancel」取消本次操作",
@@ -1058,8 +1132,11 @@ class HomeView(QWidget):
         def on_del_finished(ok, summary):
             self.btn_cleanup.setEnabled(True)
             self.phase_label.setText("✅ 清理任务已完成")
-            table.remove_paths(checked_paths)
-            QMessageBox.information(self, "清理完成", f"已成功清理 {summary['success_count']} 个文件！")
+            self.global_detail_table.remove_paths(checked_paths)
+            self.duplicate_table.remove_paths(checked_paths)
+            self.releasable_table.remove_paths(checked_paths)
+            self.top100_table.remove_paths(checked_paths)
+            QMessageBox.information(self, "清理完成", f"已成功清理 {summary['success_count']} 个资产项！")
             
         self.del_worker.finished_signal.connect(on_del_finished)
         self.del_worker.start()

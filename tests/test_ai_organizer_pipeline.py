@@ -1213,6 +1213,282 @@ def test_source_umbrella_anchor_and_consensus_reconciliation(tmp_path):
         assert Path(r["target_root"]).as_posix().endswith(f"文档与多媒体资产 (Docs & Media)/live2D/{r['name']}")
 
 
+# ============================================================================
+# 16. 全局 Top 100 超大文件 300MB 阈值与实体集体入榜防撕裂测试
+# ============================================================================
+def test_scanner_top100_300mb_threshold_and_collective_protection(tmp_path):
+    import time
+    from unittest.mock import MagicMock
+    from PySide6.QtCore import Qt
+    from app.core.scanner import DirectoryScanTask, AggregateTask
+    from app.ui.components.data_table import FileTableModel
+
+    scan_dir = tmp_path / "scan_area"
+    scan_dir.mkdir()
+
+    # 1. 散装文件: 大于 300MB (400MB)
+    big_file = scan_dir / "large_archive.zip"
+    big_file.write_bytes(b"0" * 100) # 用 fake stat 模拟
+    
+    # 2. 散装文件: 小于 300MB (50MB)
+    mid_file = scan_dir / "medium_video.mp4"
+    mid_file.write_bytes(b"0" * 100)
+
+    # 3. 散装小文件 (10KB)
+    small_file = scan_dir / "readme.txt"
+    small_file.write_bytes(b"0" * 100)
+
+    # 4. 独立软件集体: 大于 300MB (350MB)
+    app_dir = scan_dir / "MySuperApp"
+    app_dir.mkdir()
+    (app_dir / "SuperApp.exe").write_bytes(b"0" * 100)
+    (app_dir / "app.dll").write_bytes(b"0" * 100)
+
+    # 5. 独立工程集体: 小于 300MB (80MB)
+    node_dir = scan_dir / "my_vue_project"
+    node_dir.mkdir()
+    (node_dir / "package.json").write_text(json.dumps({"name": "vue-prj"}), encoding="utf-8")
+
+    from contextlib import contextmanager
+
+    def make_file_entry(name, path, size):
+        e = MagicMock()
+        e.name = name
+        e.path = path
+        e.is_file.return_value = True
+        e.is_dir.return_value = False
+        m_stat = MagicMock()
+        m_stat.st_size = size
+        m_stat.st_mtime = 1700000000.0
+        e.stat.return_value = m_stat
+        return e
+
+    def make_dir_entry(name, path):
+        e = MagicMock()
+        e.name = name
+        e.path = path
+        e.is_file.return_value = False
+        e.is_dir.return_value = True
+        return e
+
+    entries = [
+        make_file_entry("large_archive.zip", str(big_file), 400 * 1024 * 1024),
+        make_file_entry("medium_video.mp4", str(mid_file), 50 * 1024 * 1024),
+        make_file_entry("readme.txt", str(small_file), 10 * 1024),
+        make_dir_entry("MySuperApp", str(app_dir)),
+        make_dir_entry("my_vue_project", str(node_dir)),
+    ]
+
+    @contextmanager
+    def mock_scandir(path):
+        yield iter(entries)
+
+    # 模拟集体检测
+    def mock_detect_directory_collective(dpath):
+        p_name = Path(dpath).name
+        if p_name == "MySuperApp":
+            return {
+                "type": "standalone_app",
+                "app_name": "MySuperApp",
+                "suggested_category": "软件安装与镜像 (Apps & Installers)"
+            }
+        if p_name == "my_vue_project":
+            return {
+                "type": "dev_project",
+                "project_name": "my_vue_project",
+                "suggested_category": "代码项目与依赖 (Dev & Code)"
+            }
+        return None
+
+    def mock_walk(top, *args, **kwargs):
+        p_name = Path(top).name
+        if p_name == "MySuperApp":
+            yield str(top), [], ["SuperApp.exe"]
+            return
+        elif p_name == "my_vue_project":
+            yield str(top), [], ["package.json"]
+            return
+        yield str(top), [], []
+
+    def mock_stat_collective(path, *args, **kwargs):
+        p_str = str(path)
+        m = MagicMock()
+        m.st_mtime = 1700000000.0
+        if "MySuperApp" in p_str:
+            m.st_size = 350 * 1024 * 1024  # 350MB
+            return m
+        if "my_vue_project" in p_str:
+            m.st_size = 80 * 1024 * 1024   # 80MB
+            return m
+        m.st_size = 100
+        return m
+
+    with patch("app.core.scanner.os.scandir", side_effect=mock_scandir):
+        with patch("app.core.scanner.os.stat", side_effect=mock_stat_collective):
+            with patch("app.core.scanner.os.walk", side_effect=mock_walk):
+                with patch("app.core.app_detector.AppDetector.detect_directory_collective", side_effect=mock_detect_directory_collective):
+                    task = DirectoryScanTask(
+                        target_paths=[str(scan_dir)],
+                        skip_system_protected=False,
+                        enable_duplicate_detection=False,
+                        prune_collectives=True,
+                        min_top_file_size=300 * 1024 * 1024
+                    )
+                    captured_result = {}
+                    errors = []
+                    task.finished_ok.connect(lambda res: captured_result.update(res))
+                    task.error.connect(lambda err: errors.append(err))
+                    task.run()
+                    if errors:
+                        raise RuntimeError(f"ScanTask errors: {errors}")
+
+                top_files = captured_result.get("top_100_files", [])
+                
+                # 核心断言 1: 仅有超过 300MB 的文件和集体入选，绝不硬凑数
+                # 只有 big_file (400MB) 和 MySuperApp (350MB) 满足 >= 300MB
+                assert len(top_files) == 2, f"应该仅有 2 个 >= 300MB 项入榜，实际为 {len(top_files)} 个"
+                
+                # 核心断言 2: 验证入榜项全部 >= 300MB
+                for item in top_files:
+                    assert item["size"] >= 300 * 1024 * 1024, f"文件 {item['name']} 大小未达到 300MB"
+
+                # 核心断言 3: 验证原子软件集体作为整体入榜并标明 collective
+                app_in_top = [f for f in top_files if f["name"] == "MySuperApp"]
+                assert len(app_in_top) == 1
+                assert app_in_top[0]["is_directory_collective"] is True
+                assert app_in_top[0]["size"] == 350 * 1024 * 1024
+
+                # 核心断言 4: 80MB 的工程和 50MB 的中等文件绝对不可入榜
+                assert not any("medium_video" in f["name"] for f in top_files)
+                assert not any("my_vue_project" in f["name"] for f in top_files)
+                assert not any("readme" in f["name"] for f in top_files)
+
+                # 核心断言 5: 验证 AggregateTask 对原子集体的防撕裂保护
+                agg_task = AggregateTask(
+                    target_paths=[str(scan_dir)],
+                    all_scanned_files=captured_result["all_scanned_files"],
+                    file_to_duplicate_group={},
+                    duplicate_groups={},
+                    total_start_time=time.time(),
+                    p1_duration=1.0,
+                    p2_duration=0.5,
+                    cache_hits=0
+                )
+                agg_result = {}
+                agg_task.finished_ok.connect(lambda r: agg_result.update(r))
+                agg_task.run()
+
+                redundant = agg_result.get("redundant_files", [])
+                # 没有任何原子集体被当成单纯垃圾推荐删除
+                assert not any(r.get("is_directory_collective") and r.get("is_recommended") for r in redundant)
+
+                # 核心断言 6: 验证 UI FileTableModel 渲染标签与颜色
+                model = FileTableModel(data_list=top_files, is_selectable=True)
+                col1_text_0 = model.data(model.index(0, 1), Qt.DisplayRole)
+                col1_text_1 = model.data(model.index(1, 1), Qt.DisplayRole)
+                # 必须有一项包含 [独立软件: MySuperApp]
+                assert any("📦 [独立软件: MySuperApp]" in txt for txt in [col1_text_0, col1_text_1])
+
+
+# ============================================================================
+# 17. 主控扫描全枚举清单重构：资产形态、语义铭牌、可释放启发式与集体哈希测试
+# ============================================================================
+def test_scan_enumeration_overhaul_and_collective_asset_sync(tmp_path):
+    from PySide6.QtCore import Qt
+    from app.core.app_detector import AppDetector
+    from app.utils.file_helper import get_heuristic_redundant_tag, calculate_file_hash, calculate_partial_hash
+    from app.ui.components.data_table import FileTableModel
+    from app.core.ai_service import AIService
+
+    test_root = tmp_path / "test_enum"
+    test_root.mkdir()
+
+    # 1. 验证启发式标记: 安装包、冲突副本、同名已解压压缩包
+    installer_file = test_root / "SteamSetup.exe"
+    installer_file.write_bytes(b"MZ" * 10)
+    tag_res1 = get_heuristic_redundant_tag(str(installer_file))
+    assert tag_res1 is not None
+    assert tag_res1[0] == "软件安装程序"
+    assert tag_res1[2] is True
+
+    conflict_file = test_root / "contract (1).xlsx"
+    conflict_file.write_bytes(b"DATA")
+    tag_res2 = get_heuristic_redundant_tag(str(conflict_file))
+    assert tag_res2 is not None
+    assert tag_res2[0] == "同步与历史副本"
+    assert tag_res2[2] is True
+
+    # 解压后冗余压缩包测试
+    archive_folder = test_root / "my_project_v1"
+    archive_folder.mkdir()
+    (archive_folder / "file.txt").write_text("ok")
+    zip_file = test_root / "my_project_v1.zip"
+    zip_file.write_bytes(b"PK")
+    tag_res3 = get_heuristic_redundant_tag(str(zip_file))
+    assert tag_res3 is not None
+    assert tag_res3[0] == "已解压冗余归档包"
+    assert tag_res3[2] is True
+
+    # 2. 验证财务/明细账套集体识别 (泰润明细)
+    detail_dir = test_root / "泰润明细"
+    detail_dir.mkdir()
+    (detail_dir / "进货明细.xlsx").write_text("sheet")
+    (detail_dir / "单据.jpg").write_bytes(b"JPG")
+    c_detail = AppDetector.detect_directory_collective(str(detail_dir))
+    assert c_detail is not None
+    assert c_detail["is_collective"] is True
+    assert c_detail["collective_type"] == "业务账套集体"
+
+    # 3. 验证目录集体哈希支持 (杜绝 PermissionError)
+    dir_a = test_root / "CollectiveA"
+    dir_a.mkdir()
+    (dir_a / "sub.txt").write_text("same content", encoding="utf-8")
+    dir_b = test_root / "CollectiveB"
+    dir_b.mkdir()
+    (dir_b / "sub.txt").write_text("same content", encoding="utf-8")
+
+    part_a = calculate_partial_hash(str(dir_a))
+    part_b = calculate_partial_hash(str(dir_b))
+    assert part_a is not None and part_b is not None
+    assert part_a == part_b
+
+    full_a = calculate_file_hash(str(dir_a))
+    full_b = calculate_file_hash(str(dir_b))
+    assert full_a is not None and full_b is not None
+    assert full_a == full_b
+
+    # 4. 验证 FileTableModel 外显铭牌渲染杜绝零碎散装文件文案
+    sample_items = [
+        {"name": "installer.exe", "path": str(installer_file), "size": 1000, "category": "软件安装与程序 (Apps & Installers)", "tag": "软件安装程序", "phase_status": "规则识别 (软件安装程序)"},
+        {"name": "泰润明细", "path": str(detail_dir), "size": 5000, "category": "文档报表与账套 (Docs & Business)", "tag": "原子保全 (业务账套集体)", "phase_status": "阶段一已归类 (原子保全)", "is_directory_collective": True, "file_count": 2, "collective_info": c_detail},
+        {"name": "my_project_v1.zip", "path": str(zip_file), "size": 2000, "category": "归档包与系统镜像 (Archives & Images)", "tag": "已解压冗余归档包", "phase_status": "规则识别 (已解压冗余归档包)"}
+    ]
+    model = FileTableModel(sample_items, is_selectable=True)
+    for r in range(model.rowCount()):
+        name_text = model.data(model.index(r, 1), Qt.DisplayRole)
+        # 绝不出现原始碎文件描述
+        assert "散装文件" not in name_text
+        assert any(prefix in name_text for prefix in ["📦", "🗜️", "📂", "📑", "💻", "🎨", "📄"])
+
+    # 5. 验证降级报告的资产单元统计
+    summary_data = {
+        "target_paths": [str(test_root)],
+        "total_bytes": 100000,
+        "reclaimable_bytes": 50000,
+        "duplicate_wasted_bytes": 0,
+        "total_files": 25,
+        "collective_count": 2,
+        "standalone_file_count": 5,
+        "category_stats": {},
+        "top_100_files": []
+    }
+    report = AIService._generate_fallback_report(summary_data)
+    assert "扫描治理资产单元" in report
+    assert "`7` 项 (含 `2` 个原子实体集体, `5` 个独立单项资产，底层聚合 `25` 个物理碎片文件)" in report
+
+
+
+
 
 
 
