@@ -924,6 +924,218 @@ class AppDetector:
         return False, None
 
     @classmethod
+    def _detect_umbrella_from_name(cls, name: str, known_umbrellas: Optional[Set[str]] = None) -> Optional[str]:
+        """从文件或目录名称中检测匹配的泛目录关键词（用于游离孤儿散件归巢吸引）"""
+        low = name.lower()
+        if "live2d" in low:
+            return "live2D"
+        if "经控" in name:
+            return "经控"
+        # 排除包含 setup, install, 软件, app 等应用安装程序关键字
+        if "发票" in name and not any(k in low for k in ["setup", "install", "软件", "app", ".exe", "msi"]):
+            return "发票"
+        if "泰润" in name:
+            return "泰润明细"
+        if known_umbrellas:
+            for k in sorted(known_umbrellas, key=len, reverse=True):
+                if len(k) >= 2 and k.lower() in low:
+                    return k
+        return None
+
+    @classmethod
+    def _normalize_umbrella_name(cls, top_dir: str, sub_name: str = "") -> Optional[str]:
+        """规整源泛目录名称，去除末尾日期/版本后缀并归聚子级语义"""
+        if not top_dir:
+            return None
+        low = top_dir.lower()
+        COMMON_CONTAINERS = {"downloads", "desktop", "documents", "temp", "tmp", "misc", "recycle.bin", "recycler"}
+        if low in COMMON_CONTAINERS:
+            if sub_name:
+                return cls._detect_umbrella_from_name(sub_name)
+            return None
+
+        if "live2d" in low:
+            return "live2D"
+        if "经控" in top_dir or (sub_name and "经控" in sub_name):
+            return "经控"
+        if "发票" in top_dir:
+            if sub_name and "经控" in sub_name:
+                return "经控"
+            return "发票"
+        if "泰润" in top_dir:
+            return "泰润明细"
+
+        # 通用语义规整：去除末尾的日期、月份、版本号（如 '项目2025' -> '项目'，'经控9月' -> '经控'）
+        base = re.sub(r'[\-_]?(?:20\d\d[-_]?\d*|v?\d+(?:\.\d+)*|\d+月).*$', '', top_dir, flags=re.I).strip()
+        if base and len(base) >= 2:
+            return base
+        return top_dir
+
+    @classmethod
+    def extract_source_umbrella(
+        cls,
+        item_path: str,
+        scan_roots: Optional[List[str]] = None,
+        known_umbrellas: Optional[Set[str]] = None
+    ) -> Optional[str]:
+        """
+        从文件/目录路径提取所属的源泛目录锚点 (Source Umbrella Anchor)。
+        例如：E:\\共用文件\\live2D\\西域舞女 -> 'live2D'
+              E:\\共用文件\\发票\\7月发票 -> '发票'
+              E:\\共用文件\\发票\\经控8月 -> '经控'
+              E:\\共用文件\\经控9月 -> '经控'
+              E:\\共用文件\\08月经控送货单发票明细及汇总.xlsx -> '经控'
+        """
+        p = Path(item_path)
+        norm_p_str = os.path.normpath(item_path)
+        COMMON_CONTAINERS = {"downloads", "desktop", "documents", "temp", "tmp", "misc", "recycle.bin", "recycler"}
+
+        # 1. 尝试匹配 scan_roots
+        best_root = None
+        if scan_roots:
+            for r in scan_roots:
+                if not r:
+                    continue
+                norm_r = os.path.normpath(r)
+                if norm_p_str.lower().startswith(norm_r.lower()):
+                    if best_root is None or len(norm_r) > len(best_root):
+                        best_root = norm_r
+
+        if best_root:
+            try:
+                rel = Path(norm_p_str).relative_to(Path(best_root))
+                parts = rel.parts
+                if len(parts) >= 2:
+                    top_dir = parts[0]
+                    sub_name = parts[1] if len(parts) > 1 else ""
+                    return cls._normalize_umbrella_name(top_dir, sub_name)
+                elif len(parts) == 1:
+                    name = parts[0]
+                    detected = cls._detect_umbrella_from_name(name, known_umbrellas)
+                    if detected:
+                        return detected
+                    try:
+                        if (Path(best_root) / name).is_dir():
+                            return cls._normalize_umbrella_name(name)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # 2. 若未匹配到明确的 scan_root，回溯父目录层级推测
+        if len(p.parts) >= 2:
+            detected = cls._detect_umbrella_from_name(p.name, known_umbrellas)
+            if detected:
+                return detected
+            if p.parent and len(p.parent.parts) >= 1:
+                if p.parent.name.lower() in COMMON_CONTAINERS:
+                    return None
+                detected_parent = cls._detect_umbrella_from_name(p.parent.name, known_umbrellas)
+                if detected_parent:
+                    return detected_parent
+                if len(p.parents) >= 2:
+                    if p.parents[1].name.lower() in COMMON_CONTAINERS:
+                        return None
+                    detected_grand = cls._detect_umbrella_from_name(p.parents[1].name, known_umbrellas)
+                    if detected_grand:
+                        return detected_grand
+                    return cls._normalize_umbrella_name(p.parent.name)
+
+        return None
+
+    @classmethod
+    def reconcile_umbrella_consensus(
+        cls,
+        grouped_units: List[Dict[str, Any]],
+        destination_root: str,
+        options: Optional[OrganizeOptions] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        源路径同源同宿收敛器 (Cluster Consensus Reconciler)：
+        对同一 source_umbrella (源泛目录锚点) 下的所有聚合单元与文件进行多数表决与同构保全，
+        确保同源泛目录不分裂、同源同宿收敛到同一一级分类，且 recommended_subpath 保持同源泛目录基准。
+        """
+        if not grouped_units:
+            return grouped_units
+
+        dest_root_p = Path(destination_root)
+
+        # 1. 按 source_umbrella 分组单元
+        umbrella_groups: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for unit in grouped_units:
+            umb = unit.get("source_umbrella")
+            # 排除已识别的独立软件集体与开发工程集体，App 主体不参与业务泛目录平移收敛
+            c_info = unit.get("collective_info") or {}
+            c_type = c_info.get("collective_type", "")
+            if c_type in ["独立软件集体", "开发工程集体"]:
+                continue
+            if umb:
+                umbrella_groups[umb].append(unit)
+
+        # 2. 对每个泛目录集合执行共识收敛
+        for umb, units in umbrella_groups.items():
+            if not units:
+                continue
+
+            # 多数表决一级分类 (suggested_category)
+            # 排除未分类/待确认项，优先采用具体业务分类
+            cat_scores: Dict[str, float] = defaultdict(float)
+            for u in units:
+                cat = u.get("suggested_category", "")
+                conf = float(u.get("confidence", 0.5))
+                if cat and cat not in ["未分类/待人工确认", "未识别工具/待分类", "系统关键/需人工确认"]:
+                    cat_scores[cat] += conf + 1.0  # 票数权重 + 置信度加成
+
+            if cat_scores:
+                consensus_cat = max(cat_scores.items(), key=lambda x: x[1])[0]
+            else:
+                consensus_cat = units[0].get("suggested_category", "文档与多媒体资产 (Docs & Media)")
+
+            clean_umb = sanitize_subpath(umb)
+
+            # 3. 将共识分类与泛目录子路径应用到同源的所有单元
+            for u in units:
+                old_cat = u.get("suggested_category", "")
+                u["suggested_category"] = consensus_cat
+                u["source_umbrella"] = umb
+                u["recommended_subpath"] = clean_umb
+
+                # 若分类发生收敛修正，记录佐证依据
+                if old_cat != consensus_cat and old_cat not in ["", "未分类/待人工确认"]:
+                    u["rationale"] = (u.get("rationale", "") + f" [同源泛目录 '{umb}' 共识收敛至 '{consensus_cat}']").strip()
+
+                # 重新计算目标路径
+                root_p = Path(u["original_root"])
+                is_dir = u.get("is_directory_group", False)
+                sub_p = Path(clean_umb)
+
+                if is_dir:
+                    if root_p.name.lower() == sub_p.name.lower() or root_p.name.lower() in [part.lower() for part in sub_p.parts]:
+                        new_target_base = dest_root_p / consensus_cat / sub_p
+                    else:
+                        new_target_base = dest_root_p / consensus_cat / sub_p / root_p.name
+                else:
+                    new_target_base = dest_root_p / consensus_cat / sub_p
+
+                u["target_root"] = str(new_target_base)
+
+                # 同步更新所有子项的目标路径
+                for sub in u.get("sub_items", []):
+                    sub_p_orig = sub.get("original_path", "")
+                    if is_dir:
+                        rel = sub.get("relative_path")
+                        if not rel or rel == ".":
+                            try:
+                                rel = str(Path(sub_p_orig).relative_to(root_p))
+                            except Exception:
+                                rel = sub.get("name", Path(sub_p_orig).name)
+                        sub["target_path"] = str(new_target_base / Path(rel))
+                    else:
+                        sub["target_path"] = str(new_target_base / Path(sub.get("name", Path(sub_p_orig).name)))
+
+        return grouped_units
+
+    @classmethod
     def generate_heuristic_subpath(
         cls,
         group_key: str,
@@ -931,7 +1143,8 @@ class AppDetector:
         app_info: Dict[str, Any],
         is_dir_group: bool,
         mode: OrganizeMode = OrganizeMode.COMPREHENSIVE,
-        lang: str = "zh"
+        lang: str = "zh",
+        source_umbrella: Optional[str] = None
     ) -> str:
         """
         根据整理模式 (综合/按类型/按前缀/按日期/按应用) 与命名语言，
@@ -1015,6 +1228,12 @@ class AppDetector:
                 return sanitize_subpath(clean_app)
 
         # 5. 综合整理模式 (Comprehensive)
+        # 优先锚定源泛目录 (Source Umbrella Preservation): 若明确属于源泛目录 (如 live2D, 经控, 发票)，整盘保全该主干
+        if source_umbrella:
+            clean_umb = sanitize_subpath(source_umbrella)
+            if clean_umb:
+                return clean_umb
+
         # 针对特定业务关键词智能细化（发票、合同、简历、日志等）
         p_name = Path(group_key).name.lower()
         names_text = (p_name + " " + " ".join([it.get("name", "") for it in items[:10]])).lower()
@@ -1110,6 +1329,33 @@ class AppDetector:
 
         dest_root_path = Path(destination_root)
         
+        # 解析扫描根集合 (scan_roots) 与已知泛目录索引
+        scan_roots_set = set()
+        for it in file_items:
+            sr = it.get("scan_root")
+            if sr:
+                scan_roots_set.add(os.path.normpath(sr))
+        if not scan_roots_set and file_items:
+            all_valid_paths = [it.get("path") or it.get("original_path", "") for it in file_items if it.get("path") or it.get("original_path")]
+            if all_valid_paths:
+                try:
+                    common_p = os.path.commonpath(all_valid_paths)
+                    if common_p and len(Path(common_p).parts) > 1:
+                        scan_roots_set.add(os.path.normpath(common_p))
+                except Exception:
+                    pass
+        scan_roots_list = list(scan_roots_set)
+
+        # 预先扫描发掘已存在的源泛目录集合 (known_umbrellas)
+        known_umbrellas: Set[str] = set()
+        for it in file_items:
+            fpath = it.get("path") or it.get("original_path", "")
+            if not fpath:
+                continue
+            umb = cls.extract_source_umbrella(fpath, scan_roots_list)
+            if umb:
+                known_umbrellas.add(umb)
+
         # 构建扫描文件集合内的项目工程根目录快速索引
         project_marker_names = {
             "package.json": ("Node.js", "代码项目与依赖 (Dev & Code)"),
@@ -1177,11 +1423,23 @@ class AppDetector:
             matched_tool_root = None
             matched_collective_info = None
 
+            item_scan_root = item.get("scan_root")
+            if not item_scan_root and scan_roots_list:
+                for sr in scan_roots_list:
+                    if fpath.lower().startswith(sr.lower()):
+                        item_scan_root = sr
+                        break
+
             # 1. 优先自顶向下检查祖先路径中最外层的“软件/工程集体”特征探测器 (detect_directory_collective)
-            # 优先锚定最外层项目工程根，防止嵌套子工具(如 it-tool)被从父项目集体中撕裂
+            # 优先锚定最外层项目工程根，防止嵌套子工具(如 it-tool)被从父项目集体中撕裂 (严格限定在 scan_root 边界之内)
             for parent in reversed(list(p.parents)):
                 if str(parent) == str(parent.parent) or len(parent.parts) <= 2:
                     continue
+                if item_scan_root:
+                    try:
+                        parent.relative_to(Path(item_scan_root))
+                    except ValueError:
+                        continue
                 c_cand = cls.detect_directory_collective(parent)
                 if c_cand:
                     matched_tool_root = str(parent)
@@ -1217,6 +1475,11 @@ class AppDetector:
             # 3. 再次匹配独立项目工程根目录索引
             if not matched_tool_root:
                 for parent in [p] + list(p.parents):
+                    if item_scan_root:
+                        try:
+                            parent.relative_to(Path(item_scan_root))
+                        except ValueError:
+                            continue
                     parent_str_lower = str(parent).lower()
                     if parent_str_lower in discovered_project_roots:
                         matched_proj_path, (proj_app, proj_cat) = discovered_project_roots[parent_str_lower]
@@ -1240,7 +1503,8 @@ class AppDetector:
             else:
                 is_in_common_container = (
                     p.parent.name.lower() in common_container_names or
-                    len(p.parent.parts) <= 2
+                    len(p.parent.parts) <= 2 or
+                    (item_scan_root and str(p.parent).lower() == item_scan_root.lower())
                 )
                 if not is_in_common_container and p.parent and len(p.parent.parts) > 1:
                     group_key = str(p.parent)
@@ -1258,6 +1522,19 @@ class AppDetector:
                     "items": []
                 }
             group_root_info[group_key]["items"].append(item)
+
+        # 为每个聚合单元计算源泛目录锚点 (source_umbrella) 并进行向心孤儿归巢 (Orphan Attraction)
+        for group_key, gdata in group_root_info.items():
+            c_info = gdata["app_info"].get("collective_info") or {}
+            # 独立软件集体与开发工程集体作为独立App主体，不归入普通文件泛目录
+            if c_info.get("collective_type") in ["独立软件集体", "开发工程集体"]:
+                gdata["source_umbrella"] = None
+                continue
+            umb = cls.extract_source_umbrella(group_key, scan_roots_list, known_umbrellas)
+            if not umb and not gdata["is_directory_group"] and gdata["items"]:
+                first_name = gdata["items"][0].get("name", Path(group_key).name)
+                umb = cls._detect_umbrella_from_name(first_name, known_umbrellas)
+            gdata["source_umbrella"] = umb
 
         # 2. 生成结构化分组单元列表
         grouped_results: List[Dict[str, Any]] = []
@@ -1303,21 +1580,31 @@ class AppDetector:
             if confidence < options.min_confidence:
                 require_conf = True
 
-            # 生成高质量的推荐子路径
-            recommended_subpath = cls.generate_heuristic_subpath(
-                group_key=group_key,
-                items=items_in_group,
-                app_info=app_info,
-                is_dir_group=gdata["is_directory_group"],
-                mode=options.mode,
-                lang=options.naming_language
-            )
+            # 优先采用集体/软件已识别的推荐子路径 (如 应用软件/xxx)
+            c_info = app_info.get("collective_info") or {}
+            if c_info.get("recommended_subpath"):
+                recommended_subpath = c_info["recommended_subpath"]
+            else:
+                # 生成高质量的推荐子路径 (注入源泛目录锚点)
+                recommended_subpath = cls.generate_heuristic_subpath(
+                    group_key=group_key,
+                    items=items_in_group,
+                    app_info=app_info,
+                    is_dir_group=gdata["is_directory_group"],
+                    mode=options.mode,
+                    lang=options.naming_language,
+                    source_umbrella=gdata.get("source_umbrella")
+                )
 
-            # 建议目标路径
+            # 建议目标路径 (防止重名重复嵌套)
             cat_name = app_info["suggested_category"]
             if gdata["is_directory_group"]:
                 if recommended_subpath:
-                    target_base_dir = dest_root_path / cat_name / Path(recommended_subpath) / root_p.name
+                    sub_p = Path(recommended_subpath)
+                    if root_p.name.lower() == sub_p.name.lower() or root_p.name.lower() in [part.lower() for part in sub_p.parts]:
+                        target_base_dir = dest_root_path / cat_name / sub_p
+                    else:
+                        target_base_dir = dest_root_path / cat_name / sub_p / root_p.name
                 else:
                     target_base_dir = dest_root_path / cat_name / root_p.name
             else:
@@ -1365,6 +1652,7 @@ class AppDetector:
                 "name": root_p.name or group_key,
                 "original_root": gdata["root_path"],
                 "scan_root": items_in_group[0].get("scan_root", "") if items_in_group else "",
+                "source_umbrella": gdata.get("source_umbrella") or "",
                 "target_root": str(target_base_dir),
                 "is_directory_group": gdata["is_directory_group"],
                 "is_symlink": is_link,
@@ -1386,4 +1674,6 @@ class AppDetector:
             }
             grouped_results.append(group_unit)
 
+        # 执行源路径同源同宿收敛与源路径同构保全
+        grouped_results = cls.reconcile_umbrella_consensus(grouped_results, destination_root, options)
         return grouped_results

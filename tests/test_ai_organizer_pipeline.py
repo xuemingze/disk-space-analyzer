@@ -1070,5 +1070,149 @@ def test_semantic_granularity_broad_narrow_hierarchy(tmp_path):
         assert g["name"] in g["target_root"]
 
 
+# ============================================================================
+# 8. 源路径同源同宿收敛与源路径同构保全测试
+# ============================================================================
+def test_source_umbrella_anchor_and_consensus_reconciliation(tmp_path):
+    scan_root = tmp_path / "共用文件"
+    scan_root.mkdir()
+
+    # 1. 创建 Live2D 泛目录及其同源子项 (模型、角色素材、散装压缩包、预览图)
+    live2d_dir = scan_root / "live2D"
+    live2d_dir.mkdir()
+    
+    xiyu_dir = live2d_dir / "Live2D模型-Xiyu.4096"
+    xiyu_dir.mkdir()
+    (xiyu_dir / "Xiyu.model3.json").write_text("{}", encoding="utf-8")
+    (xiyu_dir / "Xiyu.moc3").write_bytes(b"\x00\x01\x02")
+
+    dancer_dir = live2d_dir / "西域舞女"
+    dancer_dir.mkdir()
+    (dancer_dir / "dancer.model3.json").write_text("{}", encoding="utf-8")
+    (dancer_dir / "texture_00.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    devil_dir = live2d_dir / "小恶魔"
+    devil_dir.mkdir()
+    (devil_dir / "devil.model3.json").write_text("{}", encoding="utf-8")
+
+    (live2d_dir / "preview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (live2d_dir / "小恶魔.zip").write_bytes(b"PK\x03\x04")
+
+    # 2. 创建发票与经控泛目录同源子项
+    invoice_dir = scan_root / "发票"
+    invoice_dir.mkdir()
+    inv_july = invoice_dir / "7月发票"
+    inv_july.mkdir()
+    (inv_july / "0701_inv.pdf").write_bytes(b"%PDF-1.4")
+
+    inv_aug = invoice_dir / "8月发票"
+    inv_aug.mkdir()
+    (inv_aug / "0801_inv.pdf").write_bytes(b"%PDF-1.4")
+
+    jk_aug = invoice_dir / "经控8月"
+    jk_aug.mkdir()
+    (jk_aug / "jk_summary.xlsx").write_bytes(b"PK\x03\x04")
+
+    # 3. 根目录下的孤儿散件
+    orphan_jk_file = scan_root / "08月经控送货单发票明细及汇总.xlsx"
+    orphan_jk_file.write_bytes(b"PK\x03\x04")
+
+    # 4. 独立软件集体 (不应被泛目录错误收敛)
+    app_dir = scan_root / "发票明细开具软件-v2.3.4"
+    app_dir.mkdir()
+    (app_dir / "发票明细开具软件.exe").write_bytes(b"MZ\x90\x00")
+    (app_dir / "_internal").mkdir()
+    (app_dir / "_internal" / "python312.dll").write_bytes(b"MZ\x90\x00")
+
+    # 扫描收集
+    task = DirectoryScanTask(
+        target_paths=[str(scan_root)],
+        skip_system_protected=False,
+        enable_duplicate_detection=False,
+        prune_collectives=True
+    )
+    res = {}
+    task.finished_ok.connect(lambda r: res.update(r))
+    task.run()
+
+    scanned_files = res["all_scanned_files"]
+    dest_root = str(tmp_path / "归档目标")
+
+    # 执行分组与离线同源泛目录收敛
+    opts = OrganizeOptions(mode=OrganizeMode.COMPREHENSIVE, naming_language="zh")
+    grouped = AppDetector.group_files_by_parent_or_tool(scanned_files, dest_root, options=opts)
+
+    # 验证泛目录锚点提取
+    live2d_units = [g for g in grouped if g.get("source_umbrella") == "live2D"]
+    assert len(live2d_units) >= 3, "所有 live2D 模型、角色与压缩包散件必须识别为同一 source_umbrella 'live2D'"
+
+    # 验证同源同宿：所有 live2D 单元的 recommended_subpath 均统一收敛为 'live2D'
+    for u in live2d_units:
+        assert u["recommended_subpath"] == "live2D"
+        # 目标路径必须以 live2D 为基准
+        assert "live2D" in u["target_root"]
+        # 且不存在重复嵌套 live2D/live2D
+        assert "live2D/live2D" not in Path(u["target_root"]).as_posix()
+
+    # 验证经控孤儿文件归巢吸引
+    jk_units = [g for g in grouped if g.get("source_umbrella") == "经控"]
+    assert any("08月经控送货单" in g["name"] for g in jk_units), "孤儿经控汇总文件必须成功归巢至 '经控' 泛目录"
+    for u in jk_units:
+        assert u["recommended_subpath"] == "经控"
+        assert "经控" in u["target_root"]
+
+    # 验证独立软件集体隔离保全
+    app_units = [g for g in grouped if "发票明细开具软件" in g["name"]]
+    assert len(app_units) == 1
+    app_u = app_units[0]
+    assert app_u["suggested_category"] == "软件安装与镜像 (Apps & Installers)"
+    assert app_u.get("collective_info", {}).get("collective_type") == "独立软件集体"
+    # 软件集体不能被误修改为发票/经控文档子路径
+    assert app_u["recommended_subpath"] != "发票"
+    assert app_u["recommended_subpath"] != "经控"
+
+    # 验证多批次模拟 AI 分歧时的模型共识强制收敛
+    mock_ai_groups = [
+        {
+            "original_root": str(xiyu_dir),
+            "name": "Live2D模型-Xiyu.4096",
+            "source_umbrella": "live2D",
+            "is_directory_group": True,
+            "suggested_category": "文档与多媒体资产 (Docs & Media)",
+            "confidence": 0.95,
+            "rationale": "Live2D模型",
+            "sub_items": [{"original_path": str(xiyu_dir / "Xiyu.model3.json"), "name": "Xiyu.model3.json"}]
+        },
+        {
+            "original_root": str(dancer_dir),
+            "name": "西域舞女",
+            "source_umbrella": "live2D",
+            "is_directory_group": True,
+            "suggested_category": "文档与多媒体资产 (Docs & Media)",
+            "confidence": 0.90,
+            "rationale": "角色素材",
+            "sub_items": [{"original_path": str(dancer_dir / "dancer.model3.json"), "name": "dancer.model3.json"}]
+        },
+        {
+            "original_root": str(devil_dir),
+            "name": "小恶魔",
+            "source_umbrella": "live2D",
+            "is_directory_group": True,
+            "suggested_category": "代码项目与依赖 (Dev & Code)",
+            "confidence": 0.70,
+            "rationale": "模型错误预测",
+            "sub_items": [{"original_path": str(devil_dir / "devil.model3.json"), "name": "devil.model3.json"}]
+        }
+    ]
+
+    reconciled = AppDetector.reconcile_umbrella_consensus(mock_ai_groups, dest_root, opts)
+    for r in reconciled:
+        # 多数表决后，偏离的 "代码项目与依赖" 必须被强行收敛对齐为 "文档与多媒体资产 (Docs & Media)"
+        assert r["suggested_category"] == "文档与多媒体资产 (Docs & Media)"
+        assert r["recommended_subpath"] == "live2D"
+        assert Path(r["target_root"]).as_posix().endswith(f"文档与多媒体资产 (Docs & Media)/live2D/{r['name']}")
+
+
+
 
 

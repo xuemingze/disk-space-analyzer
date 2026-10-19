@@ -42,12 +42,16 @@ class AIService:
         active_cats = global_category_manager.get_active()
         clean_sub = sanitize_subpath(subpath)
         
-        # 若提供了推荐的细粒度子目录层级，优先在主分类下构建该层级
+        # 若提供了推荐的细粒度子目录层级，优先在主分类下构建该层级 (防止重名重复嵌套)
         if clean_sub:
+            sub_p = Path(clean_sub)
             if is_dir:
-                return dest_root_p / cat_name / Path(clean_sub) / orig_root_p.name
+                sub_parts_lower = [part.lower() for part in sub_p.parts]
+                if orig_root_p.name.lower() == sub_p.name.lower() or (orig_root_p.name.lower() in sub_parts_lower):
+                    return dest_root_p / cat_name / sub_p
+                return dest_root_p / cat_name / sub_p / orig_root_p.name
             else:
-                return dest_root_p / cat_name / Path(clean_sub)
+                return dest_root_p / cat_name / sub_p
 
         for cat in active_cats:
             if cat["name"] == cat_name:
@@ -509,6 +513,7 @@ class AIService:
                 "4. 【具体多级子目录推荐】：除 suggested_category（一级大类）外，必须在 recommended_subpath 中给出具体的建议子目录层级（例如 '开发工具/VSCode'、'财务/发票/2026'）；\n"
                 "5. 若无法明确识别，必须归入 '未分类/待人工确认'，置信度设低于 0.6 并标记 require_confirmation=true；\n"
                 "6. 【父子语义广义-狭义认知】：若输入单元所属父目录或上下文为广义分类词（如 '项目'、'多媒体'、'设计'、'游戏'、'财务'、'学习'），其所属子目录即为该领域下的狭义独立实体（如 'xxx项目'、'xxx设计'、'xxx查重'），必须以实体为单位整盘原子平移归档，绝不可因内部散杂格式而拆散实体；\n"
+                "7. 【源目录锚定与同源同宿】：若待归档单元带有 source_umbrella（源泛目录锚点，如 'live2D'、'经控'、'发票'），说明它们来自源文件系统中的同一业务泛目录。同源单元严禁分裂到不同的一级分类或互不相干的深层子路径！所有具有相同 source_umbrella 的单元必须保持同一一级大类，且 recommended_subpath 必须以 source_umbrella 为基准（例如直接设为 'live2D' 或 '经控'），与源路径命名结构保持一致，不再过度人为细分；\n"
                 f"{mode_prompt}\n"
                 f"{lang_prompt}\n"
                 f"{custom_prompt}"
@@ -600,6 +605,8 @@ class AIService:
                         "initial_suggested_category": g["suggested_category"],
                         "initial_subpath": g.get("recommended_subpath", ""),
                     }
+                    if g.get("source_umbrella"):
+                        summary_item["source_umbrella"] = g["source_umbrella"]
                     if g.get("is_directory_group"):
                         summary_item["unit_type"] = "软件/工程集体 (Directory Collective)"
                         summary_item["directory_name"] = g["name"]
@@ -745,6 +752,9 @@ class AIService:
                         f.result()
                     except Exception as ex:
                         app_logger.error(f"并发执行异常: {ex}")
+
+        # AI 规划完成后，执行本地泛目录共识收敛器，对同源泛目录进行强保全对齐（防止模型幻觉或批次差异导致同源分裂）
+        grouped_units = AppDetector.reconcile_umbrella_consensus(grouped_units, destination_root, options=options)
 
         return grouped_units
 
