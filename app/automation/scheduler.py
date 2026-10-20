@@ -15,6 +15,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.automation.models import ScheduledTask, ProposedPlan
 from app.automation.archive_executor import execute_safe_auto_archive
+from app.core.unified_scanner import UnifiedScanner, AssetUnit
 from app.core.app_detector import AppDetector
 from app.core.organize_models import OrganizeOptions, OrganizeMode
 from app.utils.lock_detector import is_file_locked_or_in_use
@@ -107,21 +108,25 @@ class TaskScheduler(QThread):
         scanned_files = []
 
         try:
-            with os.scandir(target_dir) as it:
-                for entry in it:
-                    if entry.is_file():
-                        try:
-                            stat = entry.stat()
-                            scanned_files.append({
-                                "path": entry.path,
-                                "name": entry.name,
-                                "size": stat.st_size,
-                                "mtime": stat.st_mtime,
-                                "ext": os.path.splitext(entry.name)[1].lower(),
-                                "category": "其他"
-                            })
-                        except Exception:
-                            continue
+            assets = UnifiedScanner.scan_directory(
+                root_paths=[target_dir],
+                prune_collectives=True,
+                skip_system_protected=True,
+                cancel_check=lambda: self._is_running
+            )
+
+            for asset in assets:
+                scanned_files.append({
+                    "path": asset.path,
+                    "name": asset.name,
+                    "size": asset.size,
+                    "mtime": asset.mtime,
+                    "ext": asset.ext,
+                    "category": asset.category,
+                    "is_directory_collective": asset.is_collective,
+                    "collective_info": asset.collective_info,
+                    "umbrella_anchor": asset.umbrella_anchor
+                })
 
             if not scanned_files:
                 task.last_status = "成功 (无文件)"

@@ -11,6 +11,7 @@ from PySide6.QtCore import QThread, Signal, QObject
 
 from app.config import app_config
 from app.core.hash_cache import hash_cache
+from app.core.unified_scanner import UnifiedScanner, AssetUnit
 from app.utils.file_helper import (
     categorize_file_by_ext,
     normalize_unified_category,
@@ -64,6 +65,7 @@ class DirectoryScanTask(BaseScanTask):
         self.min_top_file_size = min_top_file_size
         import os
         self.ignore_folders = [os.path.normcase(os.path.normpath(p)) for p in (ignore_folders or []) if p.strip()]
+        self.skipped_ignored_count = 0
 
     def _is_ignored(self, current_dir: str) -> bool:
         import os
@@ -88,140 +90,99 @@ class DirectoryScanTask(BaseScanTask):
             last_ui_update = time.time()
             throttle_interval = app_config.get("perf_options", "ui_throttle_ms", default=60) / 1000.0
 
-            norm_target_roots = {os.path.normcase(os.path.normpath(tp)) for tp in self.target_paths}
+            def _ui_callback(curr_path: str, cur_files: int, cur_bytes: int):
+                now_t = time.time()
+                nonlocal last_ui_update
+                if now_t - last_ui_update >= throttle_interval:
+                    self.progress_updated.emit(curr_path, cur_files, cur_bytes)
+                    last_ui_update = now_t
 
-            for root_path in self.target_paths:
-                if not self.check_pause_cancel(): return
-                stack = [root_path]
-                while stack and self.check_pause_cancel():
-                    curr_dir = stack.pop()
-                    if self.skip_system_protected and is_system_critical_path(curr_dir):
-                        continue
-                    if self._is_ignored(curr_dir):
-                        if not hasattr(self, 'skipped_ignored_count'): self.skipped_ignored_count = 0
-                        self.skipped_ignored_count += 1
-                        continue
+            def _on_ignore(p):
+                self.skipped_ignored_count += 1
 
-                    # 防御式文件夹递归：若启用 prune_collectives，探测当前目录是否为软件/工程/运行环境原子集体
-                    curr_norm = os.path.normcase(os.path.normpath(curr_dir))
-                    if self.prune_collectives:
-                        from app.core.app_detector import AppDetector
-                        c_info = AppDetector.detect_directory_collective(curr_dir)
-                        if c_info:
-                            c_size = 0
-                            c_files = 0
-                            c_mtime = 0
-                            try:
-                                for w_root, _, w_files in os.walk(curr_dir):
-                                    if not self.check_pause_cancel(): return
-                                    for wf in w_files:
-                                        c_files += 1
-                                        try:
-                                            st = os.stat(os.path.join(w_root, wf))
-                                            c_size += st.st_size
-                                            c_mtime = max(c_mtime, st.st_mtime)
-                                        except OSError:
-                                            pass
-                            except Exception:
-                                pass
+            asset_units = UnifiedScanner.scan_directory(
+                root_paths=self.target_paths,
+                prune_collectives=self.prune_collectives,
+                skip_system_protected=self.skip_system_protected,
+                ignore_folders=self.ignore_folders,
+                progress_callback=_ui_callback,
+                cancel_check=lambda: self.check_pause_cancel(),
+                on_ignore_callback=_on_ignore
+            )
 
-                            c_mtime = c_mtime or time.time()
-                            total_files += c_files
-                            total_bytes += c_size
-                            cat = normalize_unified_category(c_info.get("suggested_category", "代码项目与依赖 (Dev & Code)"))
-                            category_bytes[cat] += c_size
-                            category_counts[cat] += 1
+            for asset in asset_units:
+                if not self.check_pause_cancel():
+                    return
+                f_size = asset.size
+                f_files = asset.file_count
+                total_files += f_files
+                total_bytes += f_size
 
-                            c_tag = c_info.get("collective_type", "实体集体")
-                            finfo = {
-                                "name": Path(curr_dir).name,
-                                "path": curr_dir,
-                                "size": c_size,
-                                "file_count": c_files,
-                                "category": cat,
-                                "mtime": c_mtime,
-                                "ext": "",
-                                "scan_root": root_path,
-                                "tag": f"原子保全 ({c_tag})",
-                                "reason": c_info.get("reason", "检测为不可拆分原子实体集体，整盘保全"),
-                                "phase_status": "阶段一已归类 (原子保全)",
-                                "is_directory_collective": True,
-                                "collective_info": c_info
-                            }
-                            all_scanned_files.append(finfo)
+                cat = asset.category
+                category_bytes[cat] += f_size
+                category_counts[cat] += 1
 
-                            # 支持集体查重：若启用查重，将集体推入 size_candidates (利用深度指纹哈希)
-                            if self.enable_duplicate_detection and c_size > 1024:
-                                size_candidates[c_size].append(finfo)
+                if asset.is_collective:
+                    c_tag = asset.collective_type or "实体集体"
+                    finfo = {
+                        "name": asset.name,
+                        "path": asset.path,
+                        "size": f_size,
+                        "file_count": f_files,
+                        "category": cat,
+                        "mtime": asset.mtime,
+                        "ext": "",
+                        "scan_root": asset.scan_root or self.target_paths[0],
+                        "tag": f"原子保全 ({c_tag})",
+                        "reason": asset.reason or "检测为不可拆分原子实体集体，整盘保全",
+                        "phase_status": "阶段一已归类 (原子保全)",
+                        "is_directory_collective": True,
+                        "collective_info": asset.collective_info,
+                        "umbrella_anchor": asset.umbrella_anchor,
+                        "is_snapshot_backup": asset.is_snapshot_backup
+                    }
+                else:
+                    heuristic = get_heuristic_redundant_tag(asset.path, asset.name, f_size)
+                    f_tag = heuristic[0] if heuristic else "独立资产项"
+                    f_reason = heuristic[1] if heuristic else f"标准{cat}单项文件"
+                    f_phase = f"规则识别 ({heuristic[0]})" if heuristic else "阶段一已归类"
+                    f_is_rec = heuristic[2] if (heuristic and len(heuristic) > 2) else False
 
-                            # 严格门槛：原子集体整体大小 >= min_top_file_size (300MB) 时，作为独立整体资产推入 Top 100 堆
-                            if c_size >= self.min_top_file_size:
-                                if len(top_heap) < 100:
-                                    heapq.heappush(top_heap, (c_size, finfo["path"], finfo))
-                                else:
-                                    if c_size > top_heap[0][0]:
-                                        heapq.heappushpop(top_heap, (c_size, finfo["path"], finfo))
+                    # 同源同宿免误判：若属于备份大抽屉快照，豁免冗余归档包
+                    if asset.is_snapshot_backup:
+                        f_tag = "备份快照资产"
+                        f_reason = "属于历史备份大抽屉归档资产，免除冗余误判"
+                        f_phase = "阶段一已归类 (同源同宿保全)"
+                        f_is_rec = False
 
-                            # 触发剪枝，严禁继续入栈其子目录，避免扫描内部成千上万碎文件
-                            continue
-                    try:
-                        with os.scandir(curr_dir) as it:
-                            for entry in it:
-                                if not self.check_pause_cancel(): return
-                                if entry.name.startswith("$") and entry.name != "$Recycle.Bin":
-                                    continue
-                                try:
-                                    if entry.is_dir(follow_symlinks=False):
-                                        stack.append(entry.path)
-                                    elif entry.is_file(follow_symlinks=False):
-                                        stat_res = entry.stat()
-                                        f_size = int(stat_res.st_size)
-                                        mtime = stat_res.st_mtime
-                                        total_files += 1
-                                        total_bytes += f_size
-                                        
-                                        raw_cat = categorize_file_by_ext(Path(entry.name))
-                                        category = normalize_unified_category(raw_cat)
-                                        category_bytes[category] += f_size
-                                        category_counts[category] += 1
-                                        
-                                        heuristic = get_heuristic_redundant_tag(entry.path, entry.name, f_size)
-                                        f_tag = heuristic[0] if heuristic else f"独立资产项"
-                                        f_reason = heuristic[1] if heuristic else f"标准{category}单项文件"
-                                        f_phase = f"规则识别 ({heuristic[0]})" if heuristic else "阶段一已归类"
-                                        f_is_rec = heuristic[2] if (heuristic and len(heuristic) > 2) else False
+                    finfo = {
+                        "name": asset.name,
+                        "path": asset.path,
+                        "size": f_size,
+                        "category": cat,
+                        "mtime": asset.mtime,
+                        "ext": asset.ext,
+                        "scan_root": asset.scan_root or self.target_paths[0],
+                        "tag": f_tag,
+                        "reason": f_reason,
+                        "phase_status": f_phase,
+                        "is_recommended": f_is_rec,
+                        "umbrella_anchor": asset.umbrella_anchor,
+                        "is_snapshot_backup": asset.is_snapshot_backup
+                    }
 
-                                        finfo = {
-                                            "name": entry.name, "path": entry.path, "size": f_size,
-                                            "category": category, "mtime": mtime, "ext": Path(entry.name).suffix.lower(),
-                                            "scan_root": root_path,
-                                            "tag": f_tag, "reason": f_reason,
-                                            "phase_status": f_phase,
-                                            "is_recommended": f_is_rec
-                                        }
-                                        
-                                        # 严格门槛：仅当单项大小 >= min_top_file_size (300MB) 时，才入选 Top 100，杜绝无门槛凑数
-                                        if f_size >= self.min_top_file_size:
-                                            if len(top_heap) < 100:
-                                                heapq.heappush(top_heap, (f_size, finfo["path"], finfo))
-                                            else:
-                                                if f_size > top_heap[0][0]:
-                                                    heapq.heappushpop(top_heap, (f_size, finfo["path"], finfo))
-                                                
-                                        if self.enable_duplicate_detection and f_size > 1024:
-                                            size_candidates[f_size].append(finfo)
-                                            
-                                        all_scanned_files.append(finfo)
-                                except (PermissionError, FileNotFoundError, OSError):
-                                    continue
-                    except (PermissionError, FileNotFoundError, OSError):
-                        continue
+                # 严格门槛：>= min_top_file_size (300MB) 入选 Top 100
+                if f_size >= self.min_top_file_size:
+                    if len(top_heap) < 100:
+                        heapq.heappush(top_heap, (f_size, finfo["path"], finfo))
+                    else:
+                        if f_size > top_heap[0][0]:
+                            heapq.heappushpop(top_heap, (f_size, finfo["path"], finfo))
 
-                    now = time.time()
-                    if now - last_ui_update >= throttle_interval:
-                        self.progress_updated.emit(curr_dir, total_files, total_bytes)
-                        last_ui_update = now
-                        time.sleep(0.001)
+                if self.enable_duplicate_detection and f_size > 1024:
+                    size_candidates[f_size].append(finfo)
+
+                all_scanned_files.append(finfo)
 
             p1_duration = round(time.time() - p1_start, 2)
             top_100_files = [item[2] for item in sorted(top_heap, key=lambda x: x[0], reverse=True)]

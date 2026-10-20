@@ -18,6 +18,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.automation.models import WatchRule, ProposedPlan
 from app.automation.archive_executor import execute_safe_auto_archive
+from app.core.unified_scanner import UnifiedScanner, AssetUnit
 from app.core.app_detector import AppDetector
 from app.core.organize_models import OrganizeOptions, OrganizeMode
 from app.utils.lock_detector import is_file_locked_or_in_use
@@ -131,68 +132,62 @@ class RuleWatcher(QThread):
         settled_files_to_propose: List[Dict[str, Any]] = []
 
         try:
-            # 浅层遍历观察目录 (兼顾性能与实时性，防范过深扫描开销)
-            with os.scandir(watch_dir) as it:
-                for entry in it:
-                    if not self._is_running:
-                        return
+            # 统一委托统一扫描底座：兼顾源头剪枝、原子集体识别与防回环
+            assets = UnifiedScanner.scan_directory(
+                root_paths=[watch_dir],
+                prune_collectives=True,
+                skip_system_protected=True,
+                max_depth=3,
+                cancel_check=lambda: self._is_running
+            )
 
-                    file_path = entry.path
+            for asset in assets:
+                if not self._is_running:
+                    return
 
-                    # 目录暂不作单一文件处理，除非是顶层独立实体
-                    if entry.is_dir():
-                        continue
+                file_path = asset.path
+                if self._is_excluded(file_path, rule):
+                    continue
 
-                    if self._is_excluded(file_path, rule):
-                        continue
+                size = asset.size
+                mtime = asset.mtime
 
-                    try:
-                        stat = entry.stat()
-                        size = stat.st_size
-                        mtime = stat.st_mtime
-                    except (OSError, PermissionError):
-                        continue
+                if rule.min_file_size > 0 and size < rule.min_file_size:
+                    continue
 
-                    if rule.min_file_size > 0 and size < rule.min_file_size:
-                        continue
-
-                    # 检查沉淀状态
-                    prev = rule_snapshot.get(file_path)
-                    if prev is None:
-                        # 首次发现新文件：记录初始状态，开启防抖计时
-                        rule_snapshot[file_path] = {
-                            "size": size,
-                            "mtime": mtime,
-                            "stable_since": now,
-                            "settled": False
-                        }
+                # 检查沉淀状态
+                prev = rule_snapshot.get(file_path)
+                if prev is None:
+                    rule_snapshot[file_path] = {
+                        "size": size,
+                        "mtime": mtime,
+                        "stable_since": now,
+                        "settled": False
+                    }
+                else:
+                    if prev["size"] == size and prev["mtime"] == mtime:
+                        if not prev["settled"] and (now - prev["stable_since"] >= rule.debounce_seconds):
+                            is_locked, lock_reason = is_file_locked_or_in_use(file_path, min_cooldown_seconds=0.0)
+                            if is_locked:
+                                app_logger.debug("资产被占用/编辑中，暂缓监控捕获: %s (%s)", file_path, lock_reason)
+                            else:
+                                prev["settled"] = True
+                                settled_files_to_propose.append({
+                                    "path": file_path,
+                                    "name": asset.name,
+                                    "size": size,
+                                    "mtime": mtime,
+                                    "ext": asset.ext,
+                                    "category": asset.category,
+                                    "is_directory_collective": asset.is_collective,
+                                    "collective_info": asset.collective_info,
+                                    "umbrella_anchor": asset.umbrella_anchor
+                                })
                     else:
-                        # 已存在记录：检查大小和修改时间是否变动
-                        if prev["size"] == size and prev["mtime"] == mtime:
-                            # 持续未变动：检查稳定时长是否满足 debounce_seconds
-                            if not prev["settled"] and (now - prev["stable_since"] >= rule.debounce_seconds):
-                                # 核心保底机制：排他探针 + Office/WPS 伴生锁检测 (文件已通过 debounce 稳定期，冷却秒数置为 0)
-                                is_locked, lock_reason = is_file_locked_or_in_use(file_path, min_cooldown_seconds=0.0)
-                                if is_locked:
-                                    # 正在编辑或被独占占用，暂缓沉淀，继续留在观察池
-                                    app_logger.debug("文件被占用/编辑中，暂缓监控捕获: %s (%s)", file_path, lock_reason)
-                                else:
-                                    # 确认沉淀完成且未被占用！
-                                    prev["settled"] = True
-                                    settled_files_to_propose.append({
-                                        "path": file_path,
-                                        "name": entry.name,
-                                        "size": size,
-                                        "mtime": mtime,
-                                        "ext": os.path.splitext(entry.name)[1].lower(),
-                                        "category": "其他"
-                                    })
-                        else:
-                            # 文件仍在变动 (下载中/写入中)：重置稳定计时器
-                            prev["size"] = size
-                            prev["mtime"] = mtime
-                            prev["stable_since"] = now
-                            prev["settled"] = False
+                        prev["size"] = size
+                        prev["mtime"] = mtime
+                        prev["stable_since"] = now
+                        prev["settled"] = False
 
         except Exception as e:
             app_logger.debug("扫描观察目录 [%s] 异常: %s", watch_dir, e)

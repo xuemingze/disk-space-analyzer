@@ -529,12 +529,13 @@ class AppDetector:
                 if parent_broad:
                     parent_name = grand_name
 
-            if parent_broad and cls.is_narrow_entity(dname, parent_broad[0]):
+            if parent_broad:
                 broad_key, broad_info = parent_broad
                 clean_name = sanitize_subpath(dname)
                 prefix = broad_info.get("subpath_prefix", parent_name)
 
-                # 2.1 归档与备份大抽屉 (backups, 归档备份, 历史备份) 下的实体
+                # 2.1 归档与备份大抽屉 (backups, 归档备份, 历史备份) 下的实体：绝对强制上位赋权！
+                # 严禁因内部包含 requirements.txt 或 package.json 反客为主误判为活跃开发工程！
                 if broad_key == "backup":
                     return {
                         "is_collective": True,
@@ -547,8 +548,8 @@ class AppDetector:
                         "signature_type": f"广义归档容器佐证 ({parent_name} -> {dname})",
                         "suggested_category": broad_info["suggested_category"],
                         "recommended_subpath": f"{prefix}/{clean_name}",
-                        "reason": f"父级 [{parent_name}] 判定为归档备份容器，当前目录 [{dname}] 判定为历史快照实体，整盘原子保全",
-                        "confidence": 0.98,
+                        "reason": f"父级 [{parent_name}] 判定为归档备份容器，当前目录 [{dname}] 强行继承历史快照上位语义，整盘原子保全",
+                        "confidence": 0.99,
                         "risk_level": "需人工确认",
                         "require_confirmation": True
                     }
@@ -896,6 +897,10 @@ class AppDetector:
             name_matches_dir = (best_exe.stem.lower() in dname_lower or dname_lower in best_exe.stem.lower())
             has_lnk_or_asar = (p / f"{best_exe.stem}.lnk").exists() or (p / "electron.asar").exists()
 
+            # 解禁数据盘根目录独立软件法则 (Broad vs Narrow Topology Law)：
+            # 若位于非系统盘根目录下一级 (如 D:\Clash, D:\Everything)，只要存在核心主程序 exe 即解禁判定为独立软件实体
+            is_data_drive_root_app = (len(p.parts) == 2 and not p.parts[0].lower().startswith("c:")) and len(main_exes) >= 1
+
             is_app_collective = (
                 has_accompanying_dll
                 or has_companion_folder
@@ -904,6 +909,7 @@ class AppDetector:
                 or len(exe_files) > 1
                 or has_lnk_or_asar
                 or name_matches_dir
+                or is_data_drive_root_app
             )
 
             if is_app_collective:
