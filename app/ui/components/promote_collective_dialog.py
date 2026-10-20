@@ -24,6 +24,8 @@ class PromoteCollectiveDialog(QDialog):
         self.file_path = os.path.normpath(file_path)
         self.selected_target_dir: str = ""
         self.app_name: str = ""
+        self.txt_dir = None
+        self.txt_name = None
 
         self.setWindowTitle("📦 向上收拢并转为资产集合")
         self.setMinimumWidth(600)
@@ -102,8 +104,7 @@ class PromoteCollectiveDialog(QDialog):
 
                 radio.toggled.connect(lambda checked, r=radio: self._on_radio_toggled(r, checked))
 
-            # 默认选中第一个候选 (推荐项排在最前)
-            self.radio_widgets[0].setChecked(True)
+            # 候选单选按钮已装配，等待下方输入控件构建完毕后统一点亮
         else:
             lbl_none = QLabel("未找到适宜的父目录候选，请在下方手动指定")
             lbl_none.setStyleSheet("color: #ef4444;")
@@ -176,15 +177,16 @@ class PromoteCollectiveDialog(QDialog):
         bottom_bar.addWidget(self.btn_confirm)
         layout.addLayout(bottom_bar)
 
-        if candidates:
+        if candidates and self.radio_widgets:
+            self.radio_widgets[0].setChecked(True)
             self._on_radio_toggled(self.radio_widgets[0], True)
 
     def _on_radio_toggled(self, radio: QRadioButton, checked: bool):
-        if checked:
+        if checked and getattr(self, "txt_dir", None) is not None and getattr(self, "txt_name", None) is not None:
             target_p = radio.property("target_dir")
             name = radio.property("app_name")
-            self.txt_dir.setText(target_p)
-            self.txt_name.setText(name)
+            self.txt_dir.setText(target_p or "")
+            self.txt_name.setText(name or "")
 
     def _on_browse_clicked(self):
         d = QFileDialog.getExistingDirectory(self, "选择集合根目录", self.txt_dir.text() or self.file_path)
