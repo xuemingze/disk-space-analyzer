@@ -25,13 +25,48 @@ class OrganizerView(QWidget):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.current_dir = str(Path.home() / "Downloads")
+        self.current_dir = self.get_best_default_organize_dir()
         self.scan_task: Optional[DirectoryScanTask] = None
         self.ai_worker: Optional[AIWorker] = None
         self.scan_task_id: Optional[str] = None
         self.ai_task_id: Optional[str] = None
 
         self.init_ui()
+
+    @classmethod
+    def get_best_default_organize_dir(cls) -> str:
+        """
+        智能探测并获取最优的默认整理目录：
+        1. 优先读取持久化配置 `org_source_dir`
+        2. 依次探测 Downloads、Desktop、Documents 等标准用户目录，选择真实存在且包含可整理资产的目录
+        3. 若均为空，降级回退至 Downloads 目录
+        """
+        saved = app_config.get("org_source_dir")
+        if saved and os.path.isdir(saved):
+            return saved
+
+        user_home = Path.home()
+        candidates = [
+            user_home / "Downloads",
+            user_home / "Desktop",
+            user_home / "Documents"
+        ]
+
+        def _has_files(p: Path) -> bool:
+            try:
+                for root, dirs, files in os.walk(p):
+                    if files:
+                        return True
+            except Exception:
+                pass
+            return False
+
+        for c in candidates:
+            if c.exists() and _has_files(c):
+                return str(c)
+
+        # 兜底
+        return str(user_home / "Downloads")
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -192,6 +227,7 @@ class OrganizerView(QWidget):
         if d: self.dest_input.setText(d)
 
     def save_prefs(self):
+        app_config.set("org_source_dir", self.dir_input.text().strip())
         app_config.set("archive_dir", self.dest_input.text().strip())
         app_config.set("org_work_weight", self.work_personal_slider.value())
         app_config.set("org_unknown_policy", self.unknown_combo.currentIndex())
@@ -249,7 +285,13 @@ class OrganizerView(QWidget):
         if not all_scanned_files:
             self.btn_run.setEnabled(True)
             self.lbl_status.setText("就绪")
-            QMessageBox.information(self, "提示", "未扫描到任何文件。")
+            src_p = self.dir_input.text().strip()
+            QMessageBox.information(
+                self,
+                "提示",
+                f"在当前整理目录 [{src_p}] 中未扫描到任何待整理文件。\n\n"
+                f"建议点击“浏览...”切换到包含文档、安装包或影音等文件的目录（如桌面、文档等）后重试。"
+            )
             return
 
         self.lbl_status.setText("🤖 阶段 2: 正在提交目录级报告至 AI 进行规划...")
