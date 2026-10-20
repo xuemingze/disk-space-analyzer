@@ -440,6 +440,160 @@ class AIService:
         return text
 
     @classmethod
+    def convert_execution_plan_to_groups(
+        cls,
+        execution_items: List[Dict[str, Any]],
+        destination_root: str
+    ) -> List[Dict[str, Any]]:
+        """
+        将 AI 直接创作的结构化执行清单 (execution_plan) 映射为前端预览向导与归档引擎直接使用的标准分组单元
+        """
+        dest_root_p = Path(destination_root)
+        grouped_units = []
+
+        for item in execution_items:
+            orig_p_str = item.get("original_path") or item.get("path") or item.get("source_path", "")
+            orig_p_str = orig_p_str.strip()
+            if not orig_p_str:
+                continue
+
+            root_p = Path(orig_p_str)
+            cat_name = item.get("suggested_category", "智能推荐归档").strip()
+            app_name = item.get("app_name") or root_p.stem
+            action = item.get("action", "归档").strip()
+            is_dir = root_p.is_dir() if root_p.exists() else bool(item.get("is_directory_collective", False))
+
+            # 结合 AI 提炼的子路径
+            subpath = item.get("target_subpath") or item.get("recommended_subpath", "")
+            new_target_base = cls._calculate_target_path(
+                cat_name, app_name, dest_root_p, root_p, is_dir, subpath=subpath
+            )
+
+            target_file_path = new_target_base if is_dir else (new_target_base / root_p.name)
+
+            sub_items_detail = [{
+                "original_path": orig_p_str,
+                "name": item.get("name") or root_p.name,
+                "size": int(item.get("size", 0)),
+                "relative_path": root_p.name,
+                "target_path": str(target_file_path),
+                "scan_root": ""
+            }]
+
+            group_unit = {
+                "group_id": f"GRP_{abs(hash(orig_p_str)) % 1000000:06d}",
+                "name": item.get("name") or root_p.name,
+                "original_root": orig_p_str,
+                "scan_root": "",
+                "target_root": str(new_target_base),
+                "is_directory_group": is_dir,
+                "is_symlink": False,
+                "symlink_target": "",
+                "app_name": app_name,
+                "suggested_category": cat_name,
+                "action": action,
+                "risk_level": item.get("risk_level", "低风险"),
+                "confidence": float(item.get("confidence", 0.95)),
+                "rationale": item.get("rationale") or item.get("reason", "AI 智能全景决策"),
+                "sub_items": sub_items_detail,
+                "source": "AI (智能直出)"
+            }
+            grouped_units.append(group_unit)
+
+        return grouped_units
+
+    @classmethod
+    def parse_markdown_table_to_execution_plan(cls, md_text: str) -> List[Dict[str, Any]]:
+        """
+        从大模型输出的 Markdown 深度分析报告中，自动提取【核心执行清单】表格内容
+        """
+        items = []
+        lines = md_text.strip().split("\n")
+        headers = []
+        header_found = False
+
+        for line in lines:
+            line_s = line.strip()
+            if not line_s.startswith("|") or not line_s.endswith("|"):
+                continue
+            parts = [p.strip() for p in line_s.strip("|").split("|")]
+            if not header_found:
+                has_path = any(("路径" in p or "path" in p.lower()) for p in parts)
+                has_op = any(("操作" in p or "建议" in p or "action" in p.lower() or "类别" in p or "category" in p.lower()) for p in parts)
+                if has_path and has_op:
+                    header_found = True
+                    headers = parts
+                continue
+
+            # 跳过表格分隔线
+            if all(set(p).issubset({"-", ":", " "}) for p in parts if p):
+                continue
+
+            if len(parts) >= min(4, len(headers)):
+                row = {}
+                for i, val in enumerate(parts):
+                    key = headers[i] if i < len(headers) else f"col_{i}"
+                    row[key] = val
+
+                orig_path = ""
+                for k, v in row.items():
+                    if any(term in k for term in ["绝对路径", "原始路径", "真实路径"]) or k.lower() in ("path", "original_path"):
+                        orig_path = v.strip()
+                        break
+                if not orig_path:
+                    for k, v in row.items():
+                        if "路径" in k:
+                            orig_path = v.strip()
+                            break
+
+                if not orig_path or orig_path in ("-", "N/A", "无", "路径摘要"):
+                    continue
+
+                name = ""
+                for k, v in row.items():
+                    if "名称" in k or "资产" in k or "name" in k.lower():
+                        name = v.strip()
+                        break
+
+                cat = ""
+                for k, v in row.items():
+                    if "类别" in k or "分类" in k or "category" in k.lower():
+                        cat = v.strip()
+                        break
+                if not cat:
+                    cat = "智能推荐归档"
+
+                action = "归档"
+                for k, v in row.items():
+                    if "操作" in k or "action" in k.lower():
+                        action = v.strip()
+                        break
+
+                risk = "低风险"
+                for k, v in row.items():
+                    if "风险" in k or "risk" in k.lower():
+                        risk = v.strip()
+                        break
+
+                rationale = ""
+                for k, v in row.items():
+                    if any(term in k for term in ["建议", "分析", "理由", "rationale"]):
+                        rationale = v.strip()
+                        break
+
+                items.append({
+                    "original_path": orig_path,
+                    "name": name,
+                    "suggested_category": cat,
+                    "action": action,
+                    "risk_level": risk,
+                    "rationale": rationale,
+                    "confidence": 0.95
+                })
+
+        return items
+
+    @classmethod
     def process_report_with_ai(
         cls,
         base_url: str,
@@ -448,12 +602,22 @@ class AIService:
         report_path: str,
         destination_root: str
     ) -> List[Dict[str, Any]]:
-        """基于生成的 Markdown 报告内容，提取归档与清理的执行清单"""
-        if not api_key or not base_url or not model:
-            raise ValueError("AI 模型未配置。")
-            
+        """基于生成的 Markdown 报告内容，提取归档与清理的执行清单 (优先本地直接提取，杜绝二次调用延迟与失败)"""
+        if not os.path.exists(report_path):
+            return []
+
         with open(report_path, "r", encoding="utf-8") as f:
             report_md = f.read()
+
+        # 1. 优先从报告正文直接提取结构化表格，0 耗时、0 报错
+        direct_items = cls.parse_markdown_table_to_execution_plan(report_md)
+        if direct_items:
+            app_logger.info(f"[AIService] 成功从报告表格中直接提取 {len(direct_items)} 项执行计划，免除二次调用")
+            return cls.convert_execution_plan_to_groups(direct_items, destination_root)
+
+        # 2. 若报告中未找到表格，才降级调用大模型提取
+        if not api_key or not base_url or not model:
+            return []
             
         system_prompt = (
             "你是一个自动化执行引擎。请阅读用户提供的《磁盘空间全景深度分析与治理报告》，从中提取【核心执行清单】表格中的建议操作数据。\n"
@@ -644,7 +808,13 @@ class AIService:
 
             active_cats = global_category_manager.get_active()
             cat_list_str = "\n".join([f"- {c['name']} (描述: {c['description']})" for c in active_cats])
-            whitelist_prompt = f"\n【必须使用的有效分类白名单】\n你必须且只能从以下列表中选择最合适的一级分类名称（如果都不匹配，请使用 '未分类/待人工确认'）：\n{cat_list_str}\n" if cat_list_str else ""
+            whitelist_prompt = (
+                f"\n【已有全局参考分类（仅供语义参考，非硬性限制）】\n"
+                f"系统现存的基础分类有：\n{cat_list_str}\n"
+                f"【核心说明】：上述基础分类仅作为参考基准，绝非硬性死规矩！若资产具备明确的业务主题（例如经控、财务单据、BI、工程架构、模型训练等），"
+                f"鼓励你自主提炼出最精准契合的高阶全景分类名称（如直接归为'经控'、'财务核算'，严禁机械地简单按后缀塞入'文档'）。\n"
+                if cat_list_str else ""
+            )
 
             # 模式提示语
             mode_guidances = {
@@ -684,7 +854,7 @@ class AIService:
                 '    {\n'
                 '      "group_id": "对应输入的稳定 group_id (如 grp_0001，严禁遗漏或修改)",\n'
                 '      "app_name": "识别的软件或工具名称",\n'
-                '      "suggested_category": "归档一级分类（必须选自白名单）",\n'
+                '      "suggested_category": "归档分类（可参考全局分类，亦可自主提炼高阶业务分类）",\n'
                 '      "recommended_subpath": "具体多级子目录路径（若无特殊细分可留空）",\n'
                 '      "rationale": "归档与分类依据简述（限20字内）",\n'
                 '      "confidence": 0.95,\n'
@@ -1019,11 +1189,32 @@ class AIService:
             "Authorization": f"Bearer {api_key.strip()}"
         }
         
+        # 提取全局基础分类作为参考
+        active_cats = global_category_manager.get_active()
+        cat_names = [c["name"] for c in active_cats]
+        cat_ref_str = ", ".join(cat_names) if cat_names else "文档, 代码, 影音, 软件安装与程序, 缓存与临时数据"
+
         system_prompt = (
             "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据（含原子实体集体与独立资产单元）与冗余列表，"
-            "进行深度全景分析，并严格以 JSON 格式输出结果。\n"
-            "输出 JSON 格式要求: {\"markdown_report\": \"完整的 Markdown 格式报告文本\", \"chart_categories\": [{\"category\": \"分类名称\", \"bytes\": \"占用字节数(整数)\", \"percent\": \"占比(浮点数)\"}]}\n"
-            "注意：在 JSON 中，markdown_report 字符串中的所有换行符必须严格转义为 \\n，严禁出现真实换行符。不能使用未转义的多行字符串。\n"
+            "进行深度全景分析，并以 JSON 格式输出结果。\n"
+            "输出 JSON 格式要求: {\n"
+            '  "markdown_report": "完整的 Markdown 格式报告文本",\n'
+            '  "execution_plan": [\n'
+            '    {\n'
+            '      "source_path": "原始绝对路径",\n'
+            '      "app_name": "所属软件或工具名称",\n'
+            '      "suggested_category": "归档分类（如经控、业务单据、安装包等，全局分类仅作参考）",\n'
+            '      "target_subpath": "推荐的多级归档子目录（例如 经控单据/2026）",\n'
+            '      "action": "归档/清理/保留",\n'
+            '      "risk_level": "低风险/中风险/高风险",\n'
+            '      "rationale": "研判理由（20字内）"\n'
+            '    }\n'
+            '  ],\n'
+            '  "chart_categories": [{\"category\": \"分类名称\", \"bytes\": 1024, \"percent\": 10.0}]\n'
+            "}\n"
+            "【全局分类参考说明】：系统现存基础分类有 [" + cat_ref_str + "]，仅供宏观参考，绝非硬性限制！"
+            "若资产具备强烈业务特征（如经控、财务单据、模型训练、微服务、直播工程等），鼓励你自主提炼出高阶业务分类（例如直接归为'经控'，严禁机械地塞入'文档'）。\n"
+            "注意：在 JSON 中，markdown_report 字符串中的所有换行符必须转义为 \\n。若输出纯 Markdown，请确保包含标准 Markdown 表格。\n"
             "【核心原则】：系统采用原子实体集体（软件/工程/模型/账套/缓存）防撕裂与聚合保全机制，对于目录集体资产必须作为一个整体提出治理建议，严禁建议拆散其内部子文件。\n"
             "报告必须包含：\n"
             "1. 磁盘现状与健康度评估(0-100分与等级，含资产单元总数、实体集体数与底层碎片聚合数)\n"
@@ -1098,8 +1289,10 @@ class AIService:
             # 2. 强力容错兜底：如果模型（如 MiniMax-M3, Qwen 等）直接输出了 Markdown 报告
             # 只要文本包含 Markdown 标记或长度足够（说明是完整报告，而非报错），直接认定为有效 Markdown 报告
             if len(raw_text) > 50 or raw_text.startswith("#") or "##" in raw_text or "```" in raw_text:
+                exec_plan = cls.parse_markdown_table_to_execution_plan(raw_text)
                 ai_resp.structured_data = {
                     "markdown_report": raw_text,
+                    "execution_plan": exec_plan,
                     "chart_categories": []
                 }
                 ai_resp.final_text = raw_text
@@ -1132,6 +1325,12 @@ class AIService:
                     ai_resp.report_id = f"REP_{ai_resp.task_id}"
             except Exception:
                 pass
+
+        # 确保结构化 execution_plan 就绪：若 JSON 中未包含，自动从最终 Markdown 文本表格提取
+        if ai_resp and ai_resp.structured_data:
+            if not ai_resp.structured_data.get("execution_plan"):
+                ai_resp.structured_data["execution_plan"] = cls.parse_markdown_table_to_execution_plan(ai_resp.final_text or "")
+
         return ai_resp
 
     @classmethod

@@ -248,6 +248,67 @@ class FileTableModel(QAbstractTableModel):
                 self.checked_bytes += int(item.get("size", 0))
         self.endResetModel()
 
+    def apply_ai_execution_plan(self, execution_items: List[Dict[str, Any]]) -> int:
+        """
+        接收 AI 创作的结构化执行清单，直接导入并就地升级模型内部资产属性：
+        - 覆盖 category 为 AI 研判的高阶分类（如经控、业务单据）
+        - 覆盖 target_subpath 为 AI 推荐的多级归档路径
+        - 覆盖 tag 与 reason 为 AI 研判理由
+        - 根据 AI 研判将安全/建议操作项纳入选中
+        返回命中的资产数量。
+        """
+        if not execution_items:
+            return 0
+
+        # 构建规范化路径字典索引
+        plan_map = {}
+        for it in execution_items:
+            p = it.get("original_path") or it.get("path") or it.get("source_path")
+            if p:
+                norm_p = os.path.normcase(os.path.normpath(p.strip()))
+                plan_map[norm_p] = it
+
+        updated_count = 0
+        self.beginResetModel()
+        for item in self._data:
+            p = item.get("path", "")
+            if not p:
+                continue
+            norm_p = os.path.normcase(os.path.normpath(p.strip()))
+            plan = plan_map.get(norm_p)
+            if plan:
+                updated_count += 1
+                # 升级高阶分类 (AI 自主提炼，不受限于传统死板后缀)
+                if plan.get("suggested_category"):
+                    item["category"] = plan["suggested_category"]
+
+                # 记录推荐归档子目录
+                if plan.get("target_subpath") or plan.get("recommended_subpath"):
+                    item["target_subpath"] = plan.get("target_subpath") or plan.get("recommended_subpath")
+
+                # 治理标记与建议
+                if plan.get("action"):
+                    item["action"] = plan["action"]
+                if plan.get("rationale") or plan.get("reason"):
+                    item["reason"] = plan.get("rationale") or plan.get("reason")
+                    item["tag"] = f"AI推荐 ({item.get('category', '归档')})"
+                if plan.get("risk_level"):
+                    item["risk_level"] = plan["risk_level"]
+
+                item["phase_status"] = f"AI智脑已决策 ({plan.get('action', '归档')})"
+
+                # 若属于安全低风险且操作为归档/清理，自动加入推荐与勾选
+                action_str = str(plan.get("action", ""))
+                risk_str = str(plan.get("risk_level", "低风险"))
+                if "低" in risk_str and ("归档" in action_str or "清理" in action_str or "迁移" in action_str):
+                    item["is_recommended"] = True
+                    if p not in self.checked_paths:
+                        self.checked_paths.add(p)
+                        self.checked_bytes += int(item.get("size", 0))
+
+        self.endResetModel()
+        return updated_count
+
 
 class FileSortFilterProxyModel(QSortFilterProxyModel):
     def __init__(self, parent=None):
@@ -405,6 +466,11 @@ class FileDataGridWidget(QWidget):
 
     def select_ai_recommended_paths(self, ai_paths: List[str]):
         self.source_model.select_ai_recommended_paths(ai_paths)
+
+    def apply_ai_execution_plan(self, execution_items: List[Dict[str, Any]]) -> int:
+        count = self.source_model.apply_ai_execution_plan(execution_items)
+        self._update_stats_label()
+        return count
 
     def get_checked_paths(self) -> List[str]:
         return list(self.source_model.checked_paths)

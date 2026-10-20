@@ -987,6 +987,34 @@ class HomeView(QWidget):
             
         dest_root = self.archive_input.text().strip() or "D:/归档备份"
 
+        # 核心直通优化：若当前已有 AI 执行清单，直接本地秒开预览对话框，杜绝二次大模型调用
+        existing_plan = self.current_scan_result.get("ai_execution_plan")
+        if existing_plan:
+            from app.core.ai_service import AIService
+            classified_results = AIService.convert_execution_plan_to_groups(existing_plan, dest_root)
+            for g in classified_results:
+                g["report_id"] = report_id
+                g["task_id"] = scan_id
+
+            dlg = OrganizePreviewDialog(
+                classification_items=classified_results,
+                destination_root=dest_root,
+                parent=self
+            )
+            if dlg.exec():
+                summary = getattr(dlg, 'last_summary', {})
+                processed_paths = [
+                    item["original_path"] 
+                    for item in summary.get("items", []) 
+                    if "original_path" in item
+                ]
+                if processed_paths:
+                    self.global_detail_table.remove_paths(processed_paths)
+                    self.duplicate_table.remove_paths(processed_paths)
+                    self.releasable_table.remove_paths(processed_paths)
+                    self.top100_table.remove_paths(processed_paths)
+            return
+
         self.btn_ai_auto.setEnabled(False)
         self.phase_label.setText(f"🤖 正在提交报告 (ID: {report_id}) 给 AI 提取执行计划...")
 
@@ -1091,6 +1119,20 @@ class HomeView(QWidget):
             cat_list = ai_response.structured_data["chart_categories"]
             cat_stats = { item["category"]: {"bytes": item["bytes"], "percent": item.get("percent", 0.0)} for item in cat_list }
             self.chart_widget.update_chart(cat_stats)
+
+        # 核心融合：直接接收 AI 创作的结构化执行清单，全量灌入全景表格
+        exec_plan = (ai_response.structured_data or {}).get("execution_plan", [])
+        if not exec_plan:
+            from app.core.ai_service import AIService
+            exec_plan = AIService.parse_markdown_table_to_execution_plan(ai_response.final_text or "")
+
+        if exec_plan:
+            self.current_scan_result["ai_execution_plan"] = exec_plan
+            g_hits = self.global_detail_table.apply_ai_execution_plan(exec_plan)
+            d_hits = self.duplicate_table.apply_ai_execution_plan(exec_plan)
+            r_hits = self.releasable_table.apply_ai_execution_plan(exec_plan)
+            t_hits = self.top100_table.apply_ai_execution_plan(exec_plan)
+            app_logger.info(f"[HomeView] 成功将 AI 创作清单 ({len(exec_plan)} 项) 直灌全域表格 (全局命中 {g_hits}, 可释放命中 {r_hits})")
         
         from app.core.events import event_bus
         event_bus.publish_report_updated(ai_response.report_id, scan_id)
@@ -1136,7 +1178,17 @@ class HomeView(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        file_items = [{"path": p} for p in checked_paths]
+        # 从当前活动表格中获取勾选项的完整元数据（包含 AI 赋权的 category 与 target_subpath）
+        model_data_map = {item.get("path"): item for item in table.source_model._data if item.get("path")}
+        file_items = []
+        for p in checked_paths:
+            m_item = model_data_map.get(p, {})
+            cat = m_item.get("category")
+            sub = m_item.get("target_subpath")
+            f_entry = {"path": p}
+            if cat:
+                f_entry["target_category"] = f"{cat}/{sub}" if sub else cat
+            file_items.append(f_entry)
 
         report_id = self.current_scan_result.get('report_id', '') if self.current_scan_result else ''
         scan_id = self.current_scan_result.get('task_id', '') if self.current_scan_result else ''
