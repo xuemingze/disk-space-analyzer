@@ -1075,23 +1075,39 @@ class AIService:
             if ai_resp.parse_status != "SUCCESS":
                 return False, ai_resp.error_message, None
                 
-            clean_str = cls._clean_json_response(ai_resp.final_text)
-            if not clean_str:
-                return False, "未找到 JSON 内容", None
-                
-            try:
-                parsed = json.loads(clean_str, strict=False)
-                if "markdown_report" not in parsed:
-                    return False, "缺少 markdown_report 字段", None
-                
+            raw_text = (ai_resp.final_text or "").strip()
+            if not raw_text:
+                return False, "大模型未返回任何文本内容", None
+
+            # 1. 优先尝试按照 JSON 进行清洗与解析
+            clean_str = cls._clean_json_response(raw_text)
+            parsed = None
+            if clean_str:
+                try:
+                    parsed = json.loads(clean_str, strict=False)
+                except Exception:
+                    parsed = None
+                    
+            if isinstance(parsed, dict) and "markdown_report" in parsed:
                 ai_resp.structured_data = parsed
-                ai_resp.final_text = parsed.get("markdown_report", "")
+                ai_resp.final_text = str(parsed.get("markdown_report", ""))
                 ai_resp.model = model
                 ai_resp.report_id = f"REP_{ai_resp.task_id}"
-                
                 return True, "", ai_resp
-            except Exception as e:
-                return False, f"JSON 解析失败: {e}", None
+
+            # 2. 强力容错兜底：如果模型（如 MiniMax-M3, Qwen 等）直接输出了 Markdown 报告
+            # 只要文本包含 Markdown 标记或长度足够（说明是完整报告，而非报错），直接认定为有效 Markdown 报告
+            if len(raw_text) > 50 or raw_text.startswith("#") or "##" in raw_text or "```" in raw_text:
+                ai_resp.structured_data = {
+                    "markdown_report": raw_text,
+                    "chart_categories": []
+                }
+                ai_resp.final_text = raw_text
+                ai_resp.model = model
+                ai_resp.report_id = f"REP_{ai_resp.task_id}"
+                return True, "", ai_resp
+
+            return False, f"返回内容既非合法 JSON 也非完整 Markdown 报告: {raw_text[:100]}", None
             
         if progress_callback:
             progress_callback("AI_ANALYZING: 正在发送数据与大模型进行分析...")

@@ -292,7 +292,8 @@ class HomeView(QWidget):
         self.tabs.addTab(self.rollback_tab, "🔙 归档快照与安全回滚 (安全审计)")
         
         # AI 深度分析报告
-        report_widget = QWidget()
+        self.report_widget = QWidget()
+        report_widget = self.report_widget
         report_layout = QVBoxLayout(report_widget)
         report_layout.setContentsMargins(10, 10, 10, 10)
         report_layout.setSpacing(8)
@@ -1094,7 +1095,13 @@ class HomeView(QWidget):
         from app.core.events import event_bus
         event_bus.publish_report_updated(ai_response.report_id, scan_id)
             
-        self.tabs.setCurrentIndex(3)
+        # 准确定位并切换至 AI 深度分析报告选项卡 (同时带徽标提示)
+        report_idx = self.tabs.indexOf(self.report_widget)
+        if report_idx >= 0:
+            self.tabs.setTabText(report_idx, "📑 AI 深度分析报告预览 (已生成)")
+            self.tabs.setCurrentIndex(report_idx)
+        else:
+            self.tabs.setCurrentIndex(self.tabs.count() - 1)
 
     def on_ai_failed(self, err: str):
         self.btn_select_rec.setEnabled(True)
