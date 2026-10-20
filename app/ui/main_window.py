@@ -10,6 +10,7 @@ from app.ui.home_view import HomeView
 from app.ui.organizer_view import OrganizerView
 from app.ui.settings_view import SettingsView
 from app.ui.automation import AutomationCenterView
+from app.ui.dedup import DedupMergeView
 from app.automation.manager import AutomationManager
 from app.ui.components.task_manager_widget import TaskManagerDialog
 from app.ui.styles import MODERN_DARK_STYLE
@@ -124,11 +125,19 @@ class MainWindow(QMainWindow):
         self.btn_sub_monitor.setChecked(True)
         sidebar_layout.addWidget(self.sub_nav_container)
 
-        # 1.4 配置与模型
+        # 1.4 文件查重与融合
+        self.btn_nav_dedup = QPushButton("  🔍  查重与融合 (Dedup)")
+        self.btn_nav_dedup.setProperty("class", "NavButton")
+        self.btn_nav_dedup.setCheckable(True)
+        self.btn_nav_dedup.clicked.connect(lambda: self.switch_view(3))
+        self.nav_btn_group.addButton(self.btn_nav_dedup)
+        sidebar_layout.addWidget(self.btn_nav_dedup)
+
+        # 1.5 配置与模型
         self.btn_nav_settings = QPushButton("  ⚙️  配置与模型 (Settings)")
         self.btn_nav_settings.setProperty("class", "NavButton")
         self.btn_nav_settings.setCheckable(True)
-        self.btn_nav_settings.clicked.connect(lambda: self.switch_view(3))
+        self.btn_nav_settings.clicked.connect(lambda: self.switch_view(4))
         self.nav_btn_group.addButton(self.btn_nav_settings)
         sidebar_layout.addWidget(self.btn_nav_settings)
 
@@ -143,7 +152,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addStretch()
 
         # 底部状态信息
-        bottom_info = QLabel("v1.4.0 | Pro Edition\n全后台异步架构\nAI辅助文件归档引擎")
+        bottom_info = QLabel("v1.5.0 | Pro Edition\n全后台异步架构\nAI辅助文件归档引擎")
         bottom_info.setStyleSheet("color: #475569; font-size: 11px; padding-left: 20px; line-height: 140%;")
         sidebar_layout.addWidget(bottom_info)
 
@@ -156,12 +165,14 @@ class MainWindow(QMainWindow):
         self.home_view = HomeView()
         self.organizer_view = OrganizerView()
         self.automation_view = AutomationCenterView()
+        self.dedup_view = DedupMergeView()
         self.settings_view = SettingsView()
 
         self.stacked_widget.addWidget(self.home_view)        # 0
         self.stacked_widget.addWidget(self.organizer_view)   # 1
         self.stacked_widget.addWidget(self.automation_view)  # 2
-        self.stacked_widget.addWidget(self.settings_view)    # 3
+        self.stacked_widget.addWidget(self.dedup_view)       # 3
+        self.stacked_widget.addWidget(self.settings_view)    # 4
 
         main_layout.addWidget(self.stacked_widget, 1)
 
@@ -198,6 +209,8 @@ class MainWindow(QMainWindow):
                 if 0 <= curr_sub < len(self.sub_nav_btns):
                     self.sub_nav_btns[curr_sub][0].setChecked(True)
         elif index == 3:
+            self.btn_nav_dedup.setChecked(True)
+        elif index == 4:
             self.btn_nav_settings.setChecked(True)
 
     def open_task_manager(self):

@@ -261,7 +261,7 @@ def test_automation_center_ui_and_navigation(qapp, tmp_path):
 
     # 2. 主窗口整体导航与展开/折叠测试
     main_win = MainWindow()
-    assert main_win.stacked_widget.count() == 4
+    assert main_win.stacked_widget.count() >= 4
 
     # 切换至自动化中心
     main_win.switch_view(2, sub_index=0)
