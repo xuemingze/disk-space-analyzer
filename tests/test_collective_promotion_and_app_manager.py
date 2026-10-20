@@ -159,3 +159,17 @@ def test_app_manager_view_ui_rules_and_navigation(qapp):
     win.switch_view(4)
     assert win.stacked_widget.currentIndex() == 4
     assert win.btn_nav_app_mgr.isChecked()
+
+
+def test_promote_collective_dialog_initialization(qapp, tmp_path):
+    """验证智能父级推断单选弹窗正常实例化并渲染各控件，无 NameError 或未导入异常"""
+    from app.ui.components.promote_collective_dialog import PromoteCollectiveDialog
+
+    sub_p = tmp_path / "SomeApp" / "Sub" / "child.txt"
+    sub_p.parent.mkdir(parents=True)
+    sub_p.write_text("dummy", encoding="utf-8")
+
+    dlg = PromoteCollectiveDialog(str(sub_p))
+    assert dlg.selected_target_dir == ""
+    assert dlg.txt_name.text() != ""
+    assert len(dlg.radio_widgets) > 0

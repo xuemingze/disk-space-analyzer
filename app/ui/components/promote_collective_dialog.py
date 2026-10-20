@@ -7,7 +7,7 @@ import os
 from typing import List, Dict, Any, Optional
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QRadioButton,
     QButtonGroup, QLineEdit, QPushButton, QGroupBox, QFileDialog,
     QMessageBox, QFrame
 )
