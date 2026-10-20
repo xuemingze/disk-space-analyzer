@@ -86,6 +86,15 @@ class AppManagerView(QWidget):
         self.btn_reload.clicked.connect(lambda: self.reload_apps(force=True))
         tool_bar.addWidget(self.btn_reload)
 
+        self.btn_ai_insights = QPushButton("🤖 AI 智能应用研判")
+        self.btn_ai_insights.setFixedHeight(32)
+        self.btn_ai_insights.setStyleSheet(
+            "QPushButton { background-color: #4f46e5; color: white; border-radius: 4px; font-weight: bold; padding: 0 14px; }"
+            "QPushButton:hover { background-color: #4338ca; }"
+        )
+        self.btn_ai_insights.clicked.connect(self._on_ai_insights_clicked)
+        tool_bar.addWidget(self.btn_ai_insights)
+
         layout.addLayout(tool_bar)
 
         # 全量软件资产表格 - 严格遵循 UI 铁律
@@ -115,7 +124,7 @@ class AppManagerView(QWidget):
         self.table_apps.setColumnWidth(3, 160)
         hh.setSectionResizeMode(4, QHeaderView.Stretch)
         hh.setSectionResizeMode(5, QHeaderView.Fixed)
-        self.table_apps.setColumnWidth(5, 160)
+        self.table_apps.setColumnWidth(5, 200)
 
         # 绑定双击事件：直接打开物理目录
         self.table_apps.cellDoubleClicked.connect(self._on_cell_double_clicked)
@@ -198,6 +207,15 @@ class AppManagerView(QWidget):
             btn_open.clicked.connect(lambda _, p=app.install_root: self._open_directory(p))
             act_layout.addWidget(btn_open)
 
+            btn_ai = QPushButton("🤖 研判")
+            btn_ai.setFixedSize(56, 28)
+            btn_ai.setStyleSheet(
+                "QPushButton { background-color: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; border-radius: 4px; font-size: 11px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #dbeafe; }"
+            )
+            btn_ai.clicked.connect(lambda _, a=app: self._open_ai_dialog_for_app(a))
+            act_layout.addWidget(btn_ai)
+
             if app.source == "custom":
                 btn_del = QPushButton("删除")
                 btn_del.setFixedSize(56, 28)
@@ -221,6 +239,39 @@ class AppManagerView(QWidget):
             if kw in a.name.lower() or kw in a.install_root.lower() or kw in a.publisher.lower()
         ]
         self._refresh_table(filtered)
+
+    def _open_ai_dialog_for_app(self, app_info: InstalledAppInfo):
+        from app.ui.components.ai_insight_dialog import AIAssetInsightDialog
+        asset_dict = {
+            "name": app_info.name,
+            "path": app_info.install_root,
+            "publisher": app_info.publisher,
+            "category": "已安装应用",
+            "is_directory_collective": True,
+            "file_count": 1
+        }
+        dlg = AIAssetInsightDialog(asset_dict, self)
+        dlg.exec()
+
+    def _on_ai_insights_clicked(self):
+        curr_row = self.table_apps.currentRow()
+        if curr_row < 0:
+            QMessageBox.information(self, "提示", "请先在表格中单击选中需要 AI 研判的应用条目！")
+            return
+        it_name = self.table_apps.item(curr_row, 1)
+        it_path = self.table_apps.item(curr_row, 4)
+        if it_name and it_path:
+            name_clean = it_name.text().replace("📦 ", "").strip()
+            from app.ui.components.ai_insight_dialog import AIAssetInsightDialog
+            asset_dict = {
+                "name": name_clean,
+                "path": it_path.text().strip(),
+                "category": "已安装应用",
+                "is_directory_collective": True,
+                "file_count": 1
+            }
+            dlg = AIAssetInsightDialog(asset_dict, self)
+            dlg.exec()
 
     def _on_cell_double_clicked(self, row: int, col: int):
         it_path = self.table_apps.item(row, 4)

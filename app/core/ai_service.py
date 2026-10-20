@@ -35,6 +35,148 @@ class AIResponse:
     reasoning_content: str = ""
 
 class AIService:
+    INSTALLER_EXTS = {".exe", ".msi", ".pkg", ".dmg", ".deb", ".rpm", ".apk", ".ipa"}
+    ARCHIVE_IMAGE_EXTS = {".iso", ".img", ".vmdk", ".vhdx", ".wim", ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"}
+    DOC_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv"}
+
+    @classmethod
+    def filter_high_value_assets_for_ai(
+        cls,
+        items: List[Dict[str, Any]],
+        max_items: int = 80
+    ) -> List[Dict[str, Any]]:
+        """
+        AI 分析前置高价值资产过滤管道 (Pre-AI High-Value Asset Filter):
+        只允许以下 5 类高价值核心资产送入大模型，其余小碎片 0 Token 阻断:
+        1. 应用管理/识别的软件与工程集体 (is_directory_collective / is_collective)
+        2. 软件独立安装包与可执行程序 (.exe, .msi, .pkg, .dmg, .deb, .rpm, .apk, .ipa)
+        3. 系统镜像与大型压缩归档包 (.iso, .img, .vmdk, .vhdx, .wim, .zip, .rar, .7z, .tar, .gz)
+        4. 高价值办公与业务单据报表 (.pdf, .doc, .docx, .xls, .xlsx, .ppt, .pptx, .csv)
+        5. 移动端独立手机应用 (.apk) 及重要大资产
+        文本感知截断: 仅提取前 100 字符摘要，杜绝全量内容上送。
+        """
+        high_value_list = []
+        for item in items:
+            is_coll = bool(item.get("is_directory_collective") or item.get("is_collective"))
+            ext = str(item.get("ext", "")).lower()
+            name = str(item.get("name", "")).lower()
+
+            if not ext and "." in name:
+                ext = os.path.splitext(name)[1].lower()
+
+            # 命中 5 类核心资产判定
+            is_installer = ext in cls.INSTALLER_EXTS
+            is_archive_image = ext in cls.ARCHIVE_IMAGE_EXTS
+            is_doc = ext in cls.DOC_EXTS
+            is_apk = ext == ".apk" or name.endswith(".apk")
+
+            if is_coll or is_installer or is_archive_image or is_doc or is_apk:
+                item_copy = dict(item)
+                # 采样感知前 100 字符文本截断，杜绝无畏消耗 Token
+                sample_text = str(item.get("content_sample") or item.get("summary") or "")[:100]
+                if sample_text:
+                    item_copy["summary_100"] = sample_text
+                high_value_list.append(item_copy)
+
+        # 排序：实体集体与超大核心资产排在最前
+        high_value_list.sort(key=lambda x: (not (x.get("is_directory_collective") or x.get("is_collective")), -x.get("size", 0)))
+        return high_value_list[:max_items]
+
+    @classmethod
+    def analyze_directory_or_app_with_ai(
+        cls,
+        base_url: str,
+        api_key: str,
+        model: str,
+        target_path: str,
+        context_files: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """
+        AI 独立应用与目录深度研判接口:
+        输入目标物理路径与局部特征文件，调用大模型分析:
+        1. 软件/应用官方正式名称 (official_name)
+        2. 发行商/开发主体 (publisher)
+        3. 核心应用场景与用途说明 (purpose_description)
+        4. 所属业务大类 (suggested_category)
+        5. 安全评级与治理操作建议 (risk_level, action_recommendation: 保留/归档/清理)
+        6. 建议收拢归档子目录 (recommended_subpath)
+        """
+        norm_p = os.path.normpath(target_path)
+        dir_name = os.path.basename(norm_p) or norm_p
+
+        # 本地启发式先验特征提取
+        files_sample = context_files or []
+        if not files_sample and os.path.isdir(norm_p):
+            try:
+                with os.scandir(norm_p) as it:
+                    for entry in it:
+                        files_sample.append(entry.name)
+                        if len(files_sample) >= 15:
+                            break
+            except Exception:
+                pass
+
+        fallback_result = {
+            "official_name": dir_name,
+            "publisher": "本地推断",
+            "purpose_description": f"位于 [{norm_p}] 的本地应用或业务目录",
+            "suggested_category": "软件安装与程序 (Apps & Installers)",
+            "risk_level": "低风险",
+            "action_recommendation": "保留",
+            "recommended_subpath": f"应用软件/{dir_name}",
+            "ai_generated": False
+        }
+
+        if not (api_key and base_url and model):
+            return fallback_result
+
+        try:
+            normalized_url = cls._normalize_base_url(base_url)
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key.strip()}"
+            }
+            system_prompt = (
+                "你是一位专业的软件架构与应用识别专家。请根据提供的目录路径与内部文件名清单，分析该目录属于哪款软件、用途及治理建议。\n"
+                "严格输出 JSON 格式，包含以下字段：\n"
+                "{\n"
+                '  "official_name": "官方标准软件名/应用名",\n'
+                '  "publisher": "开发商或所属厂商 (如 Microsoft, Google, Adobe 等)",\n'
+                '  "purpose_description": "该软件的核心功能、用途与重要性说明 (50字以内)",\n'
+                '  "suggested_category": "推荐资产分类 (如 软件安装与程序, 开发工具链, 图像设计, 办公文档 等)",\n'
+                '  "risk_level": "低风险 | 需人工确认 | 高风险",\n'
+                '  "action_recommendation": "保留 | 建议归档 | 建议清理",\n'
+                '  "recommended_subpath": "建议归档或收拢子目录相对路径 (如 应用软件/软件名)"\n'
+                "}"
+            )
+            sample_str = ", ".join(files_sample[:12]) if files_sample else "无内部文件"
+            user_prompt = f"目录路径: {norm_p}\n包含特征文件样本: {sample_str}"
+
+            payload = {
+                "model": model.strip(),
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.3
+            }
+            if "gpt" in model.lower() or "deepseek" in model.lower():
+                payload["response_format"] = {"type": "json_object"}
+
+            import requests
+            resp = requests.post(normalized_url, headers=headers, json=payload, timeout=20)
+            if resp.status_code == 200:
+                data = resp.json()
+                content_str = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                clean_json = cls._clean_json_response(content_str)
+                parsed = json.loads(clean_json)
+                parsed["ai_generated"] = True
+                return parsed
+        except Exception as e:
+            app_logger.warning("AI 应用研判异常: %s，使用本地保底推断", e)
+
+        return fallback_result
+
     @classmethod
     def _calculate_target_path(
         cls, cat_name: str, app_name: str, dest_root_p: Path, orig_root_p: Path, is_dir: bool, subpath: str = ""
@@ -438,6 +580,7 @@ class AIService:
         options: Optional[OrganizeOptions] = None,
         progress_callback: Optional[Callable[[str], None]] = None
     ) -> List[Dict[str, Any]]:
+
         """
         基于所属 App、软件或工具链特征，按父目录/工具根目录聚合为原子处理单元，并生成深度精准归档分类规划。
         特性：
@@ -477,6 +620,21 @@ class AIService:
 
         # 2. 若配置了大模型，向 LLM 提交目录组特征进行深度 App 签名甄别与分类精炼 (分批处理)
         if api_key and base_url and model and grouped_units:
+            # 核心过滤管道：当聚合单元较多时，优先仅将 5 类高价值核心单元送大模型研判，其余碎片直接由本地规则归类 (0 Token 阻断)
+            if len(grouped_units) > (options.batch_size * 2):
+                high_val_units = []
+                for u in grouped_units:
+                    is_coll = u.get("is_directory_group") or u.get("is_collective")
+                    name_l = u.get("name", "").lower()
+                    ext = os.path.splitext(name_l)[1].lower()
+                    if is_coll or ext in cls.INSTALLER_EXTS or ext in cls.ARCHIVE_IMAGE_EXTS or ext in cls.DOC_EXTS or ext == ".apk" or u.get("content_samples"):
+                        high_val_units.append(u)
+                if high_val_units:
+                    grouped_units_to_llm = high_val_units[:80]
+                else:
+                    grouped_units_to_llm = grouped_units[:options.batch_size]
+            else:
+                grouped_units_to_llm = grouped_units
             normalized_url = cls._normalize_base_url(base_url)
             endpoint = normalized_url
             headers = {
@@ -720,7 +878,7 @@ class AIService:
                         f"已保留本地离线启发式规则"
                     )
 
-            batches = [grouped_units[i:i + batch_size] for i in range(0, len(grouped_units), batch_size)]
+            batches = [grouped_units_to_llm[i:i + batch_size] for i in range(0, len(grouped_units_to_llm), batch_size)]
             total_batches = len(batches)
 
             if progress_callback:

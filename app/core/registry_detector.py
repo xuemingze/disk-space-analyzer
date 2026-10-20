@@ -6,9 +6,49 @@ Windows 注册表已安装软件拓扑索引与前缀匹配引擎
 """
 import os
 import sys
+import json
+from pathlib import Path
+from dataclasses import dataclass
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Set
 from app.utils.logger import app_logger
+
+
+CUSTOM_APPS_PERSIST_FILE = Path.home() / ".disk_space_analyzer" / "custom_apps.json"
+
+
+def load_standalone_custom_apps() -> List[str]:
+    """从独立持久化文件中加载自定义应用目录 (双保险保障)"""
+    try:
+        if CUSTOM_APPS_PERSIST_FILE.exists():
+            with open(CUSTOM_APPS_PERSIST_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return [os.path.normpath(str(p).strip()) for p in data if str(p).strip()]
+    except Exception as e:
+        app_logger.debug("读取独立自定义应用持久化文件失败: %s", e)
+    return []
+
+
+def save_standalone_custom_apps(custom_dirs: List[str]) -> bool:
+    """原子保存自定义应用目录至独立专属持久化文件"""
+    try:
+        CUSTOM_APPS_PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        unique_dirs = []
+        seen = set()
+        for d in custom_dirs:
+            if d and d.strip():
+                norm = os.path.normpath(d.strip())
+                low = norm.lower()
+                if low not in seen:
+                    seen.add(low)
+                    unique_dirs.append(norm)
+        with open(CUSTOM_APPS_PERSIST_FILE, "w", encoding="utf-8") as f:
+            json.dump(unique_dirs, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        app_logger.error("保存独立自定义应用持久化文件失败: %s", e)
+        return False
 
 GENERIC_SUBDIRS = {
     "application", "app", "bin", "core", "programs",
@@ -85,11 +125,13 @@ class RegistryAppDetector:
 
     @classmethod
     def set_custom_apps(cls, custom_dirs: List[str]):
-        """设置用户手动添加的独立应用目录"""
+        """设置用户手动添加的独立应用目录并双保险持久化"""
+        norm_list = [os.path.normpath(d) for d in custom_dirs if d and d.strip()]
         cls._custom_dirs = {
-            os.path.normcase(os.path.normpath(d)): os.path.normpath(d)
-            for d in custom_dirs if d and d.strip()
+            os.path.normcase(d): d for d in norm_list
         }
+        # 独立持久化双保险
+        save_standalone_custom_apps(norm_list)
         # 重置缓存以重新合并
         cls._cached_apps = None
         cls._cached_roots_sorted = None
@@ -146,27 +188,33 @@ class RegistryAppDetector:
                             source="system_builtin"
                         )
 
-        # 合并用户自定义独立软件目录 (优先级高于注册表)
+        # 合并用户自定义独立软件目录 (双保险读取: app_config + 独立持久化文件 custom_apps.json)
+        all_custom_dirs = set()
         try:
             from app.config import app_config
             cfg_dirs = app_config.get("custom_app_dirs", default=[])
-            if cfg_dirs:
+            if isinstance(cfg_dirs, list):
                 for d in cfg_dirs:
-                    if d and d.strip():
-                        norm_d = os.path.normpath(d)
-                        cls._custom_dirs[os.path.normcase(norm_d)] = norm_d
+                    if d and str(d).strip():
+                        all_custom_dirs.add(os.path.normpath(str(d).strip()))
         except Exception:
             pass
 
+        standalone_dirs = load_standalone_custom_apps()
+        for d in standalone_dirs:
+            all_custom_dirs.add(d)
+
+        for d in all_custom_dirs:
+            cls._custom_dirs[os.path.normcase(d)] = d
+
         for norm_c_dir, orig_p in cls._custom_dirs.items():
-            if os.path.exists(orig_p):
-                dir_name = os.path.basename(orig_p)
-                apps[norm_c_dir] = InstalledAppInfo(
-                    name=dir_name,
-                    install_root=orig_p,
-                    publisher="用户自定义",
-                    source="custom"
-                )
+            dir_name = os.path.basename(orig_p) or orig_p
+            apps[norm_c_dir] = InstalledAppInfo(
+                name=dir_name,
+                install_root=orig_p,
+                publisher="用户自定义沉淀",
+                source="custom"
+            )
 
         cls._cached_apps = apps
         app_logger.info("已加载已安装软件拓扑索引: 共 %d 款软件", len(apps))

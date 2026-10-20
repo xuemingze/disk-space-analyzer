@@ -651,6 +651,9 @@ class HomeView(QWidget):
         self.tabs.setTabText(4, f"🏆 全局 Top 100 超大资产 (>300MB) [{len(top_files)}]")
         self.tabs.setCurrentIndex(0)
 
+        # 阶段一完成即刻赋值当前扫描结果，解除收拢转集合的阻塞
+        self.current_scan_result = dict(p1_result)
+
     def on_phase2_progress(self, proc_b: object, tot_b: object, speed: str, eta: int, cur_g: int, tot_g: int):
         proc_int = int(proc_b)
         tot_int = int(tot_b)
@@ -744,10 +747,22 @@ class HomeView(QWidget):
 
     def on_promote_collective_requested(self, target_dir: str, app_name: str):
         """响应任意表格触发的收拢转集合操作，执行全域同构收割与联动刷新"""
-        if not self.current_scan_result:
-            return
-
         from app.core.asset_promoter import AssetPromoterService
+
+        # 1. 第一优先级执行规则沉淀落盘 (双保险落盘)
+        AssetPromoterService.persist_collective(target_dir)
+
+        # 2. 若当前 current_scan_result 为空，从全局表格中拉取已显示的数据作为数据源
+        if not self.current_scan_result:
+            grid_data = self.global_detail_table.source_model._data
+            if grid_data:
+                self.current_scan_result = {
+                    "all_scanned_files": list(grid_data),
+                    "total_bytes": sum(f.get("size", 0) for f in grid_data),
+                    "redundant_files": []
+                }
+            else:
+                return
         all_files = self.current_scan_result.get("all_scanned_files", [])
         updated_all_files, new_asset = AssetPromoterService.execute_promotion(
             target_dir=target_dir,
@@ -1037,7 +1052,12 @@ class HomeView(QWidget):
         
         self.report_text_edit.setPlainText("🤖 分析中: 正在调用大模型生成全景深度分析与治理报告，请稍候...")
         
-        self.ai_worker = AIWorker("report", self.current_scan_result)
+                # 建立 5 类核心资产前置过滤管道，小碎片 0 Token 阻断
+        scan_copy = dict(self.current_scan_result)
+        raw_redundant = scan_copy.get("redundant_files", [])
+        if raw_redundant:
+            scan_copy["redundant_files"] = AIService.filter_high_value_assets_for_ai(raw_redundant, max_items=60)
+        self.ai_worker = AIWorker("report", scan_copy)
         self.ai_task_id = global_task_manager.create_task("生成深度分析报告", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         self.ai_worker.report_done.connect(self.on_ai_report_done)
         self.ai_worker.failed.connect(self.on_ai_failed)

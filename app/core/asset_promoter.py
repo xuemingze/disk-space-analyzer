@@ -173,7 +173,7 @@ class AssetPromoterService(QObject):
 
     @classmethod
     def persist_collective(cls, target_dir: str):
-        """沉淀至全局配置与注册表匹配树"""
+        """沉淀至全局配置与注册表匹配树 (双保险持久化)"""
         try:
             norm_d = os.path.normpath(target_dir)
             cfg_dirs = list(app_config.get("custom_app_dirs", default=[]))
@@ -182,5 +182,8 @@ class AssetPromoterService(QObject):
                 app_config.set("custom_app_dirs", cfg_dirs, level="global")
 
             RegistryAppDetector.set_custom_apps(cfg_dirs)
+            from app.core.registry_detector import save_standalone_custom_apps
+            save_standalone_custom_apps(cfg_dirs)
+            app_logger.info("已成功双保险沉淀自定义独立应用目录: %s", norm_d)
         except Exception as e:
             app_logger.error("沉淀自定义集合规则失败: %s", e)

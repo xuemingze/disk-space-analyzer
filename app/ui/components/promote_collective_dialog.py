@@ -122,9 +122,22 @@ class PromoteCollectiveDialog(QDialog):
         name_lbl.setFixedWidth(110)
         self.txt_name = QLineEdit()
         self.txt_name.setFixedHeight(30)
+        self.btn_ai_suggest = QPushButton("🤖 AI 智能研判推荐")
+        self.btn_ai_suggest.setFixedHeight(30)
+        self.btn_ai_suggest.setStyleSheet(
+            "QPushButton { background-color: #4f46e5; color: white; border-radius: 4px; font-weight: bold; padding: 0 10px; font-size: 11px; }"
+            "QPushButton:hover { background-color: #4338ca; }"
+        )
+        self.btn_ai_suggest.clicked.connect(self._on_ai_suggest_clicked)
+
         name_row.addWidget(name_lbl)
-        name_row.addWidget(self.txt_name)
+        name_row.addWidget(self.txt_name, 1)
+        name_row.addWidget(self.btn_ai_suggest)
         e_layout.addLayout(name_row)
+
+        self.lbl_ai_hint = QLabel("")
+        self.lbl_ai_hint.setStyleSheet("color: #16a34a; font-size: 11px; padding-left: 110px;")
+        e_layout.addWidget(self.lbl_ai_hint)
 
         # 集合物理目录
         dir_row = QHBoxLayout()
@@ -184,6 +197,37 @@ class PromoteCollectiveDialog(QDialog):
                 r.setAutoExclusive(False)
                 r.setChecked(False)
                 r.setAutoExclusive(True)
+
+    def _on_ai_suggest_clicked(self):
+        target_dir = self.txt_dir.text().strip()
+        if not target_dir or not os.path.exists(target_dir):
+            QMessageBox.warning(self, "提示", "请先选择有效的集合物理根目录！")
+            return
+
+        self.btn_ai_suggest.setEnabled(False)
+        self.btn_ai_suggest.setText("⏳ AI 研判中...")
+        self.lbl_ai_hint.setText("正在调用大模型分析应用名称与所属分类...")
+
+        try:
+            from app.config import app_config
+            from app.core.ai_service import AIService
+            llm_cfg = app_config.get("llm", default={})
+            res = AIService.analyze_directory_or_app_with_ai(
+                base_url=llm_cfg.get("base_url", ""),
+                api_key=llm_cfg.get("api_key", ""),
+                model=llm_cfg.get("model", "gpt-4o-mini"),
+                target_path=target_dir
+            )
+            rec_name = res.get("official_name") or os.path.basename(target_dir)
+            self.txt_name.setText(rec_name)
+            desc = res.get("purpose_description", "")
+            cat = res.get("suggested_category", "")
+            self.lbl_ai_hint.setText(f"💡 AI 研判: [{rec_name}] | {cat} | {desc[:40]}...")
+        except Exception as e:
+            self.lbl_ai_hint.setText(f"AI 研判失败: {e}")
+        finally:
+            self.btn_ai_suggest.setEnabled(True)
+            self.btn_ai_suggest.setText("🤖 AI 智能研判推荐")
 
     def _on_confirm_clicked(self):
         d = self.txt_dir.text().strip()

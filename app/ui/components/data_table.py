@@ -299,6 +299,7 @@ class FileDataGridWidget(QWidget):
     selection_changed_signal = Signal(object, object) # (选中数量, 选中字节总数)
     migrate_requested_signal = Signal(list)            # (选中的路径列表)
     promote_collective_requested = Signal(str, str)    # (target_dir, app_name) 统一收拢转集合信号
+    ai_insight_requested = Signal(dict)                # AI 资产深度研判信号 (资产条目字典)
 
     def __init__(self, is_selectable: bool = True, parent=None):
         super().__init__(parent)
@@ -439,6 +440,9 @@ class FileDataGridWidget(QWidget):
         action_open_file = QAction("📄 打开文件", self)
         action_open_file.triggered.connect(lambda: self._open_file(file_path))
         
+        action_ai = QAction("🤖 AI 智能研判与治理建议...", self)
+        action_ai.triggered.connect(lambda: self._on_ai_insight_action(item))
+
         action_promote = QAction("📦 向上收拢并转为集合...", self)
         action_promote.triggered.connect(lambda: self._on_promote_collective_action(file_path))
 
@@ -451,6 +455,7 @@ class FileDataGridWidget(QWidget):
         menu.addAction(action_open_dir)
         menu.addAction(action_open_file)
         menu.addSeparator()
+        menu.addAction(action_ai)
         menu.addAction(action_promote)
         menu.addAction(action_migrate)
         menu.addSeparator()
@@ -476,6 +481,16 @@ class FileDataGridWidget(QWidget):
                 os.startfile(norm)
             else:
                 subprocess.Popen(f'explorer.exe /select,"{norm}"')
+
+    def _on_ai_insight_action(self, item: Dict[str, Any]):
+        """弹出 AI 资产研判弹窗并通知上层"""
+        self.ai_insight_requested.emit(item)
+        try:
+            from app.ui.components.ai_insight_dialog import AIAssetInsightDialog
+            dlg = AIAssetInsightDialog(item, self)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.warning(self, "AI 研判错误", f"无法打开 AI 研判对话框: {e}")
 
     def _on_promote_collective_action(self, file_path: str):
         """触发向上收拢转为集合弹窗"""
