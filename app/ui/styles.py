@@ -57,6 +57,31 @@ QPushButton.NavButton:checked {
     font-weight: bold;
 }
 
+/* 二级子导航按钮 (自动化中心等可展开子菜单) */
+QPushButton.SubNavButton {
+    background-color: transparent;
+    color: #64748B;
+    text-align: left;
+    padding: 8px 16px 8px 38px;
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 0px;
+}
+
+QPushButton.SubNavButton:hover {
+    background-color: #162032;
+    color: #E2E8F0;
+}
+
+QPushButton.SubNavButton:checked {
+    background-color: #162032;
+    color: #38BDF8;
+    border-left: 3px solid #38BDF8;
+    font-weight: bold;
+}
+
 /* 主容器背景 */
 #MainContentArea {
     background-color: #0B0F17;

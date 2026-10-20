@@ -9,6 +9,8 @@ from PySide6.QtGui import QCloseEvent
 from app.ui.home_view import HomeView
 from app.ui.organizer_view import OrganizerView
 from app.ui.settings_view import SettingsView
+from app.ui.automation import AutomationCenterView
+from app.automation.manager import AutomationManager
 from app.ui.components.task_manager_widget import TaskManagerDialog
 from app.ui.styles import MODERN_DARK_STYLE
 from app.core.task_manager import global_task_manager
@@ -21,6 +23,7 @@ class MainWindow(QMainWindow):
     包含：
     - 主控扫描 (Home)
     - 文件整理 (Organizer)
+    - 自动化中心 (Automation Center: 规则监控 / 计划任务 / 快速整理 / 命令行与脚本)
     - 系统配置 (Settings)
     - 任务管理器 (Tasks)
     """
@@ -65,6 +68,7 @@ class MainWindow(QMainWindow):
         self.nav_btn_group = QButtonGroup(self)
         self.nav_btn_group.setExclusive(True)
 
+        # 1.1 主控扫描
         self.btn_nav_home = QPushButton("  🏠  主控扫描 (Home)")
         self.btn_nav_home.setProperty("class", "NavButton")
         self.btn_nav_home.setCheckable(True)
@@ -73,6 +77,7 @@ class MainWindow(QMainWindow):
         self.nav_btn_group.addButton(self.btn_nav_home)
         sidebar_layout.addWidget(self.btn_nav_home)
 
+        # 1.2 文件整理
         self.btn_nav_organizer = QPushButton("  📁  文件整理 (Organizer)")
         self.btn_nav_organizer.setProperty("class", "NavButton")
         self.btn_nav_organizer.setCheckable(True)
@@ -80,10 +85,50 @@ class MainWindow(QMainWindow):
         self.nav_btn_group.addButton(self.btn_nav_organizer)
         sidebar_layout.addWidget(self.btn_nav_organizer)
 
+        # 1.3 可展开的「自动化中心」主导航
+        self.btn_nav_automation = QPushButton("  🤖  自动化中心 ▾")
+        self.btn_nav_automation.setProperty("class", "NavButton")
+        self.btn_nav_automation.setCheckable(True)
+        self.btn_nav_automation.clicked.connect(self._on_automation_clicked)
+        self.nav_btn_group.addButton(self.btn_nav_automation)
+        sidebar_layout.addWidget(self.btn_nav_automation)
+
+        # 1.3.1 自动化中心可展开子菜单容器
+        self.sub_nav_container = QWidget()
+        sub_layout = QVBoxLayout(self.sub_nav_container)
+        sub_layout.setContentsMargins(0, 0, 0, 0)
+        sub_layout.setSpacing(2)
+
+        self.sub_btn_group = QButtonGroup(self)
+        self.sub_btn_group.setExclusive(True)
+
+        self.btn_sub_monitor = QPushButton("  👁️ 规则监控")
+        self.btn_sub_schedule = QPushButton("  ⏰ 计划任务")
+        self.btn_sub_quick = QPushButton("  ⚡ 快速整理")
+        self.btn_sub_cli = QPushButton("  💻 命令行与脚本")
+
+        self.sub_nav_btns = [
+            (self.btn_sub_monitor, 0),
+            (self.btn_sub_schedule, 1),
+            (self.btn_sub_quick, 2),
+            (self.btn_sub_cli, 3)
+        ]
+
+        for btn, sub_idx in self.sub_nav_btns:
+            btn.setProperty("class", "SubNavButton")
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _, s_idx=sub_idx: self.switch_view(2, sub_index=s_idx))
+            self.sub_btn_group.addButton(btn)
+            sub_layout.addWidget(btn)
+
+        self.btn_sub_monitor.setChecked(True)
+        sidebar_layout.addWidget(self.sub_nav_container)
+
+        # 1.4 配置与模型
         self.btn_nav_settings = QPushButton("  ⚙️  配置与模型 (Settings)")
         self.btn_nav_settings.setProperty("class", "NavButton")
         self.btn_nav_settings.setCheckable(True)
-        self.btn_nav_settings.clicked.connect(lambda: self.switch_view(2))
+        self.btn_nav_settings.clicked.connect(lambda: self.switch_view(3))
         self.nav_btn_group.addButton(self.btn_nav_settings)
         sidebar_layout.addWidget(self.btn_nav_settings)
 
@@ -110,27 +155,54 @@ class MainWindow(QMainWindow):
 
         self.home_view = HomeView()
         self.organizer_view = OrganizerView()
+        self.automation_view = AutomationCenterView()
         self.settings_view = SettingsView()
 
-        self.stacked_widget.addWidget(self.home_view)
-        self.stacked_widget.addWidget(self.organizer_view)
-        self.stacked_widget.addWidget(self.settings_view)
+        self.stacked_widget.addWidget(self.home_view)        # 0
+        self.stacked_widget.addWidget(self.organizer_view)   # 1
+        self.stacked_widget.addWidget(self.automation_view)  # 2
+        self.stacked_widget.addWidget(self.settings_view)    # 3
 
         main_layout.addWidget(self.stacked_widget, 1)
 
-    def switch_view(self, index: int):
+    def _on_automation_clicked(self):
+        """点击自动化中心主按钮：切换视图并折叠/展开子菜单"""
+        if self.stacked_widget.currentIndex() == 2:
+            # 已经在自动化中心：切换折叠状态
+            is_visible = self.sub_nav_container.isVisible()
+            self.sub_nav_container.setVisible(not is_visible)
+            self.btn_nav_automation.setText("  🤖  自动化中心 ▾" if not is_visible else "  🤖  自动化中心 ▸")
+        else:
+            # 从其他视图切过来：展开并切到自动化中心
+            self.sub_nav_container.setVisible(True)
+            self.btn_nav_automation.setText("  🤖  自动化中心 ▾")
+            self.switch_view(2)
+
+    def switch_view(self, index: int, sub_index: int = None):
+        """路由切换主视图，支持联动自动化中心子页面"""
         self.stacked_widget.setCurrentIndex(index)
         if index == 0:
             self.btn_nav_home.setChecked(True)
         elif index == 1:
             self.btn_nav_organizer.setChecked(True)
         elif index == 2:
+            self.btn_nav_automation.setChecked(True)
+            self.sub_nav_container.setVisible(True)
+            self.btn_nav_automation.setText("  🤖  自动化中心 ▾")
+            if sub_index is not None:
+                self.automation_view.switch_subpage(sub_index)
+                if 0 <= sub_index < len(self.sub_nav_btns):
+                    self.sub_nav_btns[sub_index][0].setChecked(True)
+            else:
+                curr_sub = self.automation_view.sub_stack.currentIndex()
+                if 0 <= curr_sub < len(self.sub_nav_btns):
+                    self.sub_nav_btns[curr_sub][0].setChecked(True)
+        elif index == 3:
             self.btn_nav_settings.setChecked(True)
 
     def open_task_manager(self):
         dlg = TaskManagerDialog(self)
         dlg.exec()
-
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
@@ -144,7 +216,6 @@ class MainWindow(QMainWindow):
             # 2. 其次退出主窗口全屏 (如果存在)
             if not handled and self.isFullScreen():
                 self.showNormal()
-                
                 handled = True
                 
             if not handled:
@@ -153,7 +224,7 @@ class MainWindow(QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent):
-        """主窗口关闭时安全拦截活跃后台任务"""
+        """主窗口关闭时安全拦截活跃后台任务并停止自动化监控"""
         if global_task_manager.has_active_tasks():
             reply = QMessageBox.question(
                 self, "任务运行中",
@@ -165,8 +236,10 @@ class MainWindow(QMainWindow):
                 for t in global_task_manager.list_tasks():
                     if t.worker and hasattr(t.worker, "cancel"):
                         t.worker.cancel()
+                AutomationManager.get_instance().stop_services()
                 event.accept()
             else:
                 event.ignore()
         else:
+            AutomationManager.get_instance().stop_services()
             event.accept()
