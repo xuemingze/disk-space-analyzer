@@ -56,7 +56,7 @@ class RuleWatcher(QThread):
     def stop(self):
         """平滑停止监控线程"""
         self._is_running = False
-        self.wait(2000)
+        self.wait(3000)
 
     def _cleanup_old_cache(self, now: float):
         """定期清理过期的防回环缓存"""
@@ -113,8 +113,11 @@ class RuleWatcher(QThread):
                 app_logger.error("监控循环异常: %s", e)
                 self.log_emitted.emit(f"监控异常: {e}", "error")
 
-            # 睡眠控制心跳
-            time.sleep(self._poll_interval)
+            # 细粒度可中断休眠 (每 0.1 秒检查一次退出标志)
+            for _ in range(int(self._poll_interval * 10)):
+                if not self._is_running:
+                    break
+                time.sleep(0.1)
 
         self.status_changed.emit("已停止")
         app_logger.info("自动化中心: 规则监控后台引擎已停止")

@@ -60,7 +60,7 @@ class TaskScheduler(QThread):
     def stop(self):
         """平滑停止调度线程"""
         self._is_running = False
-        self.wait(2000)
+        self.wait(3000)
 
     def run(self):
         app_logger.info("自动化中心: 计划任务调度器已启动")
@@ -79,7 +79,11 @@ class TaskScheduler(QThread):
                 app_logger.error("计划任务调度循环异常: %s", e)
                 self.log_emitted.emit(f"调度异常: {e}", "error")
 
-            time.sleep(self._check_interval)
+            # 细粒度可中断休眠 (每 0.1 秒检查一次退出标志，杜绝 5s 大粗粒度 sleep 导致析构超时)
+            for _ in range(int(self._check_interval * 10)):
+                if not self._is_running:
+                    break
+                time.sleep(0.1)
 
         self.status_changed.emit("已停止")
         app_logger.info("自动化中心: 计划任务调度器已停止")
