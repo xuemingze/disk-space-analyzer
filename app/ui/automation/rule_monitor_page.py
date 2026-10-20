@@ -206,12 +206,51 @@ class RuleMonitorPage(QWidget):
         self.rule_table = QTableWidget()
         self.rule_table.setColumnCount(8)
         self.rule_table.setHorizontalHeaderLabels(["状态", "规则名称", "观察路径", "归档目标", "整理模式", "执行模式", "防抖", "操作"])
-        self.rule_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.rule_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+
+        # 严格执行设计铁律：统一行高 44px
         self.rule_table.verticalHeader().setVisible(False)
+        self.rule_table.verticalHeader().setDefaultSectionSize(44)
+        self.rule_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+
+        # 严格执行设计铁律：列宽分层策略 (控件列锁定宽度，纯文本列弹性伸缩)
+        h_header = self.rule_table.horizontalHeader()
+        h_header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.rule_table.setColumnWidth(0, 90)   # 状态开关
+        h_header.setSectionResizeMode(1, QHeaderView.Interactive)
+        self.rule_table.setColumnWidth(1, 130)  # 规则名称
+        h_header.setSectionResizeMode(2, QHeaderView.Stretch)  # 观察路径
+        h_header.setSectionResizeMode(3, QHeaderView.Stretch)  # 归档目标
+        h_header.setSectionResizeMode(4, QHeaderView.Fixed)
+        self.rule_table.setColumnWidth(4, 110)  # 整理模式
+        h_header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.rule_table.setColumnWidth(5, 100)  # 执行模式
+        h_header.setSectionResizeMode(6, QHeaderView.Fixed)
+        self.rule_table.setColumnWidth(6, 75)   # 防抖秒数
+        h_header.setSectionResizeMode(7, QHeaderView.Fixed)
+        self.rule_table.setColumnWidth(7, 150)  # 操作列 (2按钮)
+
         self.rule_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.rule_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.rule_table.setStyleSheet("QTableWidget { background: #1E293B; border: 1px solid #334155; border-radius: 6px; }")
+        self.rule_table.setStyleSheet("""
+            QTableWidget {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                gridline-color: #334155;
+            }
+            QTableWidget::item {
+                padding: 4px 6px;
+                color: #F8FAFC;
+            }
+            QHeaderView::section {
+                background: #0F172A;
+                color: #94A3B8;
+                font-weight: bold;
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid #334155;
+            }
+        """)
         main_layout.addWidget(self.rule_table, 2)
 
         # 候选待审方案区
@@ -236,45 +275,128 @@ class RuleMonitorPage(QWidget):
         self.manager.plan_added.connect(lambda p: self.refresh_plans())
 
     def refresh_rules(self):
-        """刷新规则列表表格"""
+        """刷新规则列表表格 (严格遵循行高、固定尺寸与居中包裹铁律)"""
         rules = self.manager.rules
         self.rule_table.setRowCount(len(rules))
         for row, rule in enumerate(rules):
-            # 状态开关按钮
+            # 1. 状态开关按钮 (使用独立居中容器，固定 70x28 尺寸)
+            toggle_container = QWidget()
+            toggle_layout = QHBoxLayout(toggle_container)
+            toggle_layout.setContentsMargins(0, 0, 0, 0)
+            toggle_layout.setAlignment(Qt.AlignCenter)
+
             btn_toggle = QPushButton("已启用" if rule.enabled else "已停用")
             btn_toggle.setCheckable(True)
             btn_toggle.setChecked(rule.enabled)
+            btn_toggle.setFixedSize(70, 28)
             btn_toggle.setStyleSheet(
-                "background: #10B981; color: white; border-radius: 3px; padding: 4px;" if rule.enabled
-                else "background: #64748B; color: white; border-radius: 3px; padding: 4px;"
+                """
+                QPushButton {
+                    background: #10B981;
+                    color: white;
+                    font-size: 12px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #059669;
+                }
+                QPushButton:pressed {
+                    background: #047857;
+                }
+                """ if rule.enabled else """
+                QPushButton {
+                    background: #475569;
+                    color: #CBD5E1;
+                    font-size: 12px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #64748B;
+                }
+                QPushButton:pressed {
+                    background: #334155;
+                }
+                """
             )
             btn_toggle.clicked.connect(lambda checked, r_id=rule.id: self._toggle_rule(r_id, checked))
-            self.rule_table.setCellWidget(row, 0, btn_toggle)
+            toggle_layout.addWidget(btn_toggle)
+            self.rule_table.setCellWidget(row, 0, toggle_container)
 
-            self.rule_table.setItem(row, 1, QTableWidgetItem(rule.name))
-            self.rule_table.setItem(row, 2, QTableWidgetItem(rule.watch_path))
-            self.rule_table.setItem(row, 3, QTableWidgetItem(rule.target_dir or "默认(D:/归档备份)"))
-            self.rule_table.setItem(row, 4, QTableWidgetItem(rule.organize_mode))
+            # 2. 文本单元格 (设置对齐与展示)
+            item_name = QTableWidgetItem(rule.name)
+            item_name.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.rule_table.setItem(row, 1, item_name)
+
+            item_src = QTableWidgetItem(rule.watch_path)
+            item_src.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            item_src.setToolTip(rule.watch_path)
+            self.rule_table.setItem(row, 2, item_src)
+
+            item_dest = QTableWidgetItem(rule.target_dir or "默认(D:/归档备份)")
+            item_dest.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            item_dest.setToolTip(rule.target_dir or "D:/归档备份")
+            self.rule_table.setItem(row, 3, item_dest)
+
+            item_mode = QTableWidgetItem(rule.organize_mode)
+            item_mode.setTextAlignment(Qt.AlignCenter)
+            self.rule_table.setItem(row, 4, item_mode)
 
             mode_item = QTableWidgetItem("💡 仅提议" if rule.propose_only else "⚡ 自动归档")
             mode_item.setForeground(QColor("#38BDF8" if rule.propose_only else "#10B981"))
+            mode_item.setTextAlignment(Qt.AlignCenter)
             self.rule_table.setItem(row, 5, mode_item)
 
-            self.rule_table.setItem(row, 6, QTableWidgetItem(f"{rule.debounce_seconds:.1f}s"))
+            item_debounce = QTableWidgetItem(f"{rule.debounce_seconds:.1f}s")
+            item_debounce.setTextAlignment(Qt.AlignCenter)
+            self.rule_table.setItem(row, 6, item_debounce)
 
-            # 操作按钮栏
+            # 3. 操作按钮栏 (严格遵循独立容器居中 + 28px 高度保底)
             ops_widget = QWidget()
             ops_layout = QHBoxLayout(ops_widget)
-            ops_layout.setContentsMargins(4, 2, 4, 2)
-            ops_layout.setSpacing(6)
+            ops_layout.setContentsMargins(4, 0, 4, 0)
+            ops_layout.setSpacing(8)
+            ops_layout.setAlignment(Qt.AlignCenter)
 
             btn_edit = QPushButton("编辑")
-            btn_edit.setStyleSheet("background: #3B82F6; color: white; padding: 2px 8px; border-radius: 3px;")
+            btn_edit.setFixedSize(56, 28)
+            btn_edit.setStyleSheet("""
+                QPushButton {
+                    background: #2563EB;
+                    color: white;
+                    font-size: 12px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #1D4ED8;
+                }
+                QPushButton:pressed {
+                    background: #1E40AF;
+                }
+            """)
             btn_edit.clicked.connect(lambda _, r=rule: self._edit_rule(r))
             ops_layout.addWidget(btn_edit)
 
             btn_del = QPushButton("删除")
-            btn_del.setStyleSheet("background: #EF4444; color: white; padding: 2px 8px; border-radius: 3px;")
+            btn_del.setFixedSize(56, 28)
+            btn_del.setStyleSheet("""
+                QPushButton {
+                    background: #DC2626;
+                    color: white;
+                    font-size: 12px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #B91C1C;
+                }
+                QPushButton:pressed {
+                    background: #991B1B;
+                }
+            """)
             btn_del.clicked.connect(lambda _, r_id=rule.id: self._delete_rule(r_id))
             ops_layout.addWidget(btn_del)
 

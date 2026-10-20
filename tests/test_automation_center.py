@@ -462,3 +462,56 @@ def test_scheduler_auto_archive_integration(tmp_path):
     assert len(dest_files) == 1
 
 
+def test_table_ui_design_rules_compliance(qapp):
+    """测试列表表格模块严格符合 UI 设计铁律：行高44px、操作与状态列锁定宽度、控件尺寸固定"""
+    from PySide6.QtWidgets import QHeaderView, QPushButton
+
+    # 1. 验证规则监控列表
+    rule_page = RuleMonitorPage()
+    # 验证行高锁定为 44px
+    assert rule_page.rule_table.verticalHeader().defaultSectionSize() == 44
+    assert rule_page.rule_table.verticalHeader().sectionResizeMode(0) == QHeaderView.Fixed
+    # 验证关键控件列宽度锁定
+    h_rule = rule_page.rule_table.horizontalHeader()
+    assert h_rule.sectionResizeMode(0) == QHeaderView.Fixed
+    assert rule_page.rule_table.columnWidth(0) == 90
+    assert h_rule.sectionResizeMode(7) == QHeaderView.Fixed
+    assert rule_page.rule_table.columnWidth(7) == 150
+
+    # 2. 验证计划任务列表
+    task_page = ScheduleTaskPage()
+    # 验证行高锁定为 44px
+    assert task_page.task_table.verticalHeader().defaultSectionSize() == 44
+    assert task_page.task_table.verticalHeader().sectionResizeMode(0) == QHeaderView.Fixed
+    # 验证关键控件列宽度锁定
+    h_task = task_page.task_table.horizontalHeader()
+    assert h_task.sectionResizeMode(0) == QHeaderView.Fixed
+    assert task_page.task_table.columnWidth(0) == 90
+    assert h_task.sectionResizeMode(7) == QHeaderView.Fixed
+    assert task_page.task_table.columnWidth(7) == 220
+
+    # 3. 验证单元格内按钮尺寸保护
+    # 向规则列表中添加一条测试数据并渲染
+    rule = WatchRule(name="测试尺寸规则", watch_path="D:/test/watch")
+    rule_page.manager.rules = [rule]
+    rule_page.refresh_rules()
+
+    # 验证第 0 列状态开关按钮固定尺寸
+    cell_0 = rule_page.rule_table.cellWidget(0, 0)
+    assert cell_0 is not None
+    btn_toggle = cell_0.findChild(QPushButton)
+    assert btn_toggle is not None
+    assert btn_toggle.height() == 28
+    assert btn_toggle.width() == 70
+
+    # 验证第 7 列操作栏按钮固定尺寸
+    cell_7 = rule_page.rule_table.cellWidget(0, 7)
+    assert cell_7 is not None
+    buttons = cell_7.findChildren(QPushButton)
+    assert len(buttons) == 2
+    for b in buttons:
+        assert b.height() == 28
+        assert b.width() == 56
+
+
+

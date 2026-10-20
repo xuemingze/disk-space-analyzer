@@ -195,12 +195,51 @@ class ScheduleTaskPage(QWidget):
         self.task_table = QTableWidget()
         self.task_table.setColumnCount(8)
         self.task_table.setHorizontalHeaderLabels(["状态", "任务名称", "目标路径", "归档目录", "执行周期", "模式", "下次执行", "操作"])
-        self.task_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.task_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+
+        # 严格执行设计铁律：统一行高 44px
         self.task_table.verticalHeader().setVisible(False)
+        self.task_table.verticalHeader().setDefaultSectionSize(44)
+        self.task_table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
+
+        # 严格执行设计铁律：列宽分层策略 (控件列锁定宽度，纯文本列弹性伸缩)
+        h_header = self.task_table.horizontalHeader()
+        h_header.setSectionResizeMode(0, QHeaderView.Fixed)
+        self.task_table.setColumnWidth(0, 90)   # 状态开关
+        h_header.setSectionResizeMode(1, QHeaderView.Interactive)
+        self.task_table.setColumnWidth(1, 130)  # 任务名称
+        h_header.setSectionResizeMode(2, QHeaderView.Stretch)  # 目标路径
+        h_header.setSectionResizeMode(3, QHeaderView.Stretch)  # 归档目录
+        h_header.setSectionResizeMode(4, QHeaderView.Fixed)
+        self.task_table.setColumnWidth(4, 100)  # 执行周期
+        h_header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.task_table.setColumnWidth(5, 100)  # 模式
+        h_header.setSectionResizeMode(6, QHeaderView.Fixed)
+        self.task_table.setColumnWidth(6, 135)  # 下次执行
+        h_header.setSectionResizeMode(7, QHeaderView.Fixed)
+        self.task_table.setColumnWidth(7, 220)  # 操作列 (3按钮)
+
         self.task_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.task_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.task_table.setStyleSheet("QTableWidget { background: #1E293B; border: 1px solid #334155; border-radius: 6px; }")
+        self.task_table.setStyleSheet("""
+            QTableWidget {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                gridline-color: #334155;
+            }
+            QTableWidget::item {
+                padding: 4px 6px;
+                color: #F8FAFC;
+            }
+            QHeaderView::section {
+                background: #0F172A;
+                color: #94A3B8;
+                font-weight: bold;
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid #334155;
+            }
+        """)
         main_layout.addWidget(self.task_table, 3)
 
         # 执行日志输出框
@@ -222,54 +261,151 @@ class ScheduleTaskPage(QWidget):
         self.log_text.append(f"[{t_str}] {msg}")
 
     def refresh_tasks(self):
-        """刷新任务表格"""
+        """刷新任务表格 (严格遵循行高、固定尺寸与居中包裹铁律)"""
         tasks = self.manager.tasks
         self.task_table.setRowCount(len(tasks))
         for row, task in enumerate(tasks):
-            # 状态开关
+            # 1. 状态开关按钮 (使用独立居中容器，固定 70x28 尺寸)
+            toggle_container = QWidget()
+            toggle_layout = QHBoxLayout(toggle_container)
+            toggle_layout.setContentsMargins(0, 0, 0, 0)
+            toggle_layout.setAlignment(Qt.AlignCenter)
+
             btn_toggle = QPushButton("已启用" if task.enabled else "已停用")
             btn_toggle.setCheckable(True)
             btn_toggle.setChecked(task.enabled)
+            btn_toggle.setFixedSize(70, 28)
             btn_toggle.setStyleSheet(
-                "background: #10B981; color: white; border-radius: 3px; padding: 4px;" if task.enabled
-                else "background: #64748B; color: white; border-radius: 3px; padding: 4px;"
+                """
+                QPushButton {
+                    background: #10B981;
+                    color: white;
+                    font-size: 12px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #059669;
+                }
+                QPushButton:pressed {
+                    background: #047857;
+                }
+                """ if task.enabled else """
+                QPushButton {
+                    background: #475569;
+                    color: #CBD5E1;
+                    font-size: 12px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #64748B;
+                }
+                QPushButton:pressed {
+                    background: #334155;
+                }
+                """
             )
             btn_toggle.clicked.connect(lambda checked, t_id=task.id: self._toggle_task(t_id, checked))
-            self.task_table.setCellWidget(row, 0, btn_toggle)
+            toggle_layout.addWidget(btn_toggle)
+            self.task_table.setCellWidget(row, 0, toggle_container)
 
-            self.task_table.setItem(row, 1, QTableWidgetItem(task.name))
-            self.task_table.setItem(row, 2, QTableWidgetItem(task.target_path))
-            self.task_table.setItem(row, 3, QTableWidgetItem(task.target_dir or "默认(D:/归档备份)"))
+            # 2. 文本单元格
+            item_name = QTableWidgetItem(task.name)
+            item_name.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            self.task_table.setItem(row, 1, item_name)
+
+            item_path = QTableWidgetItem(task.target_path)
+            item_path.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            item_path.setToolTip(task.target_path)
+            self.task_table.setItem(row, 2, item_path)
+
+            item_dest = QTableWidgetItem(task.target_dir or "默认(D:/归档备份)")
+            item_dest.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            item_dest.setToolTip(task.target_dir or "D:/归档备份")
+            self.task_table.setItem(row, 3, item_dest)
 
             hours = task.interval_minutes / 60.0
             cycle_str = f"{task.interval_minutes} 分钟" if task.interval_minutes < 60 else f"{hours:.1f} 小时"
-            self.task_table.setItem(row, 4, QTableWidgetItem(cycle_str))
+            item_cycle = QTableWidgetItem(cycle_str)
+            item_cycle.setTextAlignment(Qt.AlignCenter)
+            self.task_table.setItem(row, 4, item_cycle)
 
             mode_item = QTableWidgetItem("💡 仅提议" if task.propose_only else "⚡ 自动归档")
             mode_item.setForeground(QColor("#38BDF8" if task.propose_only else "#10B981"))
+            mode_item.setTextAlignment(Qt.AlignCenter)
             self.task_table.setItem(row, 5, mode_item)
 
             next_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(task.next_run_time)) if task.next_run_time else "未排定"
-            self.task_table.setItem(row, 6, QTableWidgetItem(next_str))
+            item_next = QTableWidgetItem(next_str)
+            item_next.setTextAlignment(Qt.AlignCenter)
+            self.task_table.setItem(row, 6, item_next)
 
-            # 操作按钮栏
+            # 3. 操作按钮栏 (严格遵循独立容器居中 + 28px 高度保底，3按钮固定尺寸)
             ops_widget = QWidget()
             ops_layout = QHBoxLayout(ops_widget)
-            ops_layout.setContentsMargins(4, 2, 4, 2)
+            ops_layout.setContentsMargins(4, 0, 4, 0)
             ops_layout.setSpacing(6)
+            ops_layout.setAlignment(Qt.AlignCenter)
 
             btn_run_now = QPushButton("立即运行")
-            btn_run_now.setStyleSheet("background: #0284C7; color: white; padding: 2px 8px; border-radius: 3px;")
+            btn_run_now.setFixedSize(68, 28)
+            btn_run_now.setStyleSheet("""
+                QPushButton {
+                    background: #0284C7;
+                    color: white;
+                    font-size: 12px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #0369A1;
+                }
+                QPushButton:pressed {
+                    background: #075985;
+                }
+            """)
             btn_run_now.clicked.connect(lambda _, t_id=task.id: self._run_now(t_id))
             ops_layout.addWidget(btn_run_now)
 
             btn_edit = QPushButton("编辑")
-            btn_edit.setStyleSheet("background: #3B82F6; color: white; padding: 2px 8px; border-radius: 3px;")
+            btn_edit.setFixedSize(54, 28)
+            btn_edit.setStyleSheet("""
+                QPushButton {
+                    background: #2563EB;
+                    color: white;
+                    font-size: 12px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #1D4ED8;
+                }
+                QPushButton:pressed {
+                    background: #1E40AF;
+                }
+            """)
             btn_edit.clicked.connect(lambda _, t=task: self._edit_task(t))
             ops_layout.addWidget(btn_edit)
 
             btn_del = QPushButton("删除")
-            btn_del.setStyleSheet("background: #EF4444; color: white; padding: 2px 8px; border-radius: 3px;")
+            btn_del.setFixedSize(54, 28)
+            btn_del.setStyleSheet("""
+                QPushButton {
+                    background: #DC2626;
+                    color: white;
+                    font-size: 12px;
+                    border: none;
+                    border-radius: 4px;
+                }
+                QPushButton:hover {
+                    background: #B91C1C;
+                }
+                QPushButton:pressed {
+                    background: #991B1B;
+                }
+            """)
             btn_del.clicked.connect(lambda _, t_id=task.id: self._delete_task(t_id))
             ops_layout.addWidget(btn_del)
 
