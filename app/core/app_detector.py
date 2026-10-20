@@ -390,6 +390,29 @@ class AppDetector:
         if cls.match_broad_container(dname):
             return None
 
+        # 0.4 Windows 注册表与自定义软件权威匹配 (物理事实第一优先)
+        try:
+            from app.core.registry_detector import RegistryAppDetector
+            matched_app, is_root = RegistryAppDetector.match_app_by_path(str(p))
+            if matched_app and is_root:
+                return {
+                    "is_collective": True,
+                    "collective_type": "已安装应用",
+                    "software_name": matched_app.name,
+                    "directory_name": dname,
+                    "primary_executable": "",
+                    "product_title": matched_app.name,
+                    "publisher": matched_app.publisher,
+                    "manifest_project_name": matched_app.name,
+                    "signature_type": "Windows Installed Software",
+                    "suggested_category": "软件安装与程序 (Apps & Installers)",
+                    "recommended_subpath": f"应用软件/{matched_app.name}",
+                    "reason": f"Windows 注册表权威收录软件 [{matched_app.name}]，整包封印",
+                    "confidence": 0.99
+                }
+        except Exception as e:
+            app_logger.debug("注册表应用匹配检测异常: %s", e)
+
         # 附属/内部私有依赖目录（如 _internal, __pycache__）绝不可作为独立集体输出，必须溯源归属至主程序父目录
         if dname_lower in {"_internal", "internal", "__pycache__"}:
             return None

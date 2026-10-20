@@ -223,6 +223,41 @@ class UnifiedScanner:
                     curr_umbrella = parent_umbrella
                     curr_broad_cat = parent_broad_cat
 
+                # 顶层/当前目录原子集体拦截（若当前出栈目录自身为已安装软件或原子集体，直接源头封存，严禁内部碎片展开）
+                if prune_collectives:
+                    curr_collective = AppDetector.detect_directory_collective(curr_dir)
+                    if curr_collective and isinstance(curr_collective, dict) and (
+                        curr_collective.get("is_collective") or "software_name" in curr_collective
+                    ):
+                        c_bytes, c_files, c_mtime = fast_aggregate_directory(curr_dir)
+                        c_cat = normalize_unified_category(
+                            curr_collective.get("suggested_category", "软件安装与程序 (Apps & Installers)")
+                        )
+                        c_type = curr_collective.get("collective_type") or "已安装应用"
+                        asset = AssetUnit(
+                            id=f"COLL_{int(time.time()*1000)}_{len(results)}",
+                            name=curr_name,
+                            path=curr_dir,
+                            size=c_bytes,
+                            mtime=c_mtime,
+                            file_count=c_files,
+                            is_collective=True,
+                            collective_type=c_type,
+                            category=c_cat,
+                            ext="",
+                            scan_root=root,
+                            umbrella_anchor=curr_umbrella,
+                            umbrella_category=curr_broad_cat,
+                            is_snapshot_backup=(curr_broad_cat == "backup"),
+                            collective_info=curr_collective,
+                            tag=f"原子保全 ({c_type})",
+                            reason=curr_collective.get("reason", "不可拆分原子集体整体治理")
+                        )
+                        results.append(asset)
+                        total_scanned_files += c_files
+                        total_scanned_bytes += c_bytes
+                        continue
+
                 # 读取当前目录项
                 try:
                     entries = []

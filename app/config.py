@@ -11,6 +11,7 @@ BASE_CONFIG_SCHEMA = {
     "scan_paths": ["C:\\"],
     "exclude_dirs": ["$Recycle.Bin", "System Volume Information", "Windows\\WinSxS", "Windows\\System32"],
     "ignore_folders": [],
+    "custom_app_dirs": [],
     "hash_algorithm": "md5",
     "archive_dir": str(Path("D:/归档备份").resolve() if Path("D:/").exists() else Path.home() / "DiskAnalyzerArchive"),
     "migration_dir": str(Path("D:/软件与文件迁移").resolve() if Path("D:/").exists() else Path.home() / "MigratedApps"),

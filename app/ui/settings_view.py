@@ -388,6 +388,63 @@ class SettingsView(QWidget):
         ignore_layout.addLayout(ignore_btn_layout)
         self.content_layout.addWidget(ignore_box)
 
+        # 5. 软件与应用识别管理 (Installed Apps & Custom Rules)
+        app_box = QGroupBox("🎯 软件与应用识别管理 (Installed Apps & Custom Rules)")
+        app_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        app_layout = QVBoxLayout(app_box)
+        app_layout.setContentsMargins(14, 14, 14, 14)
+        app_layout.setSpacing(10)
+
+        app_desc_layout = QHBoxLayout()
+        app_desc = QLabel("基于防御性剪枝原则，系统自动根据 Windows 注册表将应用作为原子集体封包。您可在此添加免安装绿色软件或独立应用根目录。")
+        app_desc.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        app_desc.setWordWrap(True)
+        app_desc_layout.addWidget(app_desc, 1)
+
+        self.app_status_lbl = QLabel("正在索引应用...")
+        self.app_status_lbl.setStyleSheet("color: #10B981; font-size: 11px; font-weight: bold;")
+        app_desc_layout.addWidget(self.app_status_lbl)
+        app_layout.addLayout(app_desc_layout)
+
+        # 自定义应用目录列表
+        self.custom_app_list = QListWidget()
+        self.custom_app_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.custom_app_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        app_layout.addWidget(self.custom_app_list)
+
+        # 自定义应用操作按钮条
+        app_btn_layout = QHBoxLayout()
+        app_btn_layout.setSpacing(8)
+
+        self.add_app_btn = QPushButton("📁 添加独立应用目录...")
+        self.add_app_btn.setProperty("class", "SecondaryButton")
+        self.add_app_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.add_app_btn.clicked.connect(self.add_custom_app_folder)
+
+        self.manual_add_app_btn = QPushButton("✏️ 手动输入路径...")
+        self.manual_add_app_btn.setProperty("class", "SecondaryButton")
+        self.manual_add_app_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.manual_add_app_btn.clicked.connect(self.manual_add_custom_app_folder)
+
+        self.del_app_btn = QPushButton("🗑️ 删除选中")
+        self.del_app_btn.setProperty("class", "SecondaryButton")
+        self.del_app_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.del_app_btn.clicked.connect(self.del_custom_app_folder)
+
+        self.clear_app_btn = QPushButton("🧹 清空全部")
+        self.clear_app_btn.setProperty("class", "SecondaryButton")
+        self.clear_app_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.clear_app_btn.clicked.connect(self.clear_custom_app_folders)
+
+        app_btn_layout.addWidget(self.add_app_btn)
+        app_btn_layout.addWidget(self.manual_add_app_btn)
+        app_btn_layout.addWidget(self.del_app_btn)
+        app_btn_layout.addWidget(self.clear_app_btn)
+        app_btn_layout.addStretch()
+        app_layout.addLayout(app_btn_layout)
+
+        self.content_layout.addWidget(app_box)
+
         self.content_layout.addStretch()
 
         # 底部保存按钮
@@ -703,6 +760,49 @@ class SettingsView(QWidget):
         if selected:
             self.default_mig_input.setText(selected)
 
+
+    # -------------------------------------------------------------
+    # 自定义独立应用库 CRUD
+    # -------------------------------------------------------------
+    def _refresh_app_status_label(self):
+        try:
+            from app.core.registry_detector import RegistryAppDetector
+            apps = RegistryAppDetector.get_installed_apps()
+            custom_cnt = self.custom_app_list.count()
+            self.app_status_lbl.setText(f"🟢 注册表索引 {len(apps)} 款应用 | 自定义 {custom_cnt} 个")
+        except Exception:
+            self.app_status_lbl.setText("🟢 应用识别索引就绪")
+
+    def add_custom_app_folder(self):
+        selected_dir = QFileDialog.getExistingDirectory(self, "选择独立应用/软件根目录")
+        if selected_dir:
+            norm_p = os.path.normpath(selected_dir)
+            existing = [self.custom_app_list.item(i).text() for i in range(self.custom_app_list.count())]
+            if norm_p not in existing:
+                self.custom_app_list.addItem(norm_p)
+                self._refresh_app_status_label()
+
+    def manual_add_custom_app_folder(self):
+        text, ok = QInputDialog.getText(self, "手动输入应用根路径", "请输入独立软件的物理安装根目录:")
+        if ok and text.strip():
+            norm_p = os.path.normpath(text.strip())
+            existing = [self.custom_app_list.item(i).text() for i in range(self.custom_app_list.count())]
+            if norm_p not in existing:
+                self.custom_app_list.addItem(norm_p)
+                self._refresh_app_status_label()
+
+    def del_custom_app_folder(self):
+        for item in self.custom_app_list.selectedItems():
+            self.custom_app_list.takeItem(self.custom_app_list.row(item))
+        self._refresh_app_status_label()
+
+    def clear_custom_app_folders(self):
+        if self.custom_app_list.count() > 0:
+            reply = QMessageBox.question(self, "清空自定义应用", "确定清空所有自定义应用路径吗？", QMessageBox.Yes | QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                self.custom_app_list.clear()
+                self._refresh_app_status_label()
+
     def load_settings(self):
         """从三层配置引擎中加载并装填所有 UI 参数"""
         # 1. Base URL
@@ -768,6 +868,15 @@ class SettingsView(QWidget):
         self.ignore_list.blockSignals(False)
         self._update_source_badge(self.src_ignore_lbl, src)
         self._update_ignore_count()
+
+        # 装载自定义应用目录
+        custom_apps, _ = app_config.get_with_source("custom_app_dirs", default=[])
+        self.custom_app_list.clear()
+        if isinstance(custom_apps, list):
+            for path_str in custom_apps:
+                if str(path_str).strip():
+                    self.custom_app_list.addItem(os.path.normpath(str(path_str).strip()))
+        self._refresh_app_status_label()
 
     def fetch_remote_models(self):
         base_url = self.base_url_input.text().strip()
@@ -871,6 +980,14 @@ class SettingsView(QWidget):
         app_config.set("archive_dir", self.default_arch_input.text().strip(), level=level)
         app_config.set("migration_dir", self.default_mig_input.text().strip(), level=level)
         app_config.set("ignore_folders", ignore_folders, level=level)
+
+        custom_apps = [self.custom_app_list.item(i).text() for i in range(self.custom_app_list.count())]
+        app_config.set("custom_app_dirs", custom_apps, level=level)
+        try:
+            from app.core.registry_detector import RegistryAppDetector
+            RegistryAppDetector.set_custom_apps(custom_apps)
+        except Exception:
+            pass
 
         # 重新装载确保 UI 显示与持久化数据严格一致
         self.load_settings()
