@@ -29,6 +29,7 @@ class AppManagerView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.all_apps: List[InstalledAppInfo] = []
+        self._dirty: bool = False
         self._init_ui()
         self.reload_apps()
 
@@ -130,6 +131,13 @@ class AppManagerView(QWidget):
         self._refresh_table(self.all_apps)
 
     def _refresh_table(self, app_list: List[InstalledAppInfo]):
+        self.table_apps.setUpdatesEnabled(False)
+        try:
+            self._do_refresh_table(app_list)
+        finally:
+            self.table_apps.setUpdatesEnabled(True)
+
+    def _do_refresh_table(self, app_list: List[InstalledAppInfo]):
         self.table_apps.setRowCount(len(app_list))
 
         reg_cnt = sum(1 for a in self.all_apps if a.source == "registry")
@@ -248,5 +256,14 @@ class AppManagerView(QWidget):
             self.reload_apps(force=True)
 
     def _on_collective_promoted(self, target_dir: str, new_asset: dict):
-        """当外部表格触发收拢转集合时，静默重新加载本看板数据"""
-        self.reload_apps(force=True)
+        """当外部表格触发收拢转集合时，若视图不可见则标记脏位，杜绝非活跃页面占用主线程"""
+        if self.isVisible():
+            self.reload_apps(force=True)
+        else:
+            self._dirty = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_dirty", False):
+            self._dirty = False
+            self.reload_apps(force=True)

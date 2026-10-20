@@ -166,6 +166,14 @@ class UnifiedScanner:
 
         # 核心防回环保护：记录所有已展开访问的真实物理路径
         visited_dirs: Set[str] = set()
+        # 扫描会话级集体探测缓存 (微秒级直出)
+        collective_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+
+        def _safe_detect_collective(p_dir: str):
+            try:
+                return AppDetector.detect_directory_collective(p_dir, cache=collective_cache)
+            except TypeError:
+                return AppDetector.detect_directory_collective(p_dir)
 
         for root in normalized_roots:
             if cancel_check and not cancel_check():
@@ -223,9 +231,9 @@ class UnifiedScanner:
                     curr_umbrella = parent_umbrella
                     curr_broad_cat = parent_broad_cat
 
-                # 顶层/当前目录原子集体拦截（若当前出栈目录自身为已安装软件或原子集体，直接源头封存，严禁内部碎片展开）
-                if prune_collectives:
-                    curr_collective = AppDetector.detect_directory_collective(curr_dir)
+                # 顶层/当前目录原子集体拦截（仅对未经历入栈前置检查的根目录 curr_depth == 0 实施源头封存）
+                if prune_collectives and curr_depth == 0:
+                    curr_collective = _safe_detect_collective(curr_dir)
                     if curr_collective and isinstance(curr_collective, dict) and (
                         curr_collective.get("is_collective") or "software_name" in curr_collective
                     ):
@@ -338,9 +346,9 @@ class UnifiedScanner:
                     except Exception:
                         pass
 
-                    # 若启用集体剪枝，执行前置特征快查
+                    # 若启用集体剪枝，执行前置特征快查 (带会话级快速缓存)
                     if prune_collectives:
-                        collective_info = AppDetector.detect_directory_collective(d_path)
+                        collective_info = _safe_detect_collective(d_path)
 
                         # 上位大抽屉强行赋权裁决 (Top-Down Precedence)：
                         # 若祖先大抽屉是 backup，坚决赋权为历史快照实体，严禁被内部 package.json 夺权为活跃开发工程！

@@ -80,6 +80,7 @@ class RegistryAppDetector:
     """Windows 注册表与自定义软件库检测引擎"""
 
     _cached_apps: Optional[Dict[str, InstalledAppInfo]] = None
+    _cached_roots_sorted: Optional[List[Tuple[str, InstalledAppInfo]]] = None
     _custom_dirs: Dict[str, str] = {}
 
     @classmethod
@@ -91,6 +92,7 @@ class RegistryAppDetector:
         }
         # 重置缓存以重新合并
         cls._cached_apps = None
+        cls._cached_roots_sorted = None
 
     @classmethod
     def get_installed_apps(cls, force_reload: bool = False) -> Dict[str, InstalledAppInfo]:
@@ -101,6 +103,7 @@ class RegistryAppDetector:
         """
         if cls._cached_apps is not None and not force_reload:
             return cls._cached_apps
+        cls._cached_roots_sorted = None
 
         apps: Dict[str, InstalledAppInfo] = {}
 
@@ -242,8 +245,11 @@ class RegistryAppDetector:
         if norm_target in apps:
             return apps[norm_target], True
 
-        # 2. 检查当前目录是否位于某个已安装软件的内部子路径
-        for app_root_norm, info in apps.items():
+        # 2. 预排序最长前缀优先，加速前缀快速匹配
+        if cls._cached_roots_sorted is None:
+            cls._cached_roots_sorted = sorted(apps.items(), key=lambda x: len(x[0]), reverse=True)
+
+        for app_root_norm, info in cls._cached_roots_sorted:
             if norm_target.startswith(app_root_norm + os.sep):
                 return info, False
 

@@ -348,17 +348,29 @@ class AppDetector:
         return False
 
     @classmethod
-    def detect_directory_collective(cls, dir_path: str | Path) -> Optional[Dict[str, Any]]:
+    def detect_directory_collective(cls, dir_path: str | Path, cache: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         自顶向下防御式探测：检测指定目录是否属于不可拆分的“软件/工程/工具链原子集体”。
         若命中，返回提炼的外显身份卡片（Software Identity Card），供剪枝与高层归类使用。
+        支持传入会话级轻量高速缓存 cache。
         """
+        norm_dir = os.path.normpath(str(dir_path))
+        if cache is not None and norm_dir in cache:
+            return cache[norm_dir]
+
+        res = cls._do_detect_directory_collective(norm_dir)
+        if cache is not None:
+            cache[norm_dir] = res
+        return res
+
+    @classmethod
+    def _do_detect_directory_collective(cls, norm_dir: str) -> Optional[Dict[str, Any]]:
         try:
-            p = Path(dir_path).resolve()
+            p = Path(norm_dir)
         except Exception:
             return None
 
-        if not p.is_dir():
+        if not os.path.isdir(norm_dir):
             return None
 
         # 0. 驱动器盘符根目录保护 (如 C:\, D:\)，绝不可作为单个软件/实体
@@ -498,22 +510,12 @@ class AppDetector:
         # 1.5 检查 Live2D 虚拟角色模型与 AI 媒体实体资产 (.model3.json, .model.json, physics3.json)
         model_file = None
         try:
-            for item_f in p.iterdir():
-                if item_f.is_file():
-                    low_f = item_f.name.lower()
-                    if low_f.endswith(".model3.json") or low_f.endswith(".model.json") or low_f.endswith(".cdi3.json") or low_f.endswith(".physics3.json"):
-                        model_file = item_f.name
-                        break
-            if not model_file:
-                for sub_d in p.iterdir():
-                    if sub_d.is_dir():
-                        for sub_f in sub_d.iterdir():
-                            if sub_f.is_file():
-                                low_sf = sub_f.name.lower()
-                                if low_sf.endswith(".model3.json") or low_sf.endswith(".model.json"):
-                                    model_file = sub_f.name
-                                    break
-                        if model_file:
+            with os.scandir(norm_dir) as it:
+                for item_f in it:
+                    if item_f.is_file():
+                        low_f = item_f.name.lower()
+                        if low_f.endswith(".model3.json") or low_f.endswith(".model.json") or low_f.endswith(".cdi3.json") or low_f.endswith(".physics3.json"):
+                            model_file = item_f.name
                             break
         except Exception:
             pass
