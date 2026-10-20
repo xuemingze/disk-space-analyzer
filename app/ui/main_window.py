@@ -11,6 +11,7 @@ from app.ui.organizer_view import OrganizerView
 from app.ui.settings_view import SettingsView
 from app.ui.automation import AutomationCenterView
 from app.ui.dedup import DedupMergeView
+from app.ui.app_manager_view import AppManagerView
 from app.automation.manager import AutomationManager
 from app.ui.components.task_manager_widget import TaskManagerDialog
 from app.ui.styles import MODERN_DARK_STYLE
@@ -133,11 +134,19 @@ class MainWindow(QMainWindow):
         self.nav_btn_group.addButton(self.btn_nav_dedup)
         sidebar_layout.addWidget(self.btn_nav_dedup)
 
-        # 1.5 配置与模型
+        # 1.5 软件与应用管理
+        self.btn_nav_app_mgr = QPushButton("  🎯  应用管理 (App Manager)")
+        self.btn_nav_app_mgr.setProperty("class", "NavButton")
+        self.btn_nav_app_mgr.setCheckable(True)
+        self.btn_nav_app_mgr.clicked.connect(lambda: self.switch_view(4))
+        self.nav_btn_group.addButton(self.btn_nav_app_mgr)
+        sidebar_layout.addWidget(self.btn_nav_app_mgr)
+
+        # 1.6 配置与模型
         self.btn_nav_settings = QPushButton("  ⚙️  配置与模型 (Settings)")
         self.btn_nav_settings.setProperty("class", "NavButton")
         self.btn_nav_settings.setCheckable(True)
-        self.btn_nav_settings.clicked.connect(lambda: self.switch_view(4))
+        self.btn_nav_settings.clicked.connect(lambda: self.switch_view(5))
         self.nav_btn_group.addButton(self.btn_nav_settings)
         sidebar_layout.addWidget(self.btn_nav_settings)
 
@@ -166,13 +175,15 @@ class MainWindow(QMainWindow):
         self.organizer_view = OrganizerView()
         self.automation_view = AutomationCenterView()
         self.dedup_view = DedupMergeView()
+        self.app_manager_view = AppManagerView()
         self.settings_view = SettingsView()
 
         self.stacked_widget.addWidget(self.home_view)        # 0
         self.stacked_widget.addWidget(self.organizer_view)   # 1
         self.stacked_widget.addWidget(self.automation_view)  # 2
         self.stacked_widget.addWidget(self.dedup_view)       # 3
-        self.stacked_widget.addWidget(self.settings_view)    # 4
+        self.stacked_widget.addWidget(self.app_manager_view) # 4
+        self.stacked_widget.addWidget(self.settings_view)    # 5
 
         main_layout.addWidget(self.stacked_widget, 1)
 
@@ -211,6 +222,8 @@ class MainWindow(QMainWindow):
         elif index == 3:
             self.btn_nav_dedup.setChecked(True)
         elif index == 4:
+            self.btn_nav_app_mgr.setChecked(True)
+        elif index == 5:
             self.btn_nav_settings.setChecked(True)
 
     def open_task_manager(self):

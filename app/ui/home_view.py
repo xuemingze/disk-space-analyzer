@@ -267,21 +267,25 @@ class HomeView(QWidget):
         self.global_detail_table = FileDataGridWidget(is_selectable=True)
         self.global_detail_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.global_detail_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
+        self.global_detail_table.promote_collective_requested.connect(self.on_promote_collective_requested)
         self.tabs.addTab(self.global_detail_table, "📑 全局扫描资产明细 (阶段一即显)")
 
         self.duplicate_table = FileDataGridWidget(is_selectable=True)
         self.duplicate_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.duplicate_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
+        self.duplicate_table.promote_collective_requested.connect(self.on_promote_collective_requested)
         self.tabs.addTab(self.duplicate_table, "🔄 重复资产明细 (哈希确认)")
         
         self.releasable_table = FileDataGridWidget(is_selectable=True)
         self.releasable_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.releasable_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
+        self.releasable_table.promote_collective_requested.connect(self.on_promote_collective_requested)
         self.tabs.addTab(self.releasable_table, "🗑️ 可释放资产明细 (规则识别)")
         
         self.top100_table = FileDataGridWidget(is_selectable=True)
         self.top100_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.top100_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
+        self.top100_table.promote_collective_requested.connect(self.on_promote_collective_requested)
         self.tabs.addTab(self.top100_table, "🏆 全局 Top 100 超大资产 (>300MB) (阶段一即显)")
         
         self.rollback_tab = RollbackWidget()
@@ -736,6 +740,62 @@ class HomeView(QWidget):
         )
         
         QMessageBox.information(self, "扫描全量完成", msg)
+
+
+    def on_promote_collective_requested(self, target_dir: str, app_name: str):
+        """响应任意表格触发的收拢转集合操作，执行全域同构收割与联动刷新"""
+        if not self.current_scan_result:
+            return
+
+        from app.core.asset_promoter import AssetPromoterService
+        all_files = self.current_scan_result.get("all_scanned_files", [])
+        updated_all_files, new_asset = AssetPromoterService.execute_promotion(
+            target_dir=target_dir,
+            app_name=app_name,
+            current_assets=all_files,
+            persist=True
+        )
+        self.current_scan_result["all_scanned_files"] = updated_all_files
+
+        # 联动收割冗余与重复池中的碎片
+        redundant = self.current_scan_result.get("redundant_files", [])
+        norm_t = os.path.normcase(os.path.normpath(target_dir))
+        prefix = norm_t + os.sep
+        updated_redundant = [
+            f for f in redundant
+            if not (os.path.normcase(os.path.normpath(f.get("path", ""))) == norm_t or
+                    os.path.normcase(os.path.normpath(f.get("path", ""))).startswith(prefix))
+        ]
+        self.current_scan_result["redundant_files"] = updated_redundant
+
+        dup_files = [f for f in updated_redundant if f.get("is_duplicate")]
+        rel_files = [f for f in updated_redundant if not f.get("is_duplicate")]
+
+        tot_bytes = self.current_scan_result.get("total_bytes", 0)
+        self.global_detail_table.populate_data(updated_all_files, tot_bytes)
+        self.duplicate_table.populate_data(dup_files, tot_bytes)
+        self.releasable_table.populate_data(rel_files, tot_bytes)
+
+        self.tabs.setTabText(1, f"📑 全局扫描资产明细 [{len(updated_all_files)}]")
+        self.tabs.setTabText(2, f"🔄 重复资产明细 (哈希确认) [{len(dup_files)}]")
+        self.tabs.setTabText(3, f"🗑️ 可释放资产明细 (规则识别) [{len(rel_files)}]")
+
+        # 联动刷新顶部指标卡片
+        c_cnt = sum(1 for it in updated_all_files if it.get("is_directory_collective"))
+        s_cnt = len(updated_all_files) - c_cnt
+        files_str = f"{len(updated_all_files):,} 项 ({c_cnt} 集体 / {s_cnt} 独立单项)" if c_cnt > 0 else f"{len(updated_all_files):,} 个资产项"
+        self.stat_cards.update_stats(
+            total_bytes_str=format_size(tot_bytes),
+            reclaimable_str=format_size(sum(f.get("size", 0) for f in rel_files)),
+            files_count_str=files_str,
+            dup_waste_str=format_size(sum(f.get("size", 0) for f in dup_files)),
+            dup_groups_count=len(dup_files)
+        )
+        QMessageBox.information(
+            self,
+            "收拢与沉淀成功",
+            f"✅ 已成功将目录 [{target_dir}] 下的内容就地收拢为新集合 [{app_name}]！\n全景资产明细已全量联动刷新，规则已永久沉淀。"
+        )
 
     def on_scan_error(self, err_msg: str):
         self.on_scan_stopped()

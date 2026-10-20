@@ -298,6 +298,7 @@ class FileDataGridWidget(QWidget):
     """
     selection_changed_signal = Signal(object, object) # (选中数量, 选中字节总数)
     migrate_requested_signal = Signal(list)            # (选中的路径列表)
+    promote_collective_requested = Signal(str, str)    # (target_dir, app_name) 统一收拢转集合信号
 
     def __init__(self, is_selectable: bool = True, parent=None):
         super().__init__(parent)
@@ -335,8 +336,12 @@ class FileDataGridWidget(QWidget):
         self.table_view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table_view.setSortingEnabled(True)
         self.table_view.verticalHeader().setVisible(False)
+        # UI 铁律: 锁死 44px 行高
+        self.table_view.verticalHeader().setDefaultSectionSize(44)
+        self.table_view.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.table_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table_view.customContextMenuRequested.connect(self.show_context_menu)
+        self.table_view.doubleClicked.connect(self._on_table_double_clicked)
         
         self.source_model = FileTableModel([], self.is_selectable, self)
         self.proxy_model = FileSortFilterProxyModel(self)
@@ -434,6 +439,9 @@ class FileDataGridWidget(QWidget):
         action_open_file = QAction("📄 打开文件", self)
         action_open_file.triggered.connect(lambda: self._open_file(file_path))
         
+        action_promote = QAction("📦 向上收拢并转为集合...", self)
+        action_promote.triggered.connect(lambda: self._on_promote_collective_action(file_path))
+
         action_migrate = QAction("📦 智能迁移此项", self)
         action_migrate.triggered.connect(lambda: self.migrate_requested_signal.emit([file_path]))
         
@@ -443,11 +451,41 @@ class FileDataGridWidget(QWidget):
         menu.addAction(action_open_dir)
         menu.addAction(action_open_file)
         menu.addSeparator()
+        menu.addAction(action_promote)
         menu.addAction(action_migrate)
         menu.addSeparator()
         menu.addAction(action_copy_path)
         
         menu.exec(self.table_view.viewport().mapToGlobal(pos))
+
+    def _on_table_double_clicked(self, index: QModelIndex):
+        """双击表格行: 直接打开目录或在资源管理器中高亮定位"""
+        if not index.isValid():
+            return
+        source_index = self.proxy_model.mapToSource(index)
+        if 0 <= source_index.row() < len(self.source_model._data):
+            item = self.source_model._data[source_index.row()]
+            file_path = item.get("path", "")
+            if file_path:
+                self._locate_or_open(file_path)
+
+    def _locate_or_open(self, file_path: str):
+        norm = os.path.normpath(file_path)
+        if os.path.exists(norm):
+            if os.path.isdir(norm):
+                os.startfile(norm)
+            else:
+                subprocess.Popen(f'explorer.exe /select,"{norm}"')
+
+    def _on_promote_collective_action(self, file_path: str):
+        """触发向上收拢转为集合弹窗"""
+        from app.ui.components.promote_collective_dialog import PromoteCollectiveDialog
+        dlg = PromoteCollectiveDialog(file_path, self)
+        if dlg.exec() == PromoteCollectiveDialog.Accepted:
+            target_dir = dlg.selected_target_dir
+            app_name = dlg.app_name
+            if target_dir:
+                self.promote_collective_requested.emit(target_dir, app_name)
 
     def _locate_in_explorer(self, file_path: str):
         norm = os.path.normpath(file_path)

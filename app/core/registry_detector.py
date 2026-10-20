@@ -21,6 +21,39 @@ COMMON_PARENTS = {
     "system32", "syswow64", "users"
 }
 
+WINDOWS_INBOX_COMPONENTS = [
+    {
+        "name": "WindowsPowerShell (x86)",
+        "paths": [r"C:\Program Files (x86)\WindowsPowerShell"],
+        "publisher": "Microsoft Corporation"
+    },
+    {
+        "name": "WindowsPowerShell",
+        "paths": [r"C:\Program Files\WindowsPowerShell"],
+        "publisher": "Microsoft Corporation"
+    },
+    {
+        "name": "Windows Defender",
+        "paths": [r"C:\Program Files\Windows Defender", r"C:\Program Files (x86)\Windows Defender"],
+        "publisher": "Microsoft Corporation"
+    },
+    {
+        "name": "Windows Media Player",
+        "paths": [r"C:\Program Files\Windows Media Player", r"C:\Program Files (x86)\Windows Media Player"],
+        "publisher": "Microsoft Corporation"
+    },
+    {
+        "name": "Windows Mail",
+        "paths": [r"C:\Program Files\Windows Mail"],
+        "publisher": "Microsoft Corporation"
+    },
+    {
+        "name": ".NET Runtime",
+        "paths": [r"C:\Program Files\dotnet"],
+        "publisher": "Microsoft Corporation"
+    }
+]
+
 
 @dataclass
 class InstalledAppInfo:
@@ -96,6 +129,19 @@ class RegistryAppDetector:
 
             except ImportError:
                 pass
+
+        # 注入 Windows 原生系统预置组件库
+        for comp in WINDOWS_INBOX_COMPONENTS:
+            for p_str in comp["paths"]:
+                if os.path.exists(p_str):
+                    norm_k = os.path.normcase(os.path.normpath(p_str))
+                    if norm_k not in apps:
+                        apps[norm_k] = InstalledAppInfo(
+                            name=comp["name"],
+                            install_root=os.path.normpath(p_str),
+                            publisher=comp["publisher"],
+                            source="system_builtin"
+                        )
 
         # 合并用户自定义独立软件目录 (优先级高于注册表)
         try:
