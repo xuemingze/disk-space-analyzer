@@ -19,9 +19,11 @@ from PySide6.QtWidgets import (
     QFileDialog, QGroupBox, QTextEdit
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 
 from app.automation.models import ScheduledTask
 from app.automation.manager import AutomationManager
+from app.utils.lock_detector import is_destination_valid
 
 
 class TaskEditDialog(QDialog):
@@ -77,9 +79,29 @@ class TaskEditDialog(QDialog):
             self.mode_combo.setCurrentIndex(idx_m)
         form.addRow("整理模式:", self.mode_combo)
 
+        # 归档目标目录
+        target_row = QHBoxLayout()
+        self.target_dir_input = QLineEdit(self.task.target_dir)
+        self.target_dir_input.setPlaceholderText("留空则采用系统默认归档根目录 (D:/归档备份)")
+        btn_browse_target = QPushButton("浏览...")
+        btn_browse_target.clicked.connect(self._browse_target_dir)
+        target_row.addWidget(self.target_dir_input)
+        target_row.addWidget(btn_browse_target)
+        form.addRow("归档目标目录:", target_row)
+
+        # 执行模式切换
+        self.exec_mode_combo = QComboBox()
+        self.exec_mode_combo.addItem("💡 仅生成整理提案 (默认安全，生成待审核卡片)", True)
+        self.exec_mode_combo.addItem("⚡ 定时自动归档平移 (无人值守，安全避让运行/编辑锁)", False)
+        if not self.task.propose_only:
+            self.exec_mode_combo.setCurrentIndex(1)
+        else:
+            self.exec_mode_combo.setCurrentIndex(0)
+        form.addRow("执行模式:", self.exec_mode_combo)
+
         layout.addLayout(form)
 
-        tip = QLabel("🛡️ 安全承诺：计划任务到期时仅生成整理计划提案，不会在用户不知情时直接移动文件。")
+        tip = QLabel("🛡️ 安全保底：若选自动归档，内置独占锁与 Office/WPS 伴生锁探针将自动避让正在编辑或占用的文件。")
         tip.setStyleSheet("color: #38BDF8; font-size: 12px; background: #0F172A; padding: 8px; border-radius: 4px;")
         layout.addWidget(tip)
 
@@ -99,9 +121,17 @@ class TaskEditDialog(QDialog):
         if d:
             self.path_input.setText(d)
 
+    def _browse_target_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "选择专属归档目标目录", self.target_dir_input.text() or "D:/归档备份")
+        if d:
+            self.target_dir_input.setText(d)
+
     def _save(self):
         name = self.name_input.text().strip()
         path = self.path_input.text().strip()
+        target_dir = self.target_dir_input.text().strip()
+        propose_only = self.exec_mode_combo.currentData()
+
         if not name or not path:
             QMessageBox.warning(self, "提示", "任务名称与目标路径不能为空。")
             return
@@ -109,8 +139,19 @@ class TaskEditDialog(QDialog):
             QMessageBox.warning(self, "提示", f"路径不存在: {path}")
             return
 
+        # 校验归档目标防死循环
+        if target_dir:
+            valid, err = is_destination_valid(path, target_dir)
+            if not valid:
+                QMessageBox.critical(self, "防回环安全拦截", f"归档目标目录无效:\n{err}")
+                return
+        elif not propose_only:
+            target_dir = "D:/归档备份"
+
         self.task.name = name
         self.task.target_path = path
+        self.task.target_dir = target_dir
+        self.task.propose_only = propose_only
         self.task.interval_minutes = self.interval_combo.currentData()
         self.task.organize_mode = self.mode_combo.currentData()
         self.accept()
@@ -152,9 +193,10 @@ class ScheduleTaskPage(QWidget):
 
         # 任务表格
         self.task_table = QTableWidget()
-        self.task_table.setColumnCount(7)
-        self.task_table.setHorizontalHeaderLabels(["状态", "任务名称", "目标路径", "执行周期", "上次状态", "下次执行", "操作"])
+        self.task_table.setColumnCount(8)
+        self.task_table.setHorizontalHeaderLabels(["状态", "任务名称", "目标路径", "归档目录", "执行周期", "模式", "下次执行", "操作"])
         self.task_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.task_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.task_table.verticalHeader().setVisible(False)
         self.task_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.task_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -197,15 +239,18 @@ class ScheduleTaskPage(QWidget):
 
             self.task_table.setItem(row, 1, QTableWidgetItem(task.name))
             self.task_table.setItem(row, 2, QTableWidgetItem(task.target_path))
-            
+            self.task_table.setItem(row, 3, QTableWidgetItem(task.target_dir or "默认(D:/归档备份)"))
+
             hours = task.interval_minutes / 60.0
             cycle_str = f"{task.interval_minutes} 分钟" if task.interval_minutes < 60 else f"{hours:.1f} 小时"
-            self.task_table.setItem(row, 3, QTableWidgetItem(cycle_str))
+            self.task_table.setItem(row, 4, QTableWidgetItem(cycle_str))
 
-            self.task_table.setItem(row, 4, QTableWidgetItem(task.last_status))
+            mode_item = QTableWidgetItem("💡 仅提议" if task.propose_only else "⚡ 自动归档")
+            mode_item.setForeground(QColor("#38BDF8" if task.propose_only else "#10B981"))
+            self.task_table.setItem(row, 5, mode_item)
 
             next_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(task.next_run_time)) if task.next_run_time else "未排定"
-            self.task_table.setItem(row, 5, QTableWidgetItem(next_str))
+            self.task_table.setItem(row, 6, QTableWidgetItem(next_str))
 
             # 操作按钮栏
             ops_widget = QWidget()
@@ -228,7 +273,7 @@ class ScheduleTaskPage(QWidget):
             btn_del.clicked.connect(lambda _, t_id=task.id: self._delete_task(t_id))
             ops_layout.addWidget(btn_del)
 
-            self.task_table.setCellWidget(row, 6, ops_widget)
+            self.task_table.setCellWidget(row, 7, ops_widget)
 
     def _add_task(self):
         dlg = TaskEditDialog(parent=self)

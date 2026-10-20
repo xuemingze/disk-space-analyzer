@@ -25,6 +25,7 @@ from app.automation.models import WatchRule, ProposedPlan
 from app.automation.manager import AutomationManager
 from app.ui.components.organize_dialog import OrganizePreviewDialog
 from app.utils.file_helper import format_size
+from app.utils.lock_detector import is_destination_valid
 
 
 class RuleEditDialog(QDialog):
@@ -79,10 +80,33 @@ class RuleEditDialog(QDialog):
         self.debounce_spin.setSuffix(" 秒 (文件大小不再变化持续时长)")
         form.addRow("防抖沉淀时长:", self.debounce_spin)
 
+        # 专属归档目录
+        target_row = QHBoxLayout()
+        self.target_dir_input = QLineEdit(self.rule.target_dir)
+        self.target_dir_input.setPlaceholderText("留空则采用系统默认归档根目录 (D:/归档备份)")
+        btn_browse_target = QPushButton("浏览...")
+        btn_browse_target.clicked.connect(self._browse_target_dir)
+        target_row.addWidget(self.target_dir_input)
+        target_row.addWidget(btn_browse_target)
+        form.addRow("归档目标目录:", target_row)
+
+        # 执行模式切换
+        self.exec_mode_combo = QComboBox()
+        self.exec_mode_combo.addItem("💡 仅生成提议方案 (默认安全，生成待审核卡片)", True)
+        self.exec_mode_combo.addItem("⚡ 自动归档平移 (无人值守，沉淀稳定且无进程锁占用后自动分类移动)", False)
+        if not self.rule.propose_only:
+            self.exec_mode_combo.setCurrentIndex(1)
+        else:
+            self.exec_mode_combo.setCurrentIndex(0)
+        form.addRow("执行模式:", self.exec_mode_combo)
+
         layout.addLayout(form)
 
-        # 安全声明
-        tip = QLabel("🛡️ 安全机制：监控只会在文件写入稳定后生成「候选计划」，绝不未经允许擅自物理移动文件。")
+        # 安全声明与保底机制提示
+        tip = QLabel(
+            "🛡️ 保底机制：已内置 Windows 排他探针与 Office/WPS 伴生锁检测。"
+            "正在编辑、写入中或被程序占用的文件将自动挂起，绝不强行移动导致损坏。"
+        )
         tip.setStyleSheet("color: #38BDF8; font-size: 12px; background: #0F172A; padding: 8px; border-radius: 4px;")
         layout.addWidget(tip)
 
@@ -102,9 +126,17 @@ class RuleEditDialog(QDialog):
         if d:
             self.path_input.setText(d)
 
+    def _browse_target_dir(self):
+        d = QFileDialog.getExistingDirectory(self, "选择专属归档目标目录", self.target_dir_input.text() or "D:/归档备份")
+        if d:
+            self.target_dir_input.setText(d)
+
     def _save(self):
         name = self.name_input.text().strip()
         path = self.path_input.text().strip()
+        target_dir = self.target_dir_input.text().strip()
+        propose_only = self.exec_mode_combo.currentData()
+
         if not name or not path:
             QMessageBox.warning(self, "提示", "规则名称和观察目录不能为空。")
             return
@@ -112,8 +144,20 @@ class RuleEditDialog(QDialog):
             QMessageBox.warning(self, "提示", f"观察目录不存在: {path}")
             return
 
+        # 若配置了专属归档目录，进行防死循环校验
+        if target_dir:
+            valid, err = is_destination_valid(path, target_dir)
+            if not valid:
+                QMessageBox.critical(self, "防回环安全拦截", f"归档目标目录无效:\n{err}")
+                return
+        elif not propose_only:
+            # 自动归档模式下，若未指定归档目录，默认设为 D:/归档备份
+            target_dir = "D:/归档备份"
+
         self.rule.name = name
         self.rule.watch_path = path
+        self.rule.target_dir = target_dir
+        self.rule.propose_only = propose_only
         excludes = [p.strip() for p in self.exclude_input.text().split(",") if p.strip()]
         self.rule.exclude_patterns = excludes or ["*.tmp", "*.part"]
         exts = [e.strip() for e in self.ext_input.text().split(",") if e.strip()]
@@ -160,9 +204,10 @@ class RuleMonitorPage(QWidget):
 
         # 规则表格
         self.rule_table = QTableWidget()
-        self.rule_table.setColumnCount(7)
-        self.rule_table.setHorizontalHeaderLabels(["状态", "规则名称", "观察路径", "整理模式", "防抖秒数", "排除通配符", "操作"])
+        self.rule_table.setColumnCount(8)
+        self.rule_table.setHorizontalHeaderLabels(["状态", "规则名称", "观察路径", "归档目标", "整理模式", "执行模式", "防抖", "操作"])
         self.rule_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.rule_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.rule_table.verticalHeader().setVisible(False)
         self.rule_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.rule_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -208,9 +253,14 @@ class RuleMonitorPage(QWidget):
 
             self.rule_table.setItem(row, 1, QTableWidgetItem(rule.name))
             self.rule_table.setItem(row, 2, QTableWidgetItem(rule.watch_path))
-            self.rule_table.setItem(row, 3, QTableWidgetItem(rule.organize_mode))
-            self.rule_table.setItem(row, 4, QTableWidgetItem(f"{rule.debounce_seconds:.1f}s"))
-            self.rule_table.setItem(row, 5, QTableWidgetItem(", ".join(rule.exclude_patterns)))
+            self.rule_table.setItem(row, 3, QTableWidgetItem(rule.target_dir or "默认(D:/归档备份)"))
+            self.rule_table.setItem(row, 4, QTableWidgetItem(rule.organize_mode))
+
+            mode_item = QTableWidgetItem("💡 仅提议" if rule.propose_only else "⚡ 自动归档")
+            mode_item.setForeground(QColor("#38BDF8" if rule.propose_only else "#10B981"))
+            self.rule_table.setItem(row, 5, mode_item)
+
+            self.rule_table.setItem(row, 6, QTableWidgetItem(f"{rule.debounce_seconds:.1f}s"))
 
             # 操作按钮栏
             ops_widget = QWidget()
@@ -228,7 +278,7 @@ class RuleMonitorPage(QWidget):
             btn_del.clicked.connect(lambda _, r_id=rule.id: self._delete_rule(r_id))
             ops_layout.addWidget(btn_del)
 
-            self.rule_table.setCellWidget(row, 6, ops_widget)
+            self.rule_table.setCellWidget(row, 7, ops_widget)
 
     def refresh_plans(self):
         """刷新候选整理提案卡片流"""

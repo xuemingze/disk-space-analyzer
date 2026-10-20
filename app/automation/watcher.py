@@ -17,8 +17,10 @@ from collections import defaultdict
 from PySide6.QtCore import QThread, Signal
 
 from app.automation.models import WatchRule, ProposedPlan
+from app.automation.archive_executor import execute_safe_auto_archive
 from app.core.app_detector import AppDetector
 from app.core.organize_models import OrganizeOptions, OrganizeMode
+from app.utils.lock_detector import is_file_locked_or_in_use
 from app.utils.logger import app_logger
 
 
@@ -169,16 +171,22 @@ class RuleWatcher(QThread):
                         if prev["size"] == size and prev["mtime"] == mtime:
                             # 持续未变动：检查稳定时长是否满足 debounce_seconds
                             if not prev["settled"] and (now - prev["stable_since"] >= rule.debounce_seconds):
-                                # 确认沉淀完成 (写入稳定)！
-                                prev["settled"] = True
-                                settled_files_to_propose.append({
-                                    "path": file_path,
-                                    "name": entry.name,
-                                    "size": size,
-                                    "mtime": mtime,
-                                    "ext": os.path.splitext(entry.name)[1].lower(),
-                                    "category": "其他"
-                                })
+                                # 核心保底机制：排他探针 + Office/WPS 伴生锁检测 (文件已通过 debounce 稳定期，冷却秒数置为 0)
+                                is_locked, lock_reason = is_file_locked_or_in_use(file_path, min_cooldown_seconds=0.0)
+                                if is_locked:
+                                    # 正在编辑或被独占占用，暂缓沉淀，继续留在观察池
+                                    app_logger.debug("文件被占用/编辑中，暂缓监控捕获: %s (%s)", file_path, lock_reason)
+                                else:
+                                    # 确认沉淀完成且未被占用！
+                                    prev["settled"] = True
+                                    settled_files_to_propose.append({
+                                        "path": file_path,
+                                        "name": entry.name,
+                                        "size": size,
+                                        "mtime": mtime,
+                                        "ext": os.path.splitext(entry.name)[1].lower(),
+                                        "category": "其他"
+                                    })
                         else:
                             # 文件仍在变动 (下载中/写入中)：重置稳定计时器
                             prev["size"] = size
@@ -189,9 +197,29 @@ class RuleWatcher(QThread):
         except Exception as e:
             app_logger.debug("扫描观察目录 [%s] 异常: %s", watch_dir, e)
 
-        # 若存在已沉淀稳定的新文件，生成候选方案 (只提议、不执行！)
+        # 若存在已沉淀稳定的新文件，依据规则模式生成提案或执行归档
         if settled_files_to_propose:
-            self._generate_candidate_plan(rule, settled_files_to_propose, now)
+            if rule.propose_only:
+                self._generate_candidate_plan(rule, settled_files_to_propose, now)
+            else:
+                self._execute_auto_archive_for_rule(rule, settled_files_to_propose, now)
+
+    def _execute_auto_archive_for_rule(self, rule: WatchRule, settled_files: List[Dict[str, Any]], now: float):
+        """执行自动归档平移 (仅在用户显式配置为自动归档时生效)"""
+        target_root = rule.target_dir or "D:/归档备份"
+        res = execute_safe_auto_archive(
+            files=settled_files,
+            target_root=target_root,
+            source_dir=rule.watch_path,
+            organize_mode=rule.organize_mode or "comprehensive",
+            source_name=f"规则监控-{rule.name}",
+            log_callback=lambda msg, lvl: self.log_emitted.emit(msg, lvl)
+        )
+        # 将源文件与移动落位后的目标文件都写入防回环缓存
+        for f in settled_files:
+            self.record_system_action(f["path"])
+        for p in res.get("success_paths", []):
+            self.record_system_action(p)
 
     def _generate_candidate_plan(self, rule: WatchRule, settled_files: List[Dict[str, Any]], now: float):
         """生成候选整理计划并通知 UI (默认只提议、绝不移动)"""

@@ -14,8 +14,11 @@ from typing import List, Dict, Any, Optional
 from PySide6.QtCore import QThread, Signal
 
 from app.automation.models import ScheduledTask, ProposedPlan
+from app.automation.archive_executor import execute_safe_auto_archive
 from app.core.app_detector import AppDetector
 from app.core.organize_models import OrganizeOptions, OrganizeMode
+from app.utils.lock_detector import is_file_locked_or_in_use
+from app.utils.file_helper import format_size
 from app.utils.logger import app_logger
 
 
@@ -130,39 +133,64 @@ class TaskScheduler(QThread):
                 return
 
             dest_root = task.target_dir or "D:/归档备份"
-            mode_val = task.organize_mode or "comprehensive"
-            try:
-                mode_enum = OrganizeMode(mode_val)
-            except Exception:
-                mode_enum = OrganizeMode.COMPREHENSIVE
 
-            options = OrganizeOptions(mode=mode_enum)
-            groups = AppDetector.group_files_by_parent_or_tool(scanned_files, dest_root, options)
-            total_bytes = sum(f.get("size", 0) for f in scanned_files)
+            if task.propose_only:
+                # 模式 1: 仅提议方案 (安全默认)
+                mode_val = task.organize_mode or "comprehensive"
+                try:
+                    mode_enum = OrganizeMode(mode_val)
+                except Exception:
+                    mode_enum = OrganizeMode.COMPREHENSIVE
 
-            # 生成提案
-            plan = ProposedPlan(
-                source_type="scheduled_task",
-                source_name=task.name,
-                source_path=task.target_path,
-                target_root=dest_root,
-                created_at=now,
-                file_count=len(scanned_files),
-                total_bytes=total_bytes,
-                proposed_groups=groups,
-                status="pending",
-                notes=f"计划任务 [{task.name}] 周期触发，提议 {len(scanned_files)} 个文件的整理计划待确认"
-            )
+                options = OrganizeOptions(mode=mode_enum)
+                groups = AppDetector.group_files_by_parent_or_tool(scanned_files, dest_root, options)
+                total_bytes = sum(f.get("size", 0) for f in scanned_files)
 
-            # 更新任务状态
-            task.last_status = "已生成提案"
-            task.last_run_time = now
-            task.next_run_time = now + task.interval_minutes * 60.0
-            task.last_result_summary = f"成功生成方案: 包含 {len(scanned_files)} 个文件，待用户确认"
+                # 生成提案
+                plan = ProposedPlan(
+                    source_type="scheduled_task",
+                    source_name=task.name,
+                    source_path=task.target_path,
+                    target_root=dest_root,
+                    created_at=now,
+                    file_count=len(scanned_files),
+                    total_bytes=total_bytes,
+                    proposed_groups=groups,
+                    status="pending",
+                    notes=f"计划任务 [{task.name}] 周期触发，提议 {len(scanned_files)} 个文件的整理计划待确认"
+                )
 
-            self.task_updated.emit(task)
-            self.plan_proposed.emit(plan)
-            self.log_emitted.emit(f"🎯 计划任务 [{task.name}] 已成功生成整理提案 (共 {len(scanned_files)} 个文件，待确认)", "success")
+                # 更新任务状态
+                task.last_status = "已生成提案"
+                task.last_run_time = now
+                task.next_run_time = now + task.interval_minutes * 60.0
+                task.last_result_summary = f"成功生成方案: 包含 {len(scanned_files)} 个文件，待用户确认"
+
+                self.task_updated.emit(task)
+                self.plan_proposed.emit(plan)
+                self.log_emitted.emit(f"🎯 计划任务 [{task.name}] 已成功生成整理提案 (共 {len(scanned_files)} 个文件，待确认)", "success")
+            else:
+                # 模式 2: 自动归档平移 (需用户显式配置)
+                res = execute_safe_auto_archive(
+                    files=scanned_files,
+                    target_root=dest_root,
+                    source_dir=task.target_path,
+                    organize_mode=task.organize_mode or "comprehensive",
+                    source_name=f"计划任务-{task.name}",
+                    log_callback=lambda msg, lvl: self.log_emitted.emit(msg, lvl)
+                )
+
+                task.last_run_time = now
+                task.next_run_time = now + task.interval_minutes * 60.0
+                if res.get("success"):
+                    task.last_status = f"归档成功 ({res['success_count']} 项)"
+                    task.last_result_summary = f"已自动归档 {res['success_count']} 个文件至 {dest_root}"
+                    self.log_emitted.emit(f"⚡ 计划任务 [{task.name}] 自动归档执行完成！成功: {res['success_count']}", "success")
+                else:
+                    task.last_status = f"归档终止: {res.get('error', '未知错误')}"
+                    task.last_result_summary = res.get("error", "未知错误")
+
+                self.task_updated.emit(task)
 
         except Exception as e:
             task.last_status = f"异常: {e}"

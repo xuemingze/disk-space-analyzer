@@ -28,6 +28,13 @@ from app.ui.automation import (
     QuickOrganizePage,
     CliScriptPage
 )
+from app.utils.lock_detector import (
+    check_office_companion_lock,
+    check_file_exclusive_lock,
+    is_file_locked_or_in_use,
+    is_destination_valid
+)
+from app.automation.archive_executor import execute_safe_auto_archive
 from app.ui.main_window import MainWindow
 
 
@@ -273,3 +280,185 @@ def test_automation_center_ui_and_navigation(qapp, tmp_path):
 
     # 安全关闭
     main_win.close()
+
+
+def test_lock_detector_office_and_exclusive(tmp_path):
+    """测试锁与占用探测器：Office伴生锁探测与排他句柄探测"""
+    work_dir = tmp_path / "lock_test"
+    work_dir.mkdir()
+
+    # 1. 普通正常文件
+    normal_doc = work_dir / "report.docx"
+    normal_doc.write_text("hello doc", encoding="utf-8")
+    locked, reason = is_file_locked_or_in_use(str(normal_doc), min_cooldown_seconds=0.0)
+    assert not locked
+
+    # 2. 模拟 Office 伴生锁: ~$report.docx
+    companion_lock = work_dir / "~$report.docx"
+    companion_lock.write_text("office lock marker", encoding="utf-8")
+
+    locked, reason = check_office_companion_lock(str(normal_doc))
+    assert locked
+    assert "Office" in reason
+
+    locked, reason = is_file_locked_or_in_use(str(normal_doc), min_cooldown_seconds=0.0)
+    assert locked
+
+    # 移除伴生锁后恢复
+    companion_lock.unlink()
+    locked, _ = check_office_companion_lock(str(normal_doc))
+    assert not locked
+
+    # 3. 模拟 WPS 伴生锁: .~lock.report.docx#
+    wps_lock = work_dir / ".~lock.report.docx#"
+    wps_lock.write_text("wps lock marker", encoding="utf-8")
+    locked, reason = check_office_companion_lock(str(normal_doc))
+    assert locked
+    assert "WPS" in reason
+    wps_lock.unlink()
+
+
+def test_destination_anti_cycle_validation(tmp_path):
+    """测试防回环与路径嵌套死循环校验"""
+    parent_dir = tmp_path / "source_watch"
+    parent_dir.mkdir()
+    child_dir = parent_dir / "nested_archive"
+    child_dir.mkdir()
+
+    other_dir = tmp_path / "target_archive"
+    other_dir.mkdir()
+
+    # 1. 目标目录与源目录相同 -> 拦截
+    valid, err = is_destination_valid(str(parent_dir), str(parent_dir))
+    assert not valid
+    assert "完全相同" in err
+
+    # 2. 目标目录在源目录内部 (子目录嵌套) -> 强力拦截死循环
+    valid, err = is_destination_valid(str(parent_dir), str(child_dir))
+    assert not valid
+    assert "内部" in err or "死循环" in err
+
+    # 3. 源目录在目标目录内部 -> 拦截
+    valid, err = is_destination_valid(str(child_dir), str(parent_dir))
+    assert not valid
+
+    # 4. 独立目标目录 -> 合法通过
+    valid, err = is_destination_valid(str(parent_dir), str(other_dir))
+    assert valid
+    assert err == ""
+
+
+def test_safe_auto_archive_execution(tmp_path):
+    """测试自动归档平移执行器：自动避让占用文件、生成 Manifest、成功转移"""
+    src_dir = tmp_path / "archive_src"
+    src_dir.mkdir()
+    dest_dir = tmp_path / "archive_target"
+    dest_dir.mkdir()
+
+    # 创建正常文件
+    file_a = src_dir / "test_a.pdf"
+    file_a.write_text("content a", encoding="utf-8")
+
+    # 创建带 Office 伴生锁的文件 (正在编辑中)
+    file_b = src_dir / "test_b.docx"
+    file_b.write_text("content b", encoding="utf-8")
+    lock_b = src_dir / "~$test_b.docx"
+    lock_b.write_text("office locking", encoding="utf-8")
+
+    files = [
+        {"path": str(file_a), "name": "test_a.pdf", "size": 9, "ext": ".pdf"},
+        {"path": str(file_b), "name": "test_b.docx", "size": 9, "ext": ".docx"},
+    ]
+
+    res = execute_safe_auto_archive(
+        files=files,
+        target_root=str(dest_dir),
+        source_dir=str(src_dir),
+        organize_mode="by_type"
+    )
+
+    assert res["success"] is True
+    # 正常文件 file_a 成功归档
+    assert res["success_count"] == 1
+    # file_b 因检测到 Office 正在编辑锁，被保底机制自动跳过
+    assert res["locked_count"] == 1
+    assert file_b.exists()  # 正在编辑的文件绝未被强行移动！
+
+    # 验证 Manifest 文件已成功生成
+    manifest_p = Path(res["manifest_path"])
+    assert manifest_p.exists()
+
+
+def test_watcher_auto_archive_integration(tmp_path):
+    """测试监控引擎在自动归档模式 (propose_only=False) 下的安全平移与防回环"""
+    watch_dir = tmp_path / "watch_auto"
+    watch_dir.mkdir()
+    archive_dir = tmp_path / "archive_auto_dest"
+    archive_dir.mkdir()
+
+    rule = WatchRule(
+        name="自动归档规则",
+        watch_path=str(watch_dir),
+        target_dir=str(archive_dir),
+        debounce_seconds=0.1,
+        enabled=True,
+        propose_only=False  # 启用自动平移
+    )
+
+    watcher = RuleWatcher(rules=[rule])
+    log_messages = []
+    watcher.log_emitted.connect(lambda msg, lvl: log_messages.append(msg))
+
+    # 创建待整理文件
+    test_pdf = watch_dir / "sample.pdf"
+    test_pdf.write_text("sample pdf content", encoding="utf-8")
+
+    # 首次检查：记录初始状态
+    t0 = time.time()
+    watcher._check_rule(rule, t0)
+
+    # 稳定沉淀后触发检查
+    t1 = t0 + 0.15
+    watcher._check_rule(rule, t1)
+
+    # 验证原文件已被移动
+    assert not test_pdf.exists()
+
+    # 验证目标目录下已生成归档文件
+    archived_files = list(archive_dir.rglob("sample*.pdf"))
+    assert len(archived_files) == 1
+
+    # 验证防回环：再次检查不会重复移动或报错
+    watcher._check_rule(rule, t1 + 0.1)
+
+
+def test_scheduler_auto_archive_integration(tmp_path):
+    """测试计划任务在自动归档模式 (propose_only=False) 下的定时平移"""
+    sched_src = tmp_path / "sched_src"
+    sched_src.mkdir()
+    sched_dest = tmp_path / "sched_dest"
+    sched_dest.mkdir()
+
+    doc_file = sched_src / "weekly_summary.docx"
+    doc_file.write_text("weekly summary doc", encoding="utf-8")
+
+    task = ScheduledTask(
+        name="自动定时归档任务",
+        target_path=str(sched_src),
+        target_dir=str(sched_dest),
+        interval_minutes=60,
+        enabled=True,
+        propose_only=False  # 启用自动平移
+    )
+
+    scheduler = TaskScheduler(tasks=[task])
+    now = time.time()
+    scheduler._execute_scheduled_task(task, now)
+
+    # 验证状态与文件移动
+    assert "归档成功" in task.last_status
+    assert not doc_file.exists()
+    dest_files = list(sched_dest.rglob("weekly_summary*.docx"))
+    assert len(dest_files) == 1
+
+
