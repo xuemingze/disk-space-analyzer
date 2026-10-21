@@ -37,7 +37,7 @@ class FileTableModel(QAbstractTableModel):
         item = self._data[index.row()]
         col = index.column()
 
-        if role == Qt.DisplayRole:
+        if role in (Qt.DisplayRole, Qt.EditRole):
             if col == 1:
                 name = item.get("name", "")
                 if item.get("is_directory_collective"):
@@ -90,7 +90,7 @@ class FileTableModel(QAbstractTableModel):
                     return f"{prefix}{cat} [{f_count:,} 子文件]"
                 return f"{prefix}{cat}"
             elif col == 3:
-                subpath = item.get("target_subpath") or item.get("suggested_archive_path") or item.get("recommended_subpath") or ""
+                subpath = item.get("target_subpath") or item.get("suggested_archive_path") or item.get("planning_path") or item.get("recommended_subpath") or ""
                 if not subpath:
                     cat = item.get("category", "")
                     name = item.get("name", "")
@@ -446,6 +446,44 @@ class FileSortFilterProxyModel(QSortFilterProxyModel):
         return left_str < right_str
 
 
+class PlanningPathItemDelegate(QStyledItemDelegate):
+    """
+    建议归档规划路径专用就地编辑委托：
+    严格在原路径基础上就地微调修改，初始化时保留原规划路径文本，严禁先清空。
+    """
+    def createEditor(self, parent, option, index):
+        editor = QLineEdit(parent)
+        editor.setStyleSheet("""
+            QLineEdit {
+                background-color: #0F172A;
+                color: #FBBF24;
+                font-weight: bold;
+                font-size: 12px;
+                padding: 2px 6px;
+                border: 2px solid #38BDF8;
+                border-radius: 4px;
+            }
+        """)
+        return editor
+
+    def setEditorData(self, editor, index):
+        # 核心契约：必须在原路径基础上修改，绝不先清空
+        val = index.data(Qt.EditRole) or index.data(Qt.DisplayRole) or ""
+        val_str = str(val).strip()
+        if val_str == "-":
+            val_str = ""
+        editor.setText(val_str)
+        # 文本全选保留，光标就绪，方便用户就地在原路径上增删微调
+        editor.selectAll()
+
+    def setModelData(self, editor, model, index):
+        new_text = editor.text().strip()
+        model.setData(index, new_text, Qt.EditRole)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
+
+
 class FileDataGridWidget(QWidget):
     """
     极速响应、低延迟数据表格组件
@@ -530,6 +568,8 @@ class FileDataGridWidget(QWidget):
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(9, QHeaderView.Stretch)
+        # 规划路径列就地编辑专用委托 (原路径基础上修改，绝不先清空)
+        self.table_view.setItemDelegateForColumn(3, PlanningPathItemDelegate(self.table_view))
         
         layout.addWidget(self.table_view)
 

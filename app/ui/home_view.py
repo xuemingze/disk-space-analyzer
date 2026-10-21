@@ -351,63 +351,13 @@ class HomeView(QWidget):
         report_splitter.setStretchFactor(1, 1)
 
         report_layout.addLayout(report_top_bar)
-        # 决策卡片 (当独立资产 > 100 项时或 AI 异常时呈现，由用户决定，不因超时直接越权)
-        self.ai_decision_banner = QFrame()
-        self.ai_decision_banner.setObjectName("AIDecisionBanner")
-        self.ai_decision_banner.setStyleSheet("""
-            QFrame#AIDecisionBanner {
-                background-color: #1E293B;
-                border: 1px solid #F59E0B;
-                border-radius: 8px;
-            }
-        """)
-        decision_layout = QHBoxLayout(self.ai_decision_banner)
-        decision_layout.setContentsMargins(12, 10, 12, 10)
-        decision_layout.setSpacing(12)
-
-        decision_icon_label = QLabel("⚠️")
-        decision_icon_label.setStyleSheet("font-size: 24px;")
-        decision_layout.addWidget(decision_icon_label)
-
-        decision_text_layout = QVBoxLayout()
-        decision_text_layout.setSpacing(3)
-        self.decision_title_lbl = QLabel("扫描独立资产数量为 0 项 (80% 可能性为集合判断错误)")
-        self.decision_title_lbl.setStyleSheet("font-size: 13px; font-weight: bold; color: #FBBF24;")
-        self.decision_sub_lbl = QLabel("检测到大量独立散落资产，建议前往文件整理进行应用/工程级收拢聚合；亦可由您自主决定强制执行 AI 全景总结。")
-        self.decision_sub_lbl.setStyleSheet("font-size: 11px; color: #94A3B8;")
-        decision_text_layout.addWidget(self.decision_title_lbl)
-        decision_text_layout.addWidget(self.decision_sub_lbl)
-        decision_layout.addLayout(decision_text_layout, 1)
-
-        # 选项1: 运行文件整理 (跳转至文件整理页面)
-        self.btn_decision_organize = QPushButton("📁 运行文件整理 (推荐)")
-        self.btn_decision_organize.setProperty("class", "SuccessButton")
-        self.btn_decision_organize.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
-        self.btn_decision_organize.clicked.connect(self.navigate_to_organizer_page)
-        decision_layout.addWidget(self.btn_decision_organize)
-
-        # 选项2: 强制 AI 总结
-        self.btn_decision_force_ai = QPushButton("⚡ 强制 AI 总结")
-        self.btn_decision_force_ai.setProperty("class", "PrimaryButton")
-        self.btn_decision_force_ai.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
-        self.btn_decision_force_ai.clicked.connect(lambda: self.generate_ai_report(force=True))
-        decision_layout.addWidget(self.btn_decision_force_ai)
-
-        # 选项3: 重试 AI 总结 (异常时显示)
-        self.btn_decision_retry_ai = QPushButton("🔄 重试 AI 总结")
-        self.btn_decision_retry_ai.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
-        self.btn_decision_retry_ai.clicked.connect(lambda: self.generate_ai_report(force=True))
-        decision_layout.addWidget(self.btn_decision_retry_ai)
-        self.btn_decision_retry_ai.hide()
-
-        # 选项4: 载入本地专家应急报告 (异常时由用户决定是否载入，绝不自动越权)
-        self.btn_decision_load_fallback = QPushButton("📑 载入本地专家应急报告")
-        self.btn_decision_load_fallback.setStyleSheet("background-color: #64748B; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
-        self.btn_decision_load_fallback.clicked.connect(self.load_local_expert_fallback)
-        decision_layout.addWidget(self.btn_decision_load_fallback)
-        self.btn_decision_load_fallback.hide()
-
-        self.ai_decision_banner.hide()
+        # 决策卡片 (统一使用面向对象组件 AIDecisionBannerWidget)
+        from app.ui.components.decision_banner import AIDecisionBannerWidget
+        self.ai_decision_banner = AIDecisionBannerWidget(self)
+        self.ai_decision_banner.inspect_details_requested.connect(self.jump_to_maximized_global_detail)
+        self.ai_decision_banner.force_ai_requested.connect(lambda: self.generate_ai_report(force=True))
+        self.ai_decision_banner.retry_ai_requested.connect(lambda: self.generate_ai_report(force=True))
+        self.ai_decision_banner.load_fallback_requested.connect(self.load_local_expert_fallback)
         report_layout.addWidget(self.ai_decision_banner)
         report_layout.addWidget(report_splitter)
         self.tabs.addTab(report_widget, "📑 AI 深度分析报告预览")
@@ -529,8 +479,18 @@ class HomeView(QWidget):
                 self.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%H:%M:%S"))
 
             def emit(self, record):
-                msg = self.format(record)
-                QMetaObject.invokeMethod(self.text_edit, "append", Qt.QueuedConnection, Q_ARG(str, msg))
+                try:
+                    import shiboken6
+                    if not shiboken6.isValid(self.text_edit):
+                        app_logger.removeHandler(self)
+                        return
+                    msg = self.format(record)
+                    QMetaObject.invokeMethod(self.text_edit, "append", Qt.QueuedConnection, Q_ARG(str, msg))
+                except Exception:
+                    try:
+                        app_logger.removeHandler(self)
+                    except Exception:
+                        pass
                 
         self.gui_log_handler = GuiLogHandler(self.ai_log_edit)
         app_logger.addHandler(self.gui_log_handler)
@@ -937,21 +897,15 @@ class HomeView(QWidget):
                 self.tabs.setTabText(report_idx, f"📑 AI 深度分析报告 (待决策: {standalone_count} 独立资产)")
                 self.tabs.setCurrentIndex(report_idx)
 
-            self.decision_title_lbl.setText(f"扫描独立资产数量为 {standalone_count} 项 (80% 可能性为集合判断错误)")
-            self.decision_sub_lbl.setText("当前目录下存在超过 100 项散落独立资产，极可能存在未聚合的目录集体或未整理工具链。请由您决定下一步治理路径：")
-            self.btn_decision_organize.setVisible(True)
-            self.btn_decision_force_ai.setVisible(True)
-            self.btn_decision_retry_ai.setVisible(False)
-            self.btn_decision_load_fallback.setVisible(False)
-            self.ai_decision_banner.show()
+            self.ai_decision_banner.show_over_threshold_diagnosis(standalone_count, "AI 全景总结")
 
             decision_md = (
                 f"# ⚠️ 扫描独立资产数量为 {standalone_count} 项\n\n"
                 f"> **架构诊断提示**：当前目录扫描识别出 `{standalone_count}` 项离散独立资产（阈值 > 100 项）。"
                 f"根据存储治理规律，**有 80% 可能性是集合判断错误**（如应用工程、业务单据、虚拟机/模型角色或散落工具链未收拢为原子实体集体）。\n\n"
                 f"### 🎯 请选择治理路径（严格遵从 AI 为核心，由您自主决定，绝不越权）：\n\n"
-                f"1. **【📁 运行文件整理】（推荐）**：前往文件整理模块，按应用工具链、工程、前缀或业务类型进行目录级收拢聚合，从根源上消除文件散落；\n"
-                f"2. **【⚡ 强制 AI 总结】**：跳过集合收拢建议，直接启动 AI 核心编排器对当前扫描样本进行全景深度分析与执行清单生成。\n\n"
+                f"1. **【🔍 查看全局扫描资产明细 (推荐并最大化)】**：直接跳转并全屏最大化全局扫描资产明细卡片，就地对散落文件夹右键「向上收拢转集合」，从根本上解决离散碎片；\n"
+                f"2. **【⚡ 强制 AI 全景总结】**：跳过集合收拢建议，直接启动 AI 核心编排器对当前扫描样本进行全景深度分析与执行清单生成。\n\n"
                 f"*请点击上方横幅按钮执行相应操作。*"
             )
             self.report_text_edit.setPlainText(decision_md)
@@ -1416,13 +1370,7 @@ class HomeView(QWidget):
             return
 
         # 恪守 AI 核心编排架构：不因超时直接越权，向用户呈现决策选项由用户定夺
-        self.decision_title_lbl.setText("AI 深度分析报告请求超时或异常")
-        self.decision_sub_lbl.setText(f"原因: {err}。系统恪守 AI 为核心编排架构，绝不自作主张以本地离线兜底越权替代 AI 输出。")
-        self.btn_decision_organize.setVisible(True)
-        self.btn_decision_force_ai.setVisible(False)
-        self.btn_decision_retry_ai.setVisible(True)
-        self.btn_decision_load_fallback.setVisible(True)
-        self.ai_decision_banner.show()
+        self.ai_decision_banner.show_ai_error_diagnosis(err, "AI 全景总结")
 
         report_idx = self.tabs.indexOf(self.report_widget)
         if report_idx >= 0:
@@ -1468,6 +1416,13 @@ class HomeView(QWidget):
         except Exception as ex:
             app_logger.error(f"载入本地专家应急报告失败: {ex}")
             QMessageBox.warning(self, "错误", f"载入本地应急报告失败: {ex}")
+
+    def jump_to_maximized_global_detail(self):
+        """直接跳转并最大化主控扫描菜单的「全局扫描资产明细」卡片，供用户收拢转集合"""
+        self.tabs.setCurrentIndex(1)
+        if not self.is_tab_fullscreen():
+            self.tab_states[1] = True
+            self.on_tab_changed(1)
 
     def navigate_to_organizer_page(self):
         """跳转至文件整理页面，复用现有 OrganizerView，切忌重写脚本"""

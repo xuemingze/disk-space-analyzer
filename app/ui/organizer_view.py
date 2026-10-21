@@ -216,6 +216,15 @@ class OrganizerView(QWidget):
         self.btn_run.clicked.connect(self.start_ai_planning)
         bottom_layout.addWidget(self.btn_run)
 
+        # AI 诊断决策卡片 (统一面向对象组件：由用户定夺，绝不越权)
+        from app.ui.components.decision_banner import AIDecisionBannerWidget
+        self.decision_banner = AIDecisionBannerWidget(self)
+        self.decision_banner.inspect_details_requested.connect(self.inspect_global_details_maximized)
+        self.decision_banner.force_ai_requested.connect(self.force_ai_classify)
+        self.decision_banner.retry_ai_requested.connect(self.force_ai_classify)
+        self.decision_banner.load_fallback_requested.connect(self.inspect_global_details_maximized)
+        main_layout.addWidget(self.decision_banner)
+
         main_layout.addWidget(bottom_bar)
 
     def browse_source(self):
@@ -294,6 +303,45 @@ class OrganizerView(QWidget):
             )
             return
 
+        self.cached_scan_result = result
+
+        # 准则一架构：独立资产 > 100 项诊断与决策卡片（由用户定夺，绝不越权）
+        if len(all_scanned_files) > 100:
+            self.btn_run.setEnabled(True)
+            self.lbl_status.setText(f"⚠️ 扫描到 {len(all_scanned_files)} 项散落独立资产 (80% 可能性为集合判断错误)，已暂停自动 AI 规划")
+            self.decision_banner.show_over_threshold_diagnosis(len(all_scanned_files), "AI 目录整理")
+            return
+
+        self.decision_banner.hide()
+        self.execute_ai_classify_worker(all_scanned_files)
+
+    def force_ai_classify(self):
+        """用户明确授权强制执行 AI 目录整理"""
+        self.decision_banner.hide()
+        if hasattr(self, "cached_scan_result") and self.cached_scan_result:
+            all_files = self.cached_scan_result.get("all_scanned_files", [])
+            if all_files:
+                self.btn_run.setEnabled(False)
+                self.execute_ai_classify_worker(all_files)
+
+    def inspect_global_details_maximized(self):
+        """直接跳转并最大化主控扫描菜单的「全局扫描资产明细」卡片，供用户收拢转集合"""
+        p = self.parent()
+        while p:
+            if hasattr(p, "switch_view") and hasattr(p, "home_view"):
+                if hasattr(self, "cached_scan_result") and self.cached_scan_result:
+                    p.home_view.current_scan_result = self.cached_scan_result
+                    all_files = self.cached_scan_result.get("all_scanned_files", [])
+                    if all_files:
+                        tot_b = self.cached_scan_result.get("total_bytes", sum(int(f.get("size", 0)) for f in all_files))
+                        p.home_view.global_detail_table.populate_data(all_files, tot_b)
+                        p.home_view.tabs.setTabText(1, f"📑 全局扫描资产明细 [{len(all_files)}]")
+                p.switch_view(0)
+                p.home_view.jump_to_maximized_global_detail()
+                break
+            p = p.parent()
+
+    def execute_ai_classify_worker(self, all_scanned_files: list):
         self.lbl_status.setText("🤖 阶段 2: 正在提交目录级报告至 AI 进行规划...")
         
         # Pass preferences to AI via kwargs
@@ -343,6 +391,7 @@ class OrganizerView(QWidget):
     def on_ai_error(self, err: str):
         self.btn_run.setEnabled(True)
         self.lbl_status.setText(f"❌ AI 规划失败: {err}")
+        self.decision_banner.show_ai_error_diagnosis(err, "AI 目录整理")
         if getattr(self, "ai_task_id", None):
             global_task_manager.set_task_status(self.ai_task_id, TaskStatus.FAILED, err)
             self.ai_task_id = None
