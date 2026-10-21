@@ -29,8 +29,6 @@ def test_gui_dialog():
     # 模拟点击全选和仅选安全项
     dialog._set_all_checked_state(True)
     dialog._select_safe_only()
-    
-    print("✅ GUI OrganizePreviewDialog (QTreeWidget) 离线实例化与操作测试全部通过！")
 
 
 if __name__ == "__main__":

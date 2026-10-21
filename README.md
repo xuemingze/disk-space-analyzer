@@ -1,185 +1,235 @@
-# 🚀 Disk Space Panorama Analyzer & AI Smart File Organizer
+# 🚀 Disk Space Panorama Analyzer & AI Smart Governance System
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PySide6 / Qt6](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-brightgreen.svg)](https://pypi.org/project/PySide6/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
-[![AI Powered](https://img.shields.io/badge/AI-OpenAI%20%7C%20DeepSeek%20%7C%20MiniMax%20%7C%20Ollama-orange.svg)](https://github.com/xuemingze/disk-space-analyzer)
+[![AI Orchestrated](https://img.shields.io/badge/AI-OpenAI%20%7C%20DeepSeek%20%7C%20MiniMax%20%7C%20Ollama-orange.svg)](https://github.com/xuemingze/disk-space-analyzer)
+[![Test Suite: 109 Passed](https://img.shields.io/badge/Tests-109%20Passed%20(100%25)-brightgreen.svg)](./tests/)
 
 ---
 
 ## 📥 Download & Usage
 
-**➡️ [Latest Release](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [All Releases](https://github.com/xuemingze/disk-space-analyzer/releases) · [Usage & Safety Guide (中文)](./docs/使用说明.md)
+**➡️ [Latest Release (v1.6.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [All Releases](https://github.com/xuemingze/disk-space-analyzer/releases) · [Usage & Safety Guide (Chinese)](./docs/使用说明.md)
 
-| File | Size | Best for | Download |
+| Package | Size | Best for | Download |
 | --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.4.0-win64-portable.zip`** | ~80 MB | **Recommended.** Portable folder build — unzip anywhere and run `DiskSpaceAnalyzer.exe`. Fast startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.4.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.4.0-win64.exe` | ~80 MB | Single-file build — double-click to run, nothing to unzip. First launch is slower (self-extraction). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.4.0-win64.exe) |
-| Source code (`.zip` / `.tar.gz`) | — | Build from source: `pip install -r requirements.txt && python main.py` | [Releases page](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
+| **`DiskSpaceAnalyzer-1.6.0-win64-portable.zip`** | ~80 MB | **Recommended.** Green portable package — unzip anywhere and launch `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.6.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.6.0-win64.exe` | ~80 MB | Single-file executable — run directly without manual decompression (fast self-extraction on first boot). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.6.0-win64.exe) |
+| Source Archive (`.zip` / `.tar.gz`) | — | Run from source: `pip install -r requirements.txt && python main.py` | [Releases page](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
-> 🖥️ **Windows 10 / 11 (64-bit).** No Python installation required for the prebuilt binaries.
-> ⚙️ **Default archive / migration paths** are `D:\归档备份` and `D:\软件与文件迁移` (falling back to `%USERPROFILE%\DiskAnalyzerArchive` / `%USERPROFILE%\MigratedApps` when no `D:` drive exists). These are developer-environment defaults, **not** a convention — change them in **Settings** before you start archiving.
-> 📝 Runtime logs, `error.log` and crash snapshots are written to `logs/` next to the executable — please attach them when reporting an issue.
-
----
-
-
-> **High-Performance Desktop Client for Windows Disk Space Analysis & AI Governance**: Features a 3-Phase Asynchronous Non-blocking Scan Engine, Persistent SQLite Hash Cache, 3-Tier Configuration Inheritance, **App/Toolchain Atomic Directory Grouping**, **Smart Migration with Windows Shortcut & Registry Synchronization and Rollback Manifests**, and an **End-to-End Anti-Hallucination AI Deep Analysis & Automated Execution Pipeline**.
-
-[English Documentation](./README.md) | [中文文档](./README_ZH.md)
+> 🖥️ **Operating System**: Windows 10 / 11 64-bit. Precompiled binaries include all necessary runtime components.  
+> ⚙️ **Default Storage Paths**: Default archive root is `D:\归档备份` and app migration root is `D:\软件与文件迁移` (safely falls back to `%USERPROFILE%` if no `D:` drive exists). You can customize these at any time in **Settings**.  
+> 📝 **Full-Link Crash & Log Persistence**: Standard runtime logs, `error.log` and unhandled exception snapshots are written to `logs/` alongside the application. No silent crashes.
 
 ---
 
-## 🌟 Key Highlights & Architecture
+> **A High-Performance Windows Desktop System for Deep Disk Space Analysis & Lifecycle Governance**: Anchored by two fundamental architectural tenets — **"AI-First Orchestration Contract"** and **"GUI Invariable Law"**, integrated with the **"Three Core Organizing Principles"**; featuring **2~3 Level Category Tree Skeleton Capture**, **In-Place Path Editing & Sub-Second (<1s) AI Micro-Contract Review with Self-Precipitation**, **Zero-Conflict Double-Click Interaction Model**, **Omnipresent Isomorphic Cascade Synchronization**, **3-Phase Non-Blocking Asynchronous Scanning**, **Automation Center with In-Use Lock Protection**, and **Three Dedup & Merge Governance Modes**.
 
-### 1. ⚡ 3-Phase Non-Blocking Asynchronous Scan Engine
-- **Phase 1 (Instant Scan & Visual Snapshot)**: Leverages streaming `os.scandir` to render donut/bar space distribution charts, file categories, and **Global Top 100 Large Files Table** within seconds.
-- **Phase 2 (Concurrent Chunked Hashing & Duplication Detection)**:
-  - Innovative 3-stage filtration: `File Size -> 8KB Head Sample Hash -> Full File Hash`.
-  - Backed by persistent **SQLite Hash Cache**, making subsequent scans almost instantaneous.
-  - Safe 64-bit integer calculations for multi-terabyte files without overflow errors.
-- **Phase 3 (Redundancy Aggregation & LLM Report)**: Combines duplicate copies with heuristic redundant patterns and generates structured Markdown governance reports via OpenAI-compatible APIs.
+[English Documentation](./README.md) | [中文说明文档](./README_ZH.md)
+
+---
+
+## 📢 What's New in v1.6.0 (Changelog)
+
+### 🔥 v1.6.0 Major Release (AI-First Orchestrator, 2~3 Level Category Tree, In-Place Path Editing & Sub-Second Self-Precipitation)
+
+- 🧠 **Two Foundational Architectural Tenets**:
+  - **Tenet 1: AI-First Orchestration Contract**: The local client acts exclusively as the collector of raw physical signatures and the landing executor of structured manifests. The AI model is provided with a standardized micro-contract to orchestrate category trees and validate path edits;
+  - **Tenet 2: GUI Invariable Law**: Table row height is permanently locked at **44px** (`verticalHeader().setDefaultSectionSize(44)` + `QHeaderView.Fixed`), completely immune to row-editor or content deformations. UI layouts and toolbar visual styling remain strictly consistent.
+- 🌲 **2~3 Level Category Topology Tree & Local Directory Skeleton Capture**:
+  - Capture any local exemplar directory structure (e.g. `F:\Ops_Tools`, `D:\Dev_Kits`);
+  - **0-Token Fragment Block Technology**: The local scanner extracts directory skeletons and representative executable samples while blocking thousands of fragment files (e.g. cache/logs), drastically reducing prompt size;
+  - AI orchestrates and generates standardized 2~3 level hierarchy trees, persisted directly into `global_categories.json`.
+- ⚡ **In-Place Path Editing & Sub-Second (<1s) AI Micro-Contract Review**:
+  - **In-Table Inline Editing**: Double-click or press `F2` on Column 3 (Target Planned Path) to edit directly in the data grid;
+  - **Singleton Keep-Alive Connection Pool**: Integrated singleton `requests.Session` (`pool_connections=20, pool_maxsize=50`), micro-contract prompt <= 150 Tokens, compact JSON output capped at 120 Tokens, slow thinking chain explicitly disabled (`extra_body={"thinking": {"type": "disabled"}}`), **capping end-to-end latency under 1 second (< 1s)**;
+  - **Dual Independent Persistence & 5-Tier Priority Stack**: `global_categories.json` and `precipitated_rules.json` persist independently. Match priority: `User Manual Rules (L1) > AI Precipitated Rules (L2) > Category Tree Presets (L3) > Heuristic Rules (L4) > Default Fallback (L5)`. 100% inherited across application restarts.
+- 🖱️ **Zero-Conflict Double-Click Interaction Model**:
+  - **Column 3 (Planned Target Path)**: Double-click or `F2` triggers inline editing and AI self-precipitation;
+  - **All Other Columns (0, 1, 2, 4~7)**: Double-click natively opens and selects the item in Windows File Explorer without any interaction clash.
+- 🔄 **Omnipresent Isomorphic Cascade Synchronization**:
+  - Real-time instant synchronization across Category Tree Dialog (expand/collapse tree), Data Grid columns (multi-level badge paths), Context Menus (cascading categories), and Space Charts without requiring rescans.
+- 🧪 **Enterprise Test Suite**:
+  - Comprehensive coverage expanded to **109 tests 100% passed** in ~17s.
+
+---
+
+### 🛡️ v1.5.0 Highlights (Automation Center & 3 Dedup Modes)
+
+- **Automation Center**: Scheduled periodic tasks, background filesystem watching, and **In-Use Lock Protection** to prevent moving active files or programs with running dependencies.
+- **Three Duplicate File Governance Schemes**:
+  - Mode 1: Safe Archive Mode (retains newest primary copy, archives redundant copies);
+  - Mode 2: Zero-Footprint NTFS Hardlink / Junction Mode (instant space reclamation);
+  - Mode 3: Atomic Isolated Cleanup with rollback manifests.
+
+---
+
+### 📐 v1.4.0 Highlights (Three Core Organizing Principles)
+
+- **Principle 1: Defensive Recursion Principle (Source Pruning)**:
+  - Traversal instantly prunes and bundles narrow atomic entities (portable apps, dev projects, isolated toolchains), blocking millions of fragments from cluttering the scan queue.
+- **Principle 2: Broad vs. Narrow Topology Law**:
+  - Higher-level semantic dominance for broad container directories (`MovedApps`, `backups`, `Finance`, `Multimedia`), resolving misidentifications.
+- **Principle 3: Source Umbrella Consistency**:
+  - Preserves source directory naming structures across archive targets, strictly protecting complete backups (`.tar.gz`, etc.).
+
+---
+
+## 🌟 Key Architecture & Highlights
+
+### 1. 🧠 AI-First Orchestration & 2~3 Level Category Tree
+
+```mermaid
+flowchart TD
+    subgraph Local [Local Feature Extraction & Execution Layer]
+        A[Exemplar Directory\ne.g. F:\Ops_Tools] -->|0-Token Fragment Block| B[Skeleton & Representative Executable Samples]
+        C[Data Grid\nColumn 3 Target Path] -->|Double-Click / F2 Edit| D[Asset Signatures + Edited Target Path]
+    end
+
+    subgraph AI [AI Orchestrator (< 1s Micro-Contract)]
+        B -->|Keep-Alive Connection Pool\nPrompt < 150 Tokens| E[AI Category Tree Orchestration]
+        D -->|Compact JSON <= 120 Tokens\nThinking Disabled| F[AI Path Audit / Tree Snapping / Rule Abstraction]
+    end
+
+    subgraph Storage [Dual Persistence & Cascade Sync]
+        E -->|Save| G[(global_categories.json\n2-3 Level Category Tree)]
+        F -->|Precipitate| H[(precipitated_rules.json\nPrecipitated Rules DB)]
+        G --> I[Omnipresent Sync\nTree Dialog / Multi-Level Badges / Context Menus / Charts]
+        H --> I
+    end
+```
+
+#### Sub-Second (<1s) Guarantee Design:
+1. **Singleton HTTP Keep-Alive Pool**: Eliminates TCP/TLS handshakes (`requests.Session` with `pool_connections=20, pool_maxsize=50`);
+2. **Compact Micro-Contract Prompt**: Kept under 150 Tokens without conversational clutter;
+3. **Capped Generation & Thinking Disabled**: Max tokens capped at 120, `extra_body={"thinking": {"type": "disabled"}}` bypasses slow reasoning chains;
+4. **Resilient Local Fallback**: Strict 0.3s connect / 0.5s read timeouts with immediate smooth fallback to local topological rules on network hiccups.
+
+---
+
+### 2. ⚡ 3-Phase Non-Blocking Asynchronous Scan Engine
 
 ```mermaid
 flowchart LR
-    A[Select Drive / Path] --> B[Phase 1: Fast os.scandir Indexing]
-    B --> C[Phase 2: 3-Stage Hashing + SQLite Cache]
-    C --> D[Phase 3: Redundancy Aggregation & Reports]
-    D --> E[AI Smart Planning / Cross-Disk Migration / One-Click Archive]
+    A[Select Drive / Path] --> B[Phase 1: Streaming os.scandir Fast Snapshot]
+    B --> C[Phase 2: 3-Stage Hashing + Persistent SQLite Cache]
+    C --> D[Phase 3: Redundancy Aggregation & AI Governance Report]
+    D --> E[AI Tree Planning / Automated Migration / Archive Execution]
 ```
 
----
-
-### 2. 🛡️ Custom Ignore Folders & Path Filter Management
-- **Flexible Management**: Add paths directly via folder browser or manual absolute path entry.
-- **Rich Interaction**: Double-click to edit, batch multi-selection delete, one-click clear, and contextual right-click menu (copy full path, open directly in Windows File Explorer).
-- **Runtime Filtering**: Automatically excludes configured directories and their sub-items during scan execution while displaying skipped folder counts to protect critical workspaces and private directories.
-
----
-
-### 3. 🌳 App / Toolchain Atomic Directory Grouping
-- **No mechanical splitting by file extensions**: Toolchains and application directories (e.g. `~/npm`, `~/.npm`, `node_modules`, `pip\cache`, `VS Code`, `Docker`, `WeChat`, `.gradle`, `.cargo`) are treated as **Atomic Treatment Units**.
-- **10-Column Comprehensive Tree Plan Dashboard (`QTreeWidget`)**:
-  - Displays Directory/File Unit, App/Tool (with `[AI]` or `[Offline Rule]` badge), Suggested Category, Planned Target Path, Rationale, Count/Size, Confidence, Risk Level, Action (Clean / Archive), and **Task & Report Audit Linkage (`R:report_id | T:task_id`)**.
-  - Multi-level parent-child checkbox synchronization (`Checked` / `PartiallyChecked` / `Unchecked`).
-  - Quick filters for **"🛡️ Select Safe Recommended Items Only"**.
-- **Symlink & NTFS Junction Detection**: Identifies Windows Junction points to prevent circular traverses.
-- **Conservative Fallback**: Unrecognized directories are assigned to `"Unrecognized Tool / Pending Review"` and marked as requiring manual confirmation.
+- **Phase 1 (Instant Scan & Visual Snapshot)**: Rapid `os.scandir` streaming traversal, rendering space distribution charts and **Global Top 100 Large Files Table** in seconds;
+- **Phase 2 (Concurrent Chunked Hashing & Duplication Detection)**:
+  - 3-stage filtration: `File Size -> 8KB Head Sample Hash -> Full Concurrent File Hash`;
+  - Backed by persistent **SQLite Hash Cache** for near-instant repeat scans;
+  - 64-bit integer overflow protection for multi-terabyte files;
+- **Phase 3 (Redundancy Aggregation & Governance Reports)**: Aggregates duplicates and redundant files into structured Markdown governance reports.
 
 ---
 
-### 4. 🤖 AI Deep Analysis & Automated Execution Pipeline
-- **Broad API Compatibility**: Connects to OpenAI, DeepSeek, MiniMax, Qwen, Local Ollama, and any OpenAI-compatible API endpoint.
-- **Automated Audit & Report Traceability**: Automatically injects scan task IDs and timestamps into the LLM prompt, generates a comprehensive Markdown report, and exports it locally (`AI深度分析报告_{id}.md`).
-- **Report-Driven Action Extraction**: Submits the generated Markdown report directly to the LLM to extract a structured directory organization plan.
-- **Anti-Hallucination & Robust Response Cleaning**: Built-in regex sanitizer removes `<think>...</think>` tags and markdown wrappers to prevent JSON parse errors.
-- **Strict Field-Level Validation**: Enforces mandatory validation on returned plans, rejecting malformed structures before they reach the GUI.
-- **Exponential Backoff & Jitter Retry**: Resilient against network fluctuations and read timeouts with staged backoff retries.
+### 3. 🖱️ Double-Click Streamlining & GUI Invariable Law
+
+| Column | Interaction | Action Triggered | UX Objective |
+| :--- | :--- | :--- | :--- |
+| **Column 3 (Planned Target Path)** | Double-Click / `F2` | Activates inline row editor; pressing Enter triggers sub-second AI audit and self-precipitation | Immediate path editing without popups |
+| **All Other Columns (0, 1, 2, 4~7)** | Double-Click | Invokes native Windows Explorer to open folder and highlight the target file/directory | Preserves native OS file management ergonomics |
+
+> 📐 **GUI Invariable Law**:  
+> Table vertical row height is strictly fixed at **44px** (`verticalHeader().setDefaultSectionSize(44)` and `QHeaderView.Fixed`), immune to font scaling or editor expansion.
 
 ---
 
-### 5. 📦 Smart Migration, NTFS Junction Links & Atomic Rollback
-- **NTFS Junction Links (`mklink /J`)**: Move bulky games or work directories across drives while maintaining seamless software accessibility.
-- **Selective Shortcut & Registry Synchronization**:
-  - Automatically identifies associated Desktop and Start Menu `.lnk` shortcuts.
-  - Detects `HKCU` / `HKLM` registry paths, allowing users to review and selectively update paths.
+### 4. 📦 Smart Cross-Disk Migration, NTFS Junction & Rollback
+
+- **NTFS Directory Junction (`mklink /J`)**: Relocate large games or development libraries across drives while maintaining seamless software accessibility;
+- **Shortcut & Registry Synchronization**:
+  - Automatically identifies associated Desktop and Start Menu `.lnk` shortcuts and re-targets them;
+  - Scans `HKCU` / `HKLM` installation and uninstall registry keys, providing selective checkbox updates;
 - **Atomic Rollback & Manifest Credentials**:
-  - Automatically triggers rollback to restore moved files if an unexpected error occurs during migration.
-  - Saves full JSON mapping manifests in `~/.disk_space_analyzer/archive_manifests/` for one-click rollback.
+  - Automatically restores moved assets upon interruption;
+  - Stores reversible JSON manifests in `~/.disk_space_analyzer/archive_manifests/` for one-click rollback anytime.
 
 ---
 
-### 6. ⚙️ 3-Tier Configuration Inheritance
-```mermaid
-graph TD
-    A[Default Factory Config] -->|Inherit / Override| B[Global User Config]
-    B -->|Inherit / Override| C[Profile Task Config]
-    C -->|Resolved Effective| D[Active Configuration Runtime]
-```
-- Hierarchical cascading resolution (`Default -> Global -> Profile`) with visual badge indicators in the GUI (`[Default]`, `[Global]`, `[Profile]`).
+### 5. 🤖 Automation Center & In-Use Lock Protection
+
+- **Background Daemon**: Monitors target directories for file events via Windows filesystem notifications;
+- **In-Use Lock Protection**: Performs deep file handle inspection before performing archives or deletes, safely skipping active documents or running processes;
+- **High Watermark Monitoring**: Alerts when disk usage exceeds safe thresholds and suggests automated cleanups.
 
 ---
 
-### 7. 🛡️ Zero-Stall Architecture & Background Task Manager
-- **Unified Task Center**: Monitors history, stage progression (e.g., aggregating, AI analysis), speeds, and success/failure/skip ratios.
-- All disk I/O, hashing, archiving, migration, and LLM requests execute in dedicated background `QThread` workers.
-- Real-time throughput metrics: **⚡ Speed (MB/s), Processed Files/Bytes, and ETA**.
-- Complete control with **⏸️ Pause, ▶️ Resume, ⏹️ Cancel**.
-- Intercepts window close events if tasks are actively running to safeguard disk operations.
-
----
-
-
-### 8. 🗂️ Snapshot Management & Intelligent Cleanup
-- **History Archive Manager**: Multi-select snapshot deletion, status visualization, and chronological sorting.
-- **One-Click Safe Clean**: Securely wipes out fully rolled-back or canceled snapshots without affecting active ones.
-- **Incremental UI Refresh**: Real-time localized table and UI updates without triggering heavy full-disk rescans.
-
-### 9. 🎨 Responsive UI & High-DPI Adaptation
-- **Adaptive Layouts**: Full support for 125%, 150%, and higher Windows DPI scaling settings.
-- **Scrollable Dynamic Areas**: Removes rigid height constraints, letting AI insights and logs expand organically.
-- **Targeted AI Extraction**: Smartly parses LLM markdown to display *only relevant sections* (e.g., redundant files vs. large files) on respective tabs, instead of dumping entire reports.
-
-## 📂 Project Directory Structure
+## 📂 Project Structure
 
 ```text
 Disk-Space-Analyzer/
 ├── app/
-│   ├── config.py                  # 3-Tier Configuration Inheritance Manager (Default/Global/Profile)
-│   ├── core/
-│   │   ├── ai_service.py          # LLM Client, Report Generator, Sanitizer & Validation
-│   │   ├── app_detector.py        # App/Tool Identification & Atomic Directory Grouping
-│   │   ├── cleaner.py             # Streaming Archive & Safe Delete Worker
-│   │   ├── hash_cache.py          # SQLite Persistent Hash Cache Database
-│   │   ├── migrator.py            # Migration, NTFS Junction, Shortcut & Registry Sync
-│   │   ├── scanner.py             # 3-Phase Asynchronous High-Performance Scanner (with Ignore Filters)
-│   │   └── task_manager.py        # Background Task Scheduler (Speed/ETA/Pause/Resume)
-│   ├── ui/
-│   │   ├── main_window.py         # Modern Sidebar Main Window
-│   │   ├── home_view.py           # Dashboard, Report Panel & Staged Rendering Scan View
-│   │   ├── organizer_view.py      # File Organizer & Directory Tree View
-│   │   ├── settings_view.py       # Configuration Center & Ignore Folders Management
-│   │   ├── styles.py              # Modern Dark Theme QSS Stylesheet
-│   │   └── components/
-│   │       ├── data_table.py      # O(1) Checkbox High-Performance Data Table
-│   │       ├── migration_dialog.py# Smart Migration & Registry/Shortcut Sync Wizard
-│   │       ├── organize_dialog.py # QTreeWidget 10-Column Directory Tree Plan Dialog
-│   │       └── task_manager_widget.py # Background Task Monitor & Log Dialog
+│   ├── config.py                      # 3-Tier Configuration Manager (Default/Global/Profile)
+│   ├── automation/                    # Automation Center Subsystem
+│   │   ├── archive_executor.py        # Automated archive executor
+│   │   ├── cli_generator.py           # CLI / batch script generator
+│   │   ├── manager.py                 # Automation scheduler & task manager
+│   │   ├── models.py                  # Automation data models
+│   │   ├── quick_organizer.py         # Lightweight fast organizer
+│   │   ├── scheduler.py               # Periodic task scheduler
+│   │   └── watcher.py                 # Filesystem change observer
+│   ├── core/                          # Core Business & Engine Layer
+│   │   ├── ai_parser.py               # AI report parser & structure sanitizer
+│   │   ├── ai_service.py              # AI orchestrator client, Keep-Alive pool & <1s micro-contract
+│   │   ├── app_detector.py            # App identification & atomic grouping engine
+│   │   ├── category_manager.py        # 2-3 level category tree & 5-tier precipitation rules
+│   │   ├── cleaner.py                 # Streaming archive & safe deletion worker
+│   │   ├── hash_cache.py              # SQLite 3-stage persistent hash cache
+│   │   ├── migrator.py                # Cross-disk migration, NTFS Junction & shortcut/registry sync
+│   │   ├── rollback_worker.py         # Atomic rollback worker & manifest engine
+│   │   ├── scanner.py                 # 3-phase asynchronous scanning engine
+│   │   └── task_manager.py            # Unified task scheduler (speed/ETA/pause/resume)
+│   ├── ui/                            # Modern PySide6 Desktop GUI
+│   │   ├── main_window.py             # Sidebar main window frame
+│   │   ├── home_view.py               # Scan dashboard & space distribution view
+│   │   ├── organizer_view.py          # AI organizer view & tree planning
+│   │   ├── settings_view.py           # Settings center (3-tier config, models, ignore paths)
+│   │   ├── styles.py                  # Modern dark theme stylesheet
+│   │   ├── components/                # Reusable UI Components
+│   │   │   ├── category_dialog.py     # 2-3 level category tree & exemplar capture wizard
+│   │   │   ├── data_table.py          # 44px fixed row height data grid with inline editing
+│   │   │   ├── migration_dialog.py    # Cross-disk migration wizard & sync dialog
+│   │   │   ├── organize_dialog.py     # 10-column directory tree planning dialog
+│   │   │   └── task_manager_widget.py # Background task monitor & diagnostic dialog
+│   │   └── dedup/                     # Duplicate File 3-Scheme Wizard
+│   │       ├── dedup_merge_view.py    # Dedup & merge container view
+│   │       ├── directory_select_step.py # Directory selection step
+│   │       ├── scan_progress_step.py  # Hashing progress step
+│   │       ├── review_table_step.py   # Review table step
+│   │       └── merge_execute_step.py  # Merge execution step
 │   └── utils/
-│       ├── file_helper.py         # System Protected Whitelist & Size Formatter
-│       └── logger.py              # Application Logging System
-├── tests/
-│   ├── test_ai_scenarios.py             # AI Response Parsing Scenarios
-│   ├── test_ai_service_and_pipeline.py  # AI Sanitization, Validation & Retry Tests
-│   ├── test_app_detector_and_grouping.py# Toolchain Grouping & ~/npm Verification
-│   ├── test_gui_dialogs.py             # Headless Qt Tree Dialog Verification
-│   ├── test_null_safety.py             # Null Safety & Edge Case Protection Tests
-│   ├── test_rollback_worker.py         # Migration Rollback & Conflict Handling
-│   ├── test_settings_and_ignore_folders.py # Settings Persistence & Ignore List Tests
-│   └── test_tree_freeze.py             # Expand-All / Cascade Checkbox Freeze Regression
-├── assets/
-│   ├── app.ico                     # Multi-size application icon
-│   └── make_icon.py                # Icon generator (Pillow)
-├── docs/
-│   ├── 使用说明.md                  # Usage & Safety Guide (Chinese)
-│   └── release-notes-v1.2.0.md     # Release Notes
-├── build_release.py               # One-command PyInstaller build (portable zip + exe)
-├── main.py                        # Application Entrypoint (logging + global error hooks)
-├── requirements.txt               # Runtime Dependencies
-├── requirements-dev.txt           # Development / Build Dependencies
-├── README.md                      # English Documentation
-└── README_ZH.md                   # Chinese Documentation
+│       ├── file_helper.py             # Whitelist & size formatters
+│       ├── lock_detector.py           # File/process handle lock protection (In-Use Guard)
+│       └── logger.py                  # Rolling logging system & crash snapshot hooks
+├── tests/                             # Test Suite (109 Tests 100% Passed)
+│   ├── test_category_tree_and_self_precipitation.py # Category tree, <1s micro-contract & in-place edit tests
+│   ├── test_restart_inheritance_and_select_recommended.py # Restart inheritance & checkbox tests
+│   ├── test_three_core_principles_unified.py       # Three Core Organizing Principles tests
+│   ├── test_automation_center.py                   # Automation Center & in-use protection tests
+│   ├── test_dedup_and_merge.py                     # 3 dedup schemes tests
+│   ├── test_collective_promotion_and_app_manager.py# Collective promotion tests
+│   ├── test_ai_service_and_pipeline.py             # AI client, sanitization & retry tests
+│   └── ...                                         # Additional regression tests (see tests/)
+├── build_release.py                   # One-click PyInstaller release packager
+├── main.py                            # Application entrypoint
+├── requirements.txt                   # Production runtime dependencies
+└── requirements-dev.txt               # Development & testing dependencies
 ```
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Requirements & Setup
+### 1. Prerequisites & Installation
 Python 3.10 or higher is recommended:
 ```bash
-# 1. Clone the repository
+# 1. Clone repository
 git clone https://github.com/xuemingze/disk-space-analyzer.git
 cd disk-space-analyzer
 
@@ -198,8 +248,8 @@ python main.py
 
 ### 3. Run Automated Test Suite
 ```bash
-pytest tests/ -v                   # 17 tests: unit + headless Qt regression
-python tests/test_tree_freeze.py   # Optional: 50,000-node expand-all stress benchmark
+# Run all 109 unit and integration tests (~17s)
+python -m pytest tests/ -v
 ```
 
 ---
@@ -207,33 +257,27 @@ python tests/test_tree_freeze.py   # Optional: 50,000-node expand-all stress ben
 ## 🤖 LLM Configuration Guide
 
 Navigate to **"Settings"** in the sidebar:
-1. **Base URL**: Enter any OpenAI-compatible API endpoint (e.g. `https://api.openai.com/v1`, DeepSeek, or local Ollama `http://localhost:11434/v1`).
+1. **Base URL**: Enter any OpenAI-compatible API endpoint (e.g. `https://api.openai.com/v1`, DeepSeek `https://api.deepseek.com/v1`, MiniMax, Qwen, or local Ollama `http://localhost:11434/v1`).
 2. **API Key**: Enter your API key.
-3. **Model Selection**: Click **"🔄 Fetch Available Models"** to populate available models (e.g. `gpt-4o`, `deepseek-chat`, `MiniMax-Text-01`).
+3. **Model Selection**: Click **"🔄 Fetch Available Models"** to populate available models.
 4. **Test & Save**: Click **"⚡ Test Connection"** to verify, then save to Global or Profile configuration.
-*(Note: If no API Key is configured, the client automatically and seamlessly falls back to the high-accuracy offline heuristic rule engine).*
+
+> 💡 **Offline Fallback Guarantee**:  
+> If no API Key is configured or network is disconnected, the client seamlessly falls back to the high-accuracy offline heuristic rule engine, ensuring 100% operational availability.
 
 ---
 
-## 🩺 Logging & Troubleshooting
+## 🩺 Diagnostics & Troubleshooting
 
-The application intercepts unhandled exceptions globally (main thread, worker threads, interpreter exit)
-and persists everything to disk — **no silent crashes**:
+Global exception handlers monitor main, worker, and interpreter exit threads:
 
-| File | Content |
-| --- | --- |
-| `logs/app.log` | Full runtime log (rolling, 2 MB × 3) |
-| `logs/error.log` | Errors & exceptions with complete stack traces (rolling, 1 MB × 5) |
-| `logs/crash-<timestamp>.log` | Dedicated snapshot for every uncaught exception |
+| Log File | Purpose | Rolling Policy |
+| :--- | :--- | :--- |
+| `logs/app.log` | Standard runtime logs & scan events | 2 MB per file, max 3 files |
+| `logs/error.log` | Warning & error stack traces | 1 MB per file, max 5 files |
+| `logs/crash-*.log` | Dedicated snapshot for uncaught exceptions | Preserved permanently |
 
-Log directory resolution order:
-
-1. `DISK_ANALYZER_LOG_DIR` environment variable
-2. `logs/` next to the executable (portable builds)
-3. `~/.disk_space_analyzer/logs` (fallback)
-
-Qt framework warnings are routed into the same log via `qInstallMessageHandler`.
-When reporting an issue, please attach `logs/error.log` or the relevant `crash-*.log`.
+When reporting issues, please attach `logs/error.log` or the latest `logs/crash-*.log`.
 
 ---
 

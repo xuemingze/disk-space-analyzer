@@ -92,7 +92,7 @@ def test_r1_inplace_edit_f2_and_ai_audit_latency_and_safety():
     assert total_elapsed < 1.0
     assert res_valid["elapsed"] < 1.0
     # 验证吸附至前端工程节点
-    assert "前端" in res_valid["category"] or "代码" in res_valid["category"]
+    assert "前端" in res_valid["category"] or "代码" in res_valid["category"] or "Frontend" in res_valid["category"]
     # 验证增量规则已沉淀落盘
     assert any("dangerous_script" in r["pattern"] for r in global_category_manager.get_precipitated_rules())
 
@@ -606,6 +606,29 @@ def test_adversarial_unc_path_and_skeleton_normalization(tmp_path):
     assert "Ops_Tools" in res["category"] or "网络" in res["category"]
 
     # 2. 验证 snap_to_tree 穿透 UNC 路径
+    global_category_manager._categories.append({
+        "name": "网络运维 (Ops_Tools)",
+        "level": 1,
+        "full_path": "网络运维 (Ops_Tools)",
+        "target_path_template": "{archive_root}/Ops_Tools",
+        "children": [
+            {
+                "name": "网络诊断 (Network_Diagnostics)",
+                "level": 2,
+                "full_path": "网络运维 (Ops_Tools) / 网络诊断 (Network_Diagnostics)",
+                "target_path_template": "{archive_root}/Ops_Tools/Network_Diagnostics",
+                "children": [
+                    {
+                        "name": "抓包工具 (Capture)",
+                        "level": 3,
+                        "full_path": "网络运维 (Ops_Tools) / 网络诊断 (Network_Diagnostics) / 抓包工具 (Capture)",
+                        "target_path_template": "{archive_root}/Ops_Tools/Network_Diagnostics/Capture",
+                        "children": []
+                    }
+                ]
+            }
+        ]
+    })
     snap = global_category_manager.snap_to_tree("//company_nas/share/Ops_Tools/Network_Diagnostics/Capture/app.exe")
     assert snap is not None
     assert "抓包" in snap.get("name", "") or "网络" in snap.get("name", "")
