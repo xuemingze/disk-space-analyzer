@@ -43,6 +43,7 @@ class CategoryManagerDialog(QDialog):
         self.cat_tree.setStyleSheet("""
             QTreeWidget {
                 background-color: #0F172A;
+                color: #FFFFFF;
                 border: 1px solid #334155;
                 border-radius: 6px;
                 padding: 4px;
@@ -51,19 +52,21 @@ class CategoryManagerDialog(QDialog):
             QTreeWidget::item {
                 margin: 2px 0px;
                 border-radius: 4px;
-                padding: 3px 6px;
+                padding: 4px 6px;
+                color: #FFFFFF;
             }
             QTreeWidget::item:selected {
-                border: 2px solid #F59E0B;
-                background-color: #FDE68A;
-                color: #000000;
+                border: 1px solid #38BDF8;
+                background-color: #1D4ED8;
+                color: #FFFFFF;
             }
             QTreeWidget::item:hover:!selected {
-                border: 1px solid #38BDF8;
+                background-color: #1E293B;
+                color: #FFFFFF;
             }
             QHeaderView::section {
                 background-color: #1E293B;
-                color: #F8FAFC;
+                color: #FFFFFF;
                 padding: 6px 8px;
                 border: none;
                 border-bottom: 2px solid #38BDF8;
@@ -149,7 +152,7 @@ class CategoryManagerDialog(QDialog):
         self.refresh_tree()
 
     def refresh_tree(self):
-        """重新加载并完整展开 2~3 级分类树，严格遵循蓝底黑字、绿底黑字规范"""
+        """重新加载并完整展开 2~3 级分类树，严格遵循蓝底白字、绿底白字规范"""
         self.cat_tree.clear()
         tree = global_category_manager.get_tree()
 
@@ -159,9 +162,9 @@ class CategoryManagerDialog(QDialog):
                 pri = str(node.get("priority", 0))
                 if parent_item is None:
                     item = QTreeWidgetItem(self.cat_tree, [name, pri])
-                    # 顶级分类：蓝底黑字 (鲜明天蓝底 + 纯深黑字，粗体)
-                    bg_brush = QBrush(QColor("#7DD3FC"))
-                    text_brush = QBrush(QColor("#000000"))
+                    # 顶级分类：蓝底白字 (沉稳深蓝底 + 高亮纯白字，粗体)
+                    bg_brush = QBrush(QColor("#1E3A8A"))
+                    text_brush = QBrush(QColor("#FFFFFF"))
                     font = item.font(0)
                     font.setBold(True)
                     for col in range(2):
@@ -171,9 +174,9 @@ class CategoryManagerDialog(QDialog):
                         item.setSizeHint(col, QSize(0, 32))
                 else:
                     item = QTreeWidgetItem(parent_item, [name, pri])
-                    # 子级分类：绿底黑字 (柔和清新浅绿底 + 纯深黑字)
-                    bg_brush = QBrush(QColor("#86EFAC"))
-                    text_brush = QBrush(QColor("#000000"))
+                    # 子级分类：绿底白字 (沉稳深绿底 + 高亮纯白字)
+                    bg_brush = QBrush(QColor("#065F46"))
+                    text_brush = QBrush(QColor("#FFFFFF"))
                     font = item.font(0)
                     font.setBold(False)
                     for col in range(2):
@@ -184,7 +187,7 @@ class CategoryManagerDialog(QDialog):
 
                 item.setData(0, Qt.UserRole, node.get("category_id"))
                 if not node.get("enabled", True):
-                    dim_text = QBrush(QColor("#475569"))
+                    dim_text = QBrush(QColor("#94A3B8"))
                     item.setForeground(0, dim_text)
                     item.setForeground(1, dim_text)
 

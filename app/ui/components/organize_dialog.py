@@ -203,9 +203,9 @@ class OrganizePreviewDialog(QDialog):
         self.tree.setUpdatesEnabled(False)
         self.tree.clear()
         
-        # 全局设计铁律：顶级蓝底黑字，子级绿底黑字，坚决禁用白黑混杂交叉
-        folder_bg = QBrush(QColor("#7DD3FC"))
-        folder_fg = QBrush(QColor("#000000"))
+        # 全局设计铁律：顶级蓝底白字，子级绿底白字，纯色深底统一使用清晰纯白字
+        folder_bg = QBrush(QColor("#1E3A8A"))
+        folder_fg = QBrush(QColor("#FFFFFF"))
         
         auto_checked_count = 0
         unselected_count = 0
@@ -215,9 +215,7 @@ class OrganizePreviewDialog(QDialog):
 
         for group in self.classification_items:
             if not os.environ.get("QT_QPA_PLATFORM"):
-                if not os.environ.get("QT_QPA_PLATFORM"):
-
-                    QApplication.processEvents()
+                QApplication.processEvents()
             orig_root = group.get("original_root", "")
             sub_items = group.get("sub_items", [])
             
@@ -273,12 +271,12 @@ class OrganizePreviewDialog(QDialog):
             font = group_item.font(1)
             font.setBold(True)
             if source == "AI":
-                group_item.setForeground(1, QBrush(QColor("#0369A1")))  # 深蓝黑字加粗
+                group_item.setForeground(1, QBrush(QColor("#38BDF8")))  # 高亮天蓝白字
             elif "涉敏" in source or "降级" in source:
-                group_item.setForeground(1, QBrush(QColor("#9A3412")))  # 深琥珀黑字加粗
+                group_item.setForeground(1, QBrush(QColor("#FBBF24")))  # 高亮琥珀橙字
                 group_item.setToolTip(1, "触发大模型内容安全审查 (422 Sensitive)，已安全保留本地离线启发式规则")
             else:
-                group_item.setForeground(1, QBrush(QColor("#000000")))
+                group_item.setForeground(1, QBrush(QColor("#FFFFFF")))
             group_item.setFont(1, font)
             
             combo = QComboBox()
@@ -479,8 +477,8 @@ class OrganizePreviewDialog(QDialog):
                     child_item.setTextAlignment(8, Qt.AlignCenter)
                     child_item.setText(9, f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}")
                     # 子项统一绿底黑字
-                    child_bg = QBrush(QColor("#BBF7D0"))
-                    child_fg = QBrush(QColor("#000000"))
+                    child_bg = QBrush(QColor("#065F46"))
+                    child_fg = QBrush(QColor("#FFFFFF"))
                     for c_col in range(10):
                         child_item.setBackground(c_col, child_bg)
                         child_item.setForeground(c_col, child_fg)
@@ -582,8 +580,8 @@ class OrganizePreviewDialog(QDialog):
                         child_item.setTextAlignment(8, Qt.AlignCenter)
                         child_item.setText(9, f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}")
                         # 子项统一绿底黑字
-                        child_bg = QBrush(QColor("#BBF7D0"))
-                        child_fg = QBrush(QColor("#000000"))
+                        child_bg = QBrush(QColor("#065F46"))
+                        child_fg = QBrush(QColor("#FFFFFF"))
                         for c_col in range(10):
                             child_item.setBackground(c_col, child_bg)
                             child_item.setForeground(c_col, child_fg)
