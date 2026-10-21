@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QTextEdit, QLabel, QFormLayout, QGroupBox,
     QCheckBox, QSpinBox, QMessageBox, QFileDialog, QHeaderView
 )
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, QSize
+from PySide6.QtGui import QBrush, QColor, QFont
 from app.core.category_manager import global_category_manager
 from app.core.ai_service import AIService
 
@@ -34,10 +35,41 @@ class CategoryManagerDialog(QDialog):
         self.cat_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.cat_tree.header().setSectionResizeMode(1, QHeaderView.Interactive)
         self.cat_tree.setColumnWidth(1, 75)
-        self.cat_tree.setAlternatingRowColors(True)
+        # 全局设计铁律：坚决禁用白黑交叉混杂，保持统一清晰对比度
+        self.cat_tree.setAlternatingRowColors(False)
         self.cat_tree.setAcceptDrops(True)
         self.cat_tree.installEventFilter(self)
         self.cat_tree.currentItemChanged.connect(self.on_current_item_changed)
+        self.cat_tree.setStyleSheet("""
+            QTreeWidget {
+                background-color: #0F172A;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 4px;
+                outline: none;
+            }
+            QTreeWidget::item {
+                margin: 2px 0px;
+                border-radius: 4px;
+                padding: 3px 6px;
+            }
+            QTreeWidget::item:selected {
+                border: 2px solid #F59E0B;
+                background-color: #FDE68A;
+                color: #000000;
+            }
+            QTreeWidget::item:hover:!selected {
+                border: 1px solid #38BDF8;
+            }
+            QHeaderView::section {
+                background-color: #1E293B;
+                color: #F8FAFC;
+                padding: 6px 8px;
+                border: none;
+                border-bottom: 2px solid #38BDF8;
+                font-weight: bold;
+            }
+        """)
         left_layout.addWidget(self.cat_tree)
 
         # 兼容旧属性访问
@@ -117,7 +149,7 @@ class CategoryManagerDialog(QDialog):
         self.refresh_tree()
 
     def refresh_tree(self):
-        """重新加载并完整展开 2~3 级分类树"""
+        """重新加载并完整展开 2~3 级分类树，严格遵循蓝底黑字、绿底黑字规范"""
         self.cat_tree.clear()
         tree = global_category_manager.get_tree()
 
@@ -127,12 +159,35 @@ class CategoryManagerDialog(QDialog):
                 pri = str(node.get("priority", 0))
                 if parent_item is None:
                     item = QTreeWidgetItem(self.cat_tree, [name, pri])
+                    # 顶级分类：蓝底黑字 (鲜明天蓝底 + 纯深黑字，粗体)
+                    bg_brush = QBrush(QColor("#7DD3FC"))
+                    text_brush = QBrush(QColor("#000000"))
+                    font = item.font(0)
+                    font.setBold(True)
+                    for col in range(2):
+                        item.setBackground(col, bg_brush)
+                        item.setForeground(col, text_brush)
+                        item.setFont(col, font)
+                        item.setSizeHint(col, QSize(0, 32))
                 else:
                     item = QTreeWidgetItem(parent_item, [name, pri])
+                    # 子级分类：绿底黑字 (柔和清新浅绿底 + 纯深黑字)
+                    bg_brush = QBrush(QColor("#86EFAC"))
+                    text_brush = QBrush(QColor("#000000"))
+                    font = item.font(0)
+                    font.setBold(False)
+                    for col in range(2):
+                        item.setBackground(col, bg_brush)
+                        item.setForeground(col, text_brush)
+                        item.setFont(col, font)
+                        item.setSizeHint(col, QSize(0, 30))
+
                 item.setData(0, Qt.UserRole, node.get("category_id"))
                 if not node.get("enabled", True):
-                    item.setForeground(0, Qt.gray)
-                    item.setForeground(1, Qt.gray)
+                    dim_text = QBrush(QColor("#475569"))
+                    item.setForeground(0, dim_text)
+                    item.setForeground(1, dim_text)
+
                 children = node.get("children", [])
                 if children:
                     _add_nodes(item, children)

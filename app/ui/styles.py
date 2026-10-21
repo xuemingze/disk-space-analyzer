@@ -200,14 +200,38 @@ QComboBox QAbstractItemView::item:selected {
     color: #FFFFFF;
 }
 
-/* 表格 Data Grid */
+/* 表格 Data Grid - 坚决禁用白黑交叉混杂，保证高反差可读性 */
 QTableWidget, QTableView {
     background-color: #121A27;
-    alternate-background-color: #162234;
+    alternate-background-color: #121A27;
     gridline-color: #223249;
     border: 1px solid #233247;
     border-radius: 6px;
-    color: #E2E8F0;
+    color: #F8FAFC;
+    selection-background-color: #1E3A8A;
+    selection-color: #FFFFFF;
+}
+
+/* 树状视图 QTreeWidget, QTreeView - 坚决禁用白黑交叉，统一高对比度 */
+QTreeWidget, QTreeView {
+    background-color: #0F172A;
+    alternate-background-color: #0F172A;
+    border: 1px solid #233247;
+    border-radius: 6px;
+    color: #F8FAFC;
+    selection-background-color: #1E3A8A;
+    selection-color: #FFFFFF;
+    outline: none;
+}
+
+QTreeWidget::item, QTreeView::item {
+    min-height: 28px;
+    padding: 3px 6px;
+    border-radius: 4px;
+}
+
+QTreeWidget::item:hover, QTreeView::item:hover {
+    background-color: #1E293B;
 }
 
 QHeaderView::section {
@@ -353,9 +377,10 @@ QGroupBox::title {
     padding: 0 8px;
 }
 
-/* 列表 QListWidget */
-QListWidget {
+/* 列表 QListWidget, QListView - 坚决禁用白黑混杂交叉 */
+QListWidget, QListView {
     background-color: #0F172A;
+    alternate-background-color: #0F172A;
     color: #F8FAFC;
     border: 1px solid #334155;
     border-radius: 6px;

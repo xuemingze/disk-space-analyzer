@@ -489,7 +489,8 @@ class FileDataGridWidget(QWidget):
         
         # 替代原先的 QTableWidget，改用 QTableView
         self.table_view = QTableView()
-        self.table_view.setAlternatingRowColors(True)
+        # 全局设计铁律：坚决禁用白黑交叉混杂，保持统一清晰底色
+        self.table_view.setAlternatingRowColors(False)
         self.table_view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table_view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table_view.setSortingEnabled(True)

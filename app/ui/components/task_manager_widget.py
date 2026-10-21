@@ -85,9 +85,11 @@ class TaskManagerDialog(QDialog):
         ])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.table.verticalHeader().setMinimumSectionSize(44)
-        self.table.setAlternatingRowColors(True)
+        # 全局设计铁律：坚决禁用白黑交叉混杂，保持统一清晰底色
+        self.table.setAlternatingRowColors(False)
         
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
