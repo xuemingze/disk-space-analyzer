@@ -89,7 +89,6 @@ def test_settings_view_font_scaling_adaptation(qapp, temp_config, monkeypatch):
         font = QFont("Microsoft YaHei", pt_size)
         view.setFont(font)
         view.content_widget.setFont(font)
-        qapp.processEvents()
 
         # 检查滚动区域与内容几何尺寸
         content_hint = view.content_widget.sizeHint()

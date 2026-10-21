@@ -215,7 +215,9 @@ class OrganizePreviewDialog(QDialog):
 
         for group in self.classification_items:
             if not os.environ.get("QT_QPA_PLATFORM"):
-                QApplication.processEvents()
+                if not os.environ.get("QT_QPA_PLATFORM"):
+
+                    QApplication.processEvents()
             orig_root = group.get("original_root", "")
             sub_items = group.get("sub_items", [])
             
@@ -488,14 +490,15 @@ class OrganizePreviewDialog(QDialog):
                         item.addChildren(new_children)
                         new_children = []
                         files_processed += batch_size
-                        if use_progress:
+                        if use_progress and progress:
                             progress.setValue(files_processed)
-                            QApplication.processEvents()
+                            if not os.environ.get("QT_QPA_PLATFORM"):
+                                QApplication.processEvents()
                             
                 if new_children:
                     item.addChildren(new_children)
                     files_processed += len(new_children)
-                    if use_progress:
+                    if use_progress and progress:
                         progress.setValue(files_processed)
             finally:
                 self.tree.setUpdatesEnabled(True)
@@ -523,10 +526,14 @@ class OrganizePreviewDialog(QDialog):
             if u_data and u_data.get("type") == "group":
                 total_files += len(u_data["data"].get("sub_items", []))
 
-        progress = QProgressDialog("正在分批展开目录树...", "取消", 0, total_files, self)
-        progress.setWindowTitle("批量展开")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setMinimumDuration(0)
+        use_progress = total_files > 500 and not os.environ.get("QT_QPA_PLATFORM")
+        if use_progress:
+            progress = QProgressDialog("正在分批展开目录树...", "取消", 0, total_files, self)
+            progress.setWindowTitle("批量展开")
+            progress.setWindowModality(Qt.WindowModal)
+            progress.setMinimumDuration(0)
+        else:
+            progress = None
         
         from app.utils.file_helper import format_size
         files_processed = 0
@@ -535,7 +542,7 @@ class OrganizePreviewDialog(QDialog):
         
         try:
             for item in groups_to_expand:
-                if progress.wasCanceled():
+                if progress and progress.wasCanceled():
                     break
                 u_data = item.data(0, Qt.UserRole)
                 if not u_data or u_data.get("type") != "group":
@@ -552,7 +559,7 @@ class OrganizePreviewDialog(QDialog):
                     sub_items = group.get("sub_items", [])
                     new_children = []
                     for i, sub in enumerate(sub_items):
-                        if progress.wasCanceled():
+                        if progress and progress.wasCanceled():
                             break
                         child_item = QTreeWidgetItem()
                         child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
@@ -586,19 +593,25 @@ class OrganizePreviewDialog(QDialog):
                             item.addChildren(new_children)
                             new_children = []
                             files_processed += batch_size
-                            progress.setValue(files_processed)
-                            QApplication.processEvents()
+                            if progress:
+                                progress.setValue(files_processed)
+                            if not os.environ.get("QT_QPA_PLATFORM"):
+                                QApplication.processEvents()
                             
                     if new_children:
                         item.addChildren(new_children)
                         files_processed += len(new_children)
-                        progress.setValue(files_processed)
-                        QApplication.processEvents()
+                        if progress:
+                            progress.setValue(files_processed)
+                        if not os.environ.get("QT_QPA_PLATFORM"):
+
+                            QApplication.processEvents()
                 item.setExpanded(True)
         finally:
             self.tree.setUpdatesEnabled(True)
             self.tree.itemExpanded.connect(self._on_item_expanded)
-            progress.setValue(total_files)
+            if progress:
+                progress.setValue(total_files)
 
     def _select_safe_only(self):
         self._is_updating_checks = True

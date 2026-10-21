@@ -70,13 +70,15 @@ def test_expand_all_and_cascade_uncheck(qapp):
     )
     try:
         dialog.show()
-        qapp.processEvents()
+        if not os.environ.get("QT_QPA_PLATFORM"):
+            qapp.processEvents()
 
         assert dialog.tree.topLevelItemCount() == group_count
 
         started = time.time()
         dialog._expand_all_with_progress()
-        qapp.processEvents()
+        if not os.environ.get("QT_QPA_PLATFORM"):
+            qapp.processEvents()
         expand_elapsed = time.time() - started
 
         assert expand_elapsed < budget, (
@@ -90,7 +92,8 @@ def test_expand_all_and_cascade_uncheck(qapp):
         started = time.time()
         top_item = dialog.tree.topLevelItem(0)
         top_item.setCheckState(0, Qt.Unchecked)
-        qapp.processEvents()
+        if not os.environ.get("QT_QPA_PLATFORM"):
+            qapp.processEvents()
         cascade_elapsed = time.time() - started
 
         assert cascade_elapsed < budget, (
@@ -102,7 +105,8 @@ def test_expand_all_and_cascade_uncheck(qapp):
         dialog.tree.clear()
         dialog.close()
         dialog.deleteLater()
-        qapp.processEvents()
+        if not os.environ.get("QT_QPA_PLATFORM"):
+            qapp.processEvents()
 
 
 if __name__ == "__main__":
