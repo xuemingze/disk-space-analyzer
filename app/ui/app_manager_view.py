@@ -293,15 +293,20 @@ class AppManagerView(QWidget):
             if dlg.exec() == PromoteCollectiveDialog.Accepted:
                 t_dir = dlg.selected_target_dir
                 a_name = dlg.app_name
-                AssetPromoterService.persist_collective(t_dir)
+                AssetPromoterService.persist_collective(t_dir, app_name=a_name)
                 self.reload_apps(force=True)
 
     def _remove_custom_app(self, app_path: str):
         norm_p = os.path.normpath(app_path)
+        low_p = os.path.normcase(norm_p)
         reply = QMessageBox.question(self, "确认删除", f"确定从规则中移除自定义软件目录吗？\n{norm_p}", QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             cfg_dirs = list(app_config.get("custom_app_dirs", default=[]))
-            updated = [d for d in cfg_dirs if os.path.normpath(d).lower() != norm_p.lower()]
+            updated = []
+            for item in cfg_dirs:
+                p = item.get("path") if isinstance(item, dict) else str(item)
+                if os.path.normcase(os.path.normpath(p)) != low_p:
+                    updated.append(item)
             app_config.set("custom_app_dirs", updated, level="global")
             RegistryAppDetector.set_custom_apps(updated)
             self.reload_apps(force=True)

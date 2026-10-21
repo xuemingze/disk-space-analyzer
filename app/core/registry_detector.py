@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from dataclasses import dataclass
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Dict, List, Optional, Tuple, Set, Any, Union
 from app.utils.logger import app_logger
 
 
@@ -18,33 +18,58 @@ CUSTOM_APPS_PERSIST_FILE = Path.home() / ".disk_space_analyzer" / "custom_apps.j
 
 
 def load_standalone_custom_apps() -> List[str]:
-    """从独立持久化文件中加载自定义应用目录 (双保险保障)"""
+    """从独立持久化文件中加载自定义应用目录路径列表 (双保险保障)"""
+    entries = load_standalone_custom_app_entries()
+    return [e["path"] for e in entries if e.get("path")]
+
+
+def load_standalone_custom_app_entries() -> List[Dict[str, str]]:
+    """从独立持久化文件中加载自定义应用完整元数据列表 (含路径与自定义外显名称)"""
     try:
         if CUSTOM_APPS_PERSIST_FILE.exists():
             with open(CUSTOM_APPS_PERSIST_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    return [os.path.normpath(str(p).strip()) for p in data if str(p).strip()]
+                    entries: List[Dict[str, str]] = []
+                    seen: Set[str] = set()
+                    for item in data:
+                        if isinstance(item, dict):
+                            p = os.path.normpath(str(item.get("path", "")).strip())
+                            n = str(item.get("name", "")).strip() or os.path.basename(p)
+                        else:
+                            p = os.path.normpath(str(item).strip())
+                            n = os.path.basename(p)
+                        if p and p != ".":
+                            low = os.path.normcase(p)
+                            if low not in seen:
+                                seen.add(low)
+                                entries.append({"path": p, "name": n})
+                    return entries
     except Exception as e:
         app_logger.debug("读取独立自定义应用持久化文件失败: %s", e)
     return []
 
 
-def save_standalone_custom_apps(custom_dirs: List[str]) -> bool:
-    """原子保存自定义应用目录至独立专属持久化文件"""
+def save_standalone_custom_apps(custom_items: List[Any]) -> bool:
+    """原子保存自定义应用至独立专属持久化文件 (支持路径字符串或包含 name 的字典)"""
     try:
         CUSTOM_APPS_PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        unique_dirs = []
+        unique_entries = []
         seen = set()
-        for d in custom_dirs:
-            if d and d.strip():
-                norm = os.path.normpath(d.strip())
-                low = norm.lower()
+        for item in custom_items:
+            if isinstance(item, dict):
+                p = os.path.normpath(str(item.get("path", "")).strip())
+                n = str(item.get("name", "")).strip() or os.path.basename(p)
+            else:
+                p = os.path.normpath(str(item).strip())
+                n = os.path.basename(p)
+            if p and p != ".":
+                low = os.path.normcase(p)
                 if low not in seen:
                     seen.add(low)
-                    unique_dirs.append(norm)
+                    unique_entries.append({"path": p, "name": n})
         with open(CUSTOM_APPS_PERSIST_FILE, "w", encoding="utf-8") as f:
-            json.dump(unique_dirs, f, indent=4, ensure_ascii=False)
+            json.dump(unique_entries, f, indent=4, ensure_ascii=False)
         return True
     except Exception as e:
         app_logger.error("保存独立自定义应用持久化文件失败: %s", e)
@@ -122,16 +147,29 @@ class RegistryAppDetector:
     _cached_apps: Optional[Dict[str, InstalledAppInfo]] = None
     _cached_roots_sorted: Optional[List[Tuple[str, InstalledAppInfo]]] = None
     _custom_dirs: Dict[str, str] = {}
+    _custom_names: Dict[str, str] = {}
 
     @classmethod
-    def set_custom_apps(cls, custom_dirs: List[str]):
-        """设置用户手动添加的独立应用目录并双保险持久化"""
-        norm_list = [os.path.normpath(d) for d in custom_dirs if d and d.strip()]
-        cls._custom_dirs = {
-            os.path.normcase(d): d for d in norm_list
-        }
+    def set_custom_apps(cls, custom_dirs: List[Any]):
+        """设置用户手动添加的独立应用目录并双保险持久化 (支持字典或路径字符串)"""
+        cls._custom_dirs = {}
+        cls._custom_names = {}
+        entries_to_save = []
+        for item in custom_dirs:
+            if isinstance(item, dict):
+                p = os.path.normpath(str(item.get("path", "")).strip())
+                n = str(item.get("name", "")).strip() or os.path.basename(p)
+            else:
+                p = os.path.normpath(str(item).strip())
+                n = os.path.basename(p)
+            if p and p != ".":
+                low = os.path.normcase(p)
+                cls._custom_dirs[low] = p
+                cls._custom_names[low] = n
+                entries_to_save.append({"path": p, "name": n})
+
         # 独立持久化双保险
-        save_standalone_custom_apps(norm_list)
+        save_standalone_custom_apps(entries_to_save)
         # 重置缓存以重新合并
         cls._cached_apps = None
         cls._cached_roots_sorted = None
@@ -189,28 +227,37 @@ class RegistryAppDetector:
                         )
 
         # 合并用户自定义独立软件目录 (双保险读取: app_config + 独立持久化文件 custom_apps.json)
-        all_custom_dirs = set()
+        all_custom_entries: Dict[str, Tuple[str, str]] = {}
         try:
             from app.config import app_config
             cfg_dirs = app_config.get("custom_app_dirs", default=[])
             if isinstance(cfg_dirs, list):
-                for d in cfg_dirs:
-                    if d and str(d).strip():
-                        all_custom_dirs.add(os.path.normpath(str(d).strip()))
+                for item in cfg_dirs:
+                    if isinstance(item, dict):
+                        p = os.path.normpath(str(item.get("path", "")).strip())
+                        n = str(item.get("name", "")).strip() or os.path.basename(p)
+                    else:
+                        p = os.path.normpath(str(item).strip())
+                        n = os.path.basename(p)
+                    if p and p != ".":
+                        all_custom_entries[os.path.normcase(p)] = (p, n)
         except Exception:
             pass
 
-        standalone_dirs = load_standalone_custom_apps()
-        for d in standalone_dirs:
-            all_custom_dirs.add(d)
+        standalone_entries = load_standalone_custom_app_entries()
+        for e in standalone_entries:
+            p = e["path"]
+            n = e["name"]
+            if p and p != ".":
+                all_custom_entries[os.path.normcase(p)] = (p, n)
 
-        for d in all_custom_dirs:
-            cls._custom_dirs[os.path.normcase(d)] = d
-
-        for norm_c_dir, orig_p in cls._custom_dirs.items():
-            dir_name = os.path.basename(orig_p) or orig_p
-            apps[norm_c_dir] = InstalledAppInfo(
-                name=dir_name,
+        cls._custom_dirs = {}
+        cls._custom_names = {}
+        for low_p, (orig_p, name) in all_custom_entries.items():
+            cls._custom_dirs[low_p] = orig_p
+            cls._custom_names[low_p] = name
+            apps[low_p] = InstalledAppInfo(
+                name=name,
                 install_root=orig_p,
                 publisher="用户自定义沉淀",
                 source="custom"

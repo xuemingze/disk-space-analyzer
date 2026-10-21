@@ -384,7 +384,36 @@ class AppDetector:
         dname = p.name
         dname_lower = dname.lower()
 
-        # 0.2 系统核心保留大容器与已知顶层系统目录黑名单
+        # 0.2 Windows 注册表与自定义沉淀软件权威匹配 (物理事实第一优先，绝对优先于大抽屉与盘符启发式)
+        try:
+            from app.core.registry_detector import RegistryAppDetector
+            matched_app, is_root = RegistryAppDetector.match_app_by_path(str(p))
+            if matched_app and is_root:
+                col_type = "用户自定义集体" if matched_app.source == "custom" else "已安装应用"
+                reason_str = (
+                    f"用户自定义沉淀集合 [{matched_app.name}]，原子保全封印"
+                    if matched_app.source == "custom"
+                    else f"Windows 注册表权威收录软件 [{matched_app.name}]，整包封印"
+                )
+                return {
+                    "is_collective": True,
+                    "collective_type": col_type,
+                    "software_name": matched_app.name,
+                    "directory_name": dname,
+                    "primary_executable": "",
+                    "product_title": matched_app.name,
+                    "publisher": matched_app.publisher or ("用户自定义沉淀" if matched_app.source == "custom" else ""),
+                    "manifest_project_name": matched_app.name,
+                    "signature_type": "Custom User Collective" if matched_app.source == "custom" else "Windows Installed Software",
+                    "suggested_category": "软件安装与程序 (Apps & Installers)",
+                    "recommended_subpath": f"应用软件/{matched_app.name}",
+                    "reason": reason_str,
+                    "confidence": 1.0 if matched_app.source == "custom" else 0.99
+                }
+        except Exception as e:
+            app_logger.debug("注册表应用匹配检测异常: %s", e)
+
+# 0.3 系统核心保留大容器与已知顶层系统目录黑名单
         SYSTEM_CONTAINER_NAMES = {
             "downloads", "desktop", "documents", "user", "users", "administrator",
             "program files", "program files (x86)", "appdata", "local", "roaming",
@@ -401,29 +430,6 @@ class AppDetector:
         # 0.3 广义分类容器（如 "项目", "多媒体", "游戏", "电影", "设计", "财务", "学习", "backups", "MovedApps"）属于大抽屉，绝不可作为独立单个实体剪枝！
         if cls.match_broad_container(dname):
             return None
-
-        # 0.4 Windows 注册表与自定义软件权威匹配 (物理事实第一优先)
-        try:
-            from app.core.registry_detector import RegistryAppDetector
-            matched_app, is_root = RegistryAppDetector.match_app_by_path(str(p))
-            if matched_app and is_root:
-                return {
-                    "is_collective": True,
-                    "collective_type": "已安装应用",
-                    "software_name": matched_app.name,
-                    "directory_name": dname,
-                    "primary_executable": "",
-                    "product_title": matched_app.name,
-                    "publisher": matched_app.publisher,
-                    "manifest_project_name": matched_app.name,
-                    "signature_type": "Windows Installed Software",
-                    "suggested_category": "软件安装与程序 (Apps & Installers)",
-                    "recommended_subpath": f"应用软件/{matched_app.name}",
-                    "reason": f"Windows 注册表权威收录软件 [{matched_app.name}]，整包封印",
-                    "confidence": 0.99
-                }
-        except Exception as e:
-            app_logger.debug("注册表应用匹配检测异常: %s", e)
 
         # 附属/内部私有依赖目录（如 _internal, __pycache__）绝不可作为独立集体输出，必须溯源归属至主程序父目录
         if dname_lower in {"_internal", "internal", "__pycache__"}:

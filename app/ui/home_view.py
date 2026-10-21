@@ -436,6 +436,14 @@ class HomeView(QWidget):
             self.bottom_bar.show()
             self.tab_fullscreen_btn.setText("⛶ 放大当前标签页")
             self.tab_fullscreen_btn.setToolTip("将当前标签页放大至填满主区域")
+
+        # 切换 Tab 时实时刷新底部选中统计栏，确保数值与当前活跃视图严格一致
+        active_tbl = self.get_active_table()
+        if active_tbl:
+            self.on_redundant_selection_changed(
+                len(active_tbl.source_model.checked_paths),
+                active_tbl.source_model.checked_bytes
+            )
             
     def is_tab_fullscreen(self) -> bool:
         idx = getattr(self, "tabs", None)
@@ -751,7 +759,7 @@ class HomeView(QWidget):
         from app.core.asset_promoter import AssetPromoterService
 
         # 1. 第一优先级执行规则沉淀落盘 (双保险落盘)
-        AssetPromoterService.persist_collective(target_dir)
+        AssetPromoterService.persist_collective(target_dir, app_name=app_name)
 
         # 2. 若当前 current_scan_result 为空，从全局表格中拉取已显示的数据作为数据源
         if not self.current_scan_result:
@@ -862,29 +870,46 @@ class HomeView(QWidget):
         self.open_migration_dialog_for_paths(checked_paths)
 
     def trigger_ai_recommendation_only(self):
-        """仅选推荐：由 AI 智能打标并勾选，绝不执行任何移动或删除"""
-        if not self.current_scan_result or not self.current_scan_result.get("redundant_files"):
-            QMessageBox.warning(self, "提示", "请先完成一次有效扫描！")
+        """
+        📌 仅选推荐：
+        遵循「AI 为核心编排器架构」原则：
+        1. 优先以 AI 创作的结构化执行清单 (ai_execution_plan) 为最高准则，直接落地入轨；
+        2. 若尚无 AI 执行清单，则以本地安全启发式打标为兜底，直接勾选推荐项；
+        3. 作用于当前活跃表格，并即时联动更新底部统计栏与状态反馈，0 延迟、0 阻塞。
+        """
+        table = self.get_active_table()
+        if not table or table.source_model.rowCount() == 0:
+            if not self.current_scan_result or (
+                not self.current_scan_result.get("all_scanned_files") and
+                not self.current_scan_result.get("redundant_files")
+            ):
+                QMessageBox.warning(self, "提示", "请先完成一次有效扫描！")
+                return
+            QMessageBox.information(self, "提示", "当前查看的表格中暂无资产项！")
             return
 
-        llm_cfg = app_config.get("llm", default={})
-        if not llm_cfg.get("api_key") or not llm_cfg.get("base_url"):
-            self.global_detail_table.select_recommended_only()
-            self.duplicate_table.select_recommended_only()
-            self.releasable_table.select_recommended_only()
-            self.top100_table.select_recommended_only()
-            QMessageBox.information(self, "智能推荐", "已根据本地安全启发式规则完成推荐勾选！")
-            return
+        # 优先从 current_scan_result 中获取已生成的 AI 执行清单
+        ai_plan = (self.current_scan_result or {}).get("ai_execution_plan", [])
 
-        self.btn_select_rec.setEnabled(False)
-        self.phase_label.setText("🤖 正在向大模型提交文件特征进行智能甄别...")
-        
-        self.ai_worker = AIWorker("recommend", self.current_scan_result["redundant_files"])
-        self.ai_task_id = global_task_manager.create_task("AI 智能甄别推荐", TaskType.AI_ANALYSIS, self.ai_worker).task_id
-        self.ai_worker.recommend_done.connect(self.on_ai_recommend_done)
-        self.ai_worker.failed.connect(self.on_ai_failed)
-        self.ai_worker.start()
+        # 在当前活跃表格中执行安全推荐勾选 (支持 AI 执行清单 + 本地安全兜底)
+        checked_count = table.select_recommended_only(ai_plan=ai_plan)
 
+        # 联动刷新底部选中统计栏与全局标签
+        self.on_redundant_selection_changed(
+            len(table.source_model.checked_paths),
+            table.source_model.checked_bytes
+        )
+
+        # 即时反馈
+        if checked_count > 0:
+            bytes_str = format_size(table.source_model.checked_bytes)
+            self.phase_label.setText(f"📌 仅选推荐: 已勾选 {checked_count} 项安全资产 (共 {bytes_str})")
+        else:
+            self.phase_label.setText("📌 仅选推荐: 当前表格未发现符合安全推荐的资产项")
+            QMessageBox.information(
+                self, "智能推荐",
+                "当前列表中未发现可安全释放的推荐项（或推荐项已被勾选）。\n可切换至「🔄 重复资产明细」或「🗑️ 可释放资产明细」查看推荐资产。"
+            )
 
     def on_ai_recommend_done(self, recommended_items: List[Any]):
         self.btn_select_rec.setEnabled(True)

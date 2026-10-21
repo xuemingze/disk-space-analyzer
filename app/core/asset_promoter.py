@@ -162,7 +162,7 @@ class AssetPromoterService(QObject):
 
         # 知识库沉淀
         if persist:
-            cls.persist_collective(target_dir)
+            cls.persist_collective(target_dir, app_name=app_name)
 
         # 发射全局广播通知所有页面联动更新
         cls.instance().collective_promoted.emit(target_dir, new_asset)
@@ -172,18 +172,36 @@ class AssetPromoterService(QObject):
         return retained_assets, new_asset
 
     @classmethod
-    def persist_collective(cls, target_dir: str):
-        """沉淀至全局配置与注册表匹配树 (双保险持久化)"""
+    def persist_collective(cls, target_dir: str, app_name: Optional[str] = None):
+        """沉淀至全局配置与注册表匹配树 (双保险持久化，保留外显名称)"""
         try:
             norm_d = os.path.normpath(target_dir)
-            cfg_dirs = list(app_config.get("custom_app_dirs", default=[]))
-            if norm_d not in cfg_dirs:
-                cfg_dirs.append(norm_d)
-                app_config.set("custom_app_dirs", cfg_dirs, level="global")
+            clean_name = (app_name or "").strip() or os.path.basename(norm_d)
+            low_d = os.path.normcase(norm_d)
 
-            RegistryAppDetector.set_custom_apps(cfg_dirs)
-            from app.core.registry_detector import save_standalone_custom_apps
-            save_standalone_custom_apps(cfg_dirs)
-            app_logger.info("已成功双保险沉淀自定义独立应用目录: %s", norm_d)
+            # 读取现有并更新
+            raw_cfg_dirs = list(app_config.get("custom_app_dirs", default=[]))
+            cfg_entries = []
+            found = False
+            for item in raw_cfg_dirs:
+                if isinstance(item, dict):
+                    p = os.path.normpath(str(item.get("path", "")).strip())
+                    n = str(item.get("name", "")).strip() or os.path.basename(p)
+                else:
+                    p = os.path.normpath(str(item).strip())
+                    n = os.path.basename(p)
+                if p and p != ".":
+                    if os.path.normcase(p) == low_d:
+                        cfg_entries.append({"path": norm_d, "name": clean_name})
+                        found = True
+                    else:
+                        cfg_entries.append({"path": p, "name": n})
+
+            if not found:
+                cfg_entries.append({"path": norm_d, "name": clean_name})
+
+            app_config.set("custom_app_dirs", cfg_entries, level="global")
+            RegistryAppDetector.set_custom_apps(cfg_entries)
+            app_logger.info("已成功双保险沉淀自定义独立应用目录: %s (名称: %s)", norm_d, clean_name)
         except Exception as e:
             app_logger.error("沉淀自定义集合规则失败: %s", e)

@@ -226,15 +226,51 @@ class FileTableModel(QAbstractTableModel):
         self.checked_bytes = new_checked_bytes
         self.endResetModel()
 
-    def select_recommended_only(self):
+    def select_recommended_only(self, ai_plan: Optional[List[Dict[str, Any]]] = None) -> int:
+        """
+        根据 AI 执行清单及本地启发式标记勾选推荐资产：
+        1. 优先以 AI 创作清单 (ai_plan) 为核心凭据，匹配 safe actions (归档/清理/迁移) 且非高风险项；
+        2. 结合底层已有 is_recommended == True, is_duplicate_copy == True 等安全项；
+        返回选中的资产数量。
+        """
+        ai_safe_paths = set()
+        if ai_plan:
+            for it in ai_plan:
+                p = it.get("original_path") or it.get("path") or it.get("source_path")
+                if not p:
+                    continue
+                risk = str(it.get("risk_level", "低风险"))
+                act = str(it.get("action", ""))
+                is_safe_action = any(k in act.lower() for k in ["归档", "清理", "迁移", "archive", "clean", "delete", "move", "reclaim"])
+                if "高" not in risk and (is_safe_action or not act):
+                    ai_safe_paths.add(os.path.normcase(os.path.normpath(str(p).strip())))
+
         self.beginResetModel()
         self.checked_paths.clear()
         self.checked_bytes = 0
         for item in self._data:
-            if item.get("is_recommended", False):
-                self.checked_paths.add(item.get("path", ""))
+            p = item.get("path", "")
+            if not p:
+                continue
+            norm_p = os.path.normcase(os.path.normpath(str(p).strip()))
+
+            is_rec = False
+            if norm_p in ai_safe_paths:
+                is_rec = True
+            elif item.get("is_recommended", False):
+                is_rec = True
+            elif item.get("is_duplicate_copy", False):
+                is_rec = True
+            elif str(item.get("phase_status", "")).startswith("AI智脑已决策") and "高" not in str(item.get("risk_level", "")):
+                is_rec = True
+
+            if is_rec:
+                item["is_recommended"] = True
+                self.checked_paths.add(p)
                 self.checked_bytes += int(item.get("size", 0))
+
         self.endResetModel()
+        return len(self.checked_paths)
 
     def select_ai_recommended_paths(self, ai_paths: List[str]):
         path_set = {os.path.normpath(p).lower() for p in ai_paths}
@@ -457,15 +493,25 @@ class FileDataGridWidget(QWidget):
 
     def select_all(self, checked: bool = True):
         self.source_model.select_all(checked)
+        self._update_stats_label()
+        self._emit_selection_stats()
 
     def invert_selection(self):
         self.source_model.invert_selection()
+        self._update_stats_label()
+        self._emit_selection_stats()
 
-    def select_recommended_only(self):
-        self.source_model.select_recommended_only()
+    def select_recommended_only(self, ai_plan: Optional[List[Dict[str, Any]]] = None) -> int:
+        count = self.source_model.select_recommended_only(ai_plan=ai_plan)
+        self._update_stats_label()
+        self._emit_selection_stats()
+        return count
 
-    def select_ai_recommended_paths(self, ai_paths: List[str]):
-        self.source_model.select_ai_recommended_paths(ai_paths)
+    def select_ai_recommended_paths(self, ai_paths: List[str]) -> int:
+        count = self.source_model.select_ai_recommended_paths(ai_paths)
+        self._update_stats_label()
+        self._emit_selection_stats()
+        return count
 
     def apply_ai_execution_plan(self, execution_items: List[Dict[str, Any]]) -> int:
         count = self.source_model.apply_ai_execution_plan(execution_items)
