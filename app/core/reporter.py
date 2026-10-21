@@ -24,12 +24,13 @@ class ReportExporter:
 
             if use_ai and api_key and base_url:
                 app_logger.info(f"正在调用 AI 大模型 ({model}) 生成深度分析报告...")
-                report_md = AIService.generate_health_report_with_ai(
+                ai_resp = AIService.generate_health_report_with_ai(
                     base_url=base_url,
                     api_key=api_key,
                     model=model,
                     scan_summary=scan_result
                 )
+                report_md = ai_resp.final_text if hasattr(ai_resp, "final_text") else str(ai_resp)
             else:
                 report_md = AIService._generate_fallback_report(scan_result)
 

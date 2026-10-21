@@ -176,12 +176,13 @@ def test_r3_singleton_http_session_and_micro_contract_constraints():
             "json": json,
             "timeout": timeout
         })
+        import json as _json_mod
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "choices": [{
                 "message": {
-                    "content": json.dumps({"valid": True, "snapped_category": "DevOps Tools / Monitor", "rule_pattern": "test_app", "subpath": "DevOps_Tools/Monitor"})
+                    "content": _json_mod.dumps({"valid": True, "snapped_category": "DevOps Tools / Monitor", "rule_pattern": "test_app", "subpath": "DevOps_Tools/Monitor"})
                 }
             }]
         }

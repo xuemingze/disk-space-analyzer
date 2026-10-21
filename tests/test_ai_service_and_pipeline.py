@@ -74,3 +74,44 @@ def test_process_report_validation_rejects_missing_fields(tmp_path):
         })
         with pytest.raises(RuntimeError, match="缺失必要的路径"):
             AIService.process_report_with_ai("http://dummy", "key", "model", str(report_file), "D:/dest")
+
+
+def test_generate_health_report_timeout_graceful_degradation():
+    """
+    准则一核心编排架构契约测试：
+    验证在线大模型请求超时 (如 300s) 时，系统必须 100% 优雅降级至本地智能专家治理报告，
+    严禁向前端抛出阻断性崩溃异常，且执行清单与全景结构化数据必须完整输出。
+    """
+    summary = {
+        "total_files": 500,
+        "total_bytes": 1024 * 1024 * 100,
+        "redundant_files": [
+            {"path": f"D:/test/file_{i}.zip", "name": f"file_{i}.zip", "size": 1024 * 1024, "category": "归档包"}
+            for i in range(20)
+        ],
+        "category_stats": {"归档包": {"bytes": 1024 * 1024 * 20, "percent": 20.0}},
+        "top_100_files": [],
+        "duplicate_groups_count": 2,
+        "duplicate_wasted_bytes": 1024 * 1024 * 5,
+        "reclaimable_bytes": 1024 * 1024 * 20,
+        "target_paths": ["D:/test"]
+    }
+
+    with patch.object(AIService, "_execute_with_retry", return_value=(False, {"error": "读取响应超时 (耗时 > 300.38s)"})):
+        resp = AIService.generate_health_report_with_ai(
+            base_url="https://api.minimaxi.com/v1",
+            api_key="mock_key",
+            model="MiniMax-Text-01",
+            scan_summary=summary
+        )
+        assert resp is not None
+        assert resp.parse_status == "SUCCESS"
+        assert "已平稳降级至本地智能专家规则" in resp.model
+        assert "在线模型降级提示" in resp.final_text
+        assert resp.structured_data is not None
+        assert "execution_plan" in resp.structured_data
+        assert len(resp.structured_data["execution_plan"]) > 0
+        first_item = resp.structured_data["execution_plan"][0]
+        assert "original_path" in first_item
+        assert "suggested_category" in first_item
+

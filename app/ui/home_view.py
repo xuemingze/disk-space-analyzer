@@ -1314,6 +1314,27 @@ class HomeView(QWidget):
         if getattr(self, "ai_task_id", None):
             global_task_manager.set_task_status(self.ai_task_id, TaskStatus.FAILED, str(err))
             self.ai_task_id = None
+        if self.current_scan_result and err != "已手动停止任务":
+            try:
+                fallback_md = AIService._generate_fallback_report(self.current_scan_result)
+                notice = f"> ⚠️ **在线模型降级提示**：调用在线大模型遇到异常（`{err}`），系统已自动无缝切换至本地专家治理报告。\n\n"
+                full_md = notice + fallback_md
+                self.report_text_edit.setPlainText(full_md)
+                exec_plan = AIService.parse_markdown_table_to_execution_plan(fallback_md) or AIService._generate_fallback_execution_plan(self.current_scan_result)
+                if exec_plan:
+                    self.current_scan_result["ai_execution_plan"] = exec_plan
+                    self.global_detail_table.apply_ai_execution_plan(exec_plan)
+                    self.duplicate_table.apply_ai_execution_plan(exec_plan)
+                    self.releasable_table.apply_ai_execution_plan(exec_plan)
+                    self.top100_table.apply_ai_execution_plan(exec_plan)
+                report_idx = self.tabs.indexOf(self.report_widget)
+                if report_idx >= 0:
+                    self.tabs.setTabText(report_idx, "📑 AI 深度分析报告预览 (降级版)")
+                    self.tabs.setCurrentIndex(report_idx)
+                return
+            except Exception as ex:
+                app_logger.error(f"本地专家兜底降级异常: {ex}")
+
         self.report_text_edit.setPlainText(f"❌ 请求失败或响应解析失败\n\n调用大模型失败: {err}\n\n请检查网络连接或 API Key 设置，并点击上方“重新生成 AI 深度分析报告”重试。")
 
     def execute_archive_selected_async(self):

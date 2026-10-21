@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -784,6 +785,12 @@ class AIService:
         # 允许调用方覆盖超时设置
         if "timeout" not in kwargs:
             kwargs["timeout"] = (conn_timeout, read_timeout)
+        else:
+            t = kwargs["timeout"]
+            if isinstance(t, tuple) and len(t) == 2:
+                conn_timeout, read_timeout = t
+            elif isinstance(t, (int, float)):
+                read_timeout = t
         
         task_id = str(uuid.uuid4())[:8]
         model_name = kwargs.get('json', {}).get('model', 'N/A')
@@ -1760,9 +1767,35 @@ class AIService:
             "6. 【核心执行清单】：必须输出一个 Markdown 表格，列出推荐处理的资产单元，表头必须包含：资产名称、治理形态、资产大小、类别、路径摘要、原始绝对路径、风险等级、建议操作(如归档/清理/保留)、分析建议。"
         )
 
-        redundant_samples = scan_summary.get("redundant_files", [])
-        if len(redundant_samples) > 100:
-            redundant_samples = [f for f in redundant_samples if f.get("is_recommended")] or redundant_samples[:100]
+        # 1. 冗余样本极简特征提炼与 0-Token 碎文件阻断 (Prompt 瘦身 80%+)
+        raw_redundant = scan_summary.get("redundant_files", [])
+        cleaned_redundant = []
+        if raw_redundant:
+            # 严格筛选前 25 项最具治理价值的高权重资产（实体集体、大压缩包、核心单据）
+            high_val = cls.filter_high_value_assets_for_ai(raw_redundant, max_items=25)
+            for it in high_val:
+                is_c = bool(it.get("is_directory_collective") or it.get("is_collective"))
+                cleaned_redundant.append({
+                    "name": it.get("name", ""),
+                    "path": it.get("path", ""),
+                    "size_mb": round(it.get("size", 0) / (1024 * 1024), 2),
+                    "category": it.get("category", "未分类"),
+                    "morphology": "原子实体集体" if is_c else "独立单项",
+                    "file_count": it.get("file_count", 1) if is_c else 1,
+                    "reason": str(it.get("reason", ""))[:30]
+                })
+
+        # 2. Top 10 大文件同样瘦身
+        cleaned_top10 = []
+        for tf in scan_summary.get("top_100_files", [])[:10]:
+            is_c = bool(tf.get("is_directory_collective") or tf.get("is_collective"))
+            cleaned_top10.append({
+                "name": tf.get("name", ""),
+                "path": tf.get("path", ""),
+                "size_mb": round(tf.get("size", 0) / (1024 * 1024), 2),
+                "morphology": "原子实体集体" if is_c else "独立单项",
+                "file_count": tf.get("file_count", 1) if is_c else 1
+            })
 
         c_cnt = scan_summary.get("collective_count", 0)
         s_cnt = scan_summary.get("standalone_file_count", 0)
@@ -1773,8 +1806,8 @@ class AIService:
             "total_assets_count": c_cnt + s_cnt,
             "total_bytes": scan_summary.get("total_bytes"),
             "category_stats": scan_summary.get("category_stats"),
-            "top_10_large_files": scan_summary.get("top_100_files", [])[:10],
-            "redundant_files": redundant_samples,
+            "top_10_large_files": cleaned_top10,
+            "redundant_files": cleaned_redundant,
             "duplicate_groups_count": scan_summary.get("duplicate_groups_count"),
             "duplicate_wasted_bytes": scan_summary.get("duplicate_wasted_bytes"),
             "reclaimable_bytes": scan_summary.get("reclaimable_bytes"),
@@ -1839,13 +1872,48 @@ class AIService:
             
         if progress_callback:
             progress_callback("AI_ANALYZING: 正在发送数据与大模型进行分析...")
-        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="生成报告", validator=validator)
+
+        # 动态超时控制 (连接 10s，读取 100s，最多重试 1 次，防长达 15 分钟无意义空等)
+        req_kwargs = {
+            "headers": headers,
+            "json": payload,
+            "timeout": (10, 100)
+        }
+        success, result = cls._execute_with_retry("post", endpoint, req_kwargs, max_retries=1, task_desc="生成报告", validator=validator)
         if progress_callback:
             progress_callback("AI_REPORT_SAVING: 正在校验与保存结构化报告...")
+
         if not success:
-            err_msg = result.get('error')
-            app_logger.error(f"AI 生成报告失败: {err_msg}")
-            raise RuntimeError(f"AI 生成报告失败: {err_msg}")
+            err_msg = result.get('error') or "在线请求超时或异常"
+            app_logger.warning("AI 在线生成报告异常 (%s)，触发准则一契约无缝降级至本地智能专家治理报告", err_msg)
+            fallback_md = cls._generate_fallback_report(scan_summary)
+            # 在报告头部附加轻量友好的降级通知
+            header_notice = (
+                f"> ⚠️ **在线模型降级提示**：在线调用大模型未在预期时间内完成（`{err_msg}`），"
+                "系统已基于准则一契约自动无缝切换至**本地智能专家离线分析引擎**为您生成以下全景报告与推荐清单。\n\n"
+            )
+            full_md = header_notice + fallback_md
+            exec_plan = cls.parse_markdown_table_to_execution_plan(fallback_md)
+            if not exec_plan:
+                exec_plan = cls._generate_fallback_execution_plan(scan_summary)
+
+            ai_resp = AIResponse(
+                task_id=f"FALLBACK_{int(time.time()*100)}",
+                model=f"{model} (已平稳降级至本地智能专家规则)",
+                parse_status="SUCCESS",
+                final_text=full_md,
+                structured_data={
+                    "markdown_report": full_md,
+                    "execution_plan": exec_plan,
+                    "chart_categories": [
+                        {"category": cat, "bytes": data.get("bytes", 0), "percent": data.get("percent", 0.0)}
+                        for cat, data in scan_summary.get("category_stats", {}).items()
+                        if isinstance(data, dict)
+                    ]
+                },
+                report_id=f"REP_FALLBACK_{int(time.time()*100)}"
+            )
+            return ai_resp
             
         ai_resp = result.get("parsed_data")
         if ai_resp is None and "data" in result:
@@ -1951,7 +2019,83 @@ class AIService:
             "",
             "1. **以原子实体集体为最小单位进行归档迁移**：针对独立软件目录、开发工程代码、Live2D虚拟角色及业务账套，必须保持整盘原子保全，严禁拆散内部关联文件。",
             "2. **及时处置冗余归档包与安装程序**：针对同目录下已解压的 zip 冗余压缩包及已完成部署的 setup 安装程序，建议确认后迁移至独立备份盘或直接释放。",
-            "3. **优先处理重复副本与临时文件**：针对清单中已哈希确认的重复副本及临时缓存目录进行安全清理，实现无损空间释放。"
+            "3. **优先处理重复副本与临时文件**：针对清单中已哈希确认的重复副本及临时缓存目录进行安全清理，实现无损空间释放。",
+            "",
+            "## 六、 核心执行清单 (本地智能专家研判)",
+            "",
+            "| 资产名称 | 治理形态 | 资产大小 | 类别 | 路径摘要 | 原始绝对路径 | 风险等级 | 建议操作 | 分析建议 |",
+            "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
         ])
 
+        redundant_items = summary.get("redundant_files", [])[:30]
+        if redundant_items:
+            for item in redundant_items:
+                p = item.get("path") or item.get("original_path", "")
+                if not p:
+                    continue
+                name = item.get("name") or Path(p).name
+                is_c = bool(item.get("is_directory_collective") or item.get("is_collective"))
+                morph = "📦 原子实体集体" if is_c else "📄 独立单项"
+                sz = format_size(item.get("size", 0))
+                cat = item.get("category", "冗余推荐")
+                p_summary = Path(p).parent.name if Path(p).parent else ""
+                risk = item.get("risk_level", "低风险")
+                act = "清理" if item.get("is_duplicate_copy") else "归档"
+                reason = str(item.get("reason", "专家离线引擎研判推荐"))[:25]
+                lines.append(f"| `{name}` | {morph} | {sz} | {cat} | `{p_summary}` | `{p}` | {risk} | {act} | {reason} |")
+        else:
+            lines.append("| - | *当前无明确冗余推荐资产* | - | - | - | - | - | - | - |")
+
         return "\n".join(lines)
+
+    @classmethod
+    def _generate_fallback_execution_plan(cls, summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        基于扫描统计与冗余列表，由本地智能专家引擎自动构建标准 execution_plan 结构化清单。
+        在网络中断或在线大模型超时降级时，为表格联动和一键归档提供 100% 契约保障。
+        """
+        plan = []
+        seen_paths = set()
+
+        raw_items = list(summary.get("redundant_files", []) or [])
+        if len(raw_items) < 10:
+            for tf in summary.get("top_100_files", []):
+                p = tf.get("path") or tf.get("original_path", "")
+                if p and p not in seen_paths:
+                    raw_items.append(tf)
+
+        for item in raw_items:
+            orig_p = item.get("path") or item.get("original_path", "")
+            if not orig_p or orig_p in seen_paths:
+                continue
+            seen_paths.add(orig_p)
+
+            p_obj = Path(orig_p)
+            is_c = bool(item.get("is_directory_collective") or item.get("is_collective"))
+            c_info = item.get("collective_info") or {}
+            app_name = c_info.get("software_name") or item.get("app_name") or p_obj.stem
+            cat = item.get("category") or "冗余数据"
+            subpath = f"{cat}/{app_name}" if is_c else cat
+
+            action = "清理" if item.get("is_duplicate_copy") else "归档"
+            risk = item.get("risk_level", "低风险")
+            reason = str(item.get("reason") or "本地智能专家引擎研判推荐")
+
+            plan.append({
+                "original_path": orig_p,
+                "name": item.get("name") or p_obj.name,
+                "size": int(item.get("size", 0)),
+                "suggested_category": cat,
+                "app_name": app_name,
+                "target_subpath": subpath,
+                "action": action,
+                "risk_level": risk,
+                "confidence": 0.95,
+                "rationale": reason,
+                "is_directory_collective": is_c
+            })
+            if len(plan) >= 50:
+                break
+
+        return plan
+
