@@ -97,6 +97,8 @@ class HomeView(QWidget):
     """
     主控扫描与分阶段全景呈现页面 (Home)
     """
+    navigate_to_organizer = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_scan_result: Optional[Dict[str, Any]] = None
@@ -349,6 +351,64 @@ class HomeView(QWidget):
         report_splitter.setStretchFactor(1, 1)
 
         report_layout.addLayout(report_top_bar)
+        # 决策卡片 (当独立资产 > 100 项时或 AI 异常时呈现，由用户决定，不因超时直接越权)
+        self.ai_decision_banner = QFrame()
+        self.ai_decision_banner.setObjectName("AIDecisionBanner")
+        self.ai_decision_banner.setStyleSheet("""
+            QFrame#AIDecisionBanner {
+                background-color: #1E293B;
+                border: 1px solid #F59E0B;
+                border-radius: 8px;
+            }
+        """)
+        decision_layout = QHBoxLayout(self.ai_decision_banner)
+        decision_layout.setContentsMargins(12, 10, 12, 10)
+        decision_layout.setSpacing(12)
+
+        decision_icon_label = QLabel("⚠️")
+        decision_icon_label.setStyleSheet("font-size: 24px;")
+        decision_layout.addWidget(decision_icon_label)
+
+        decision_text_layout = QVBoxLayout()
+        decision_text_layout.setSpacing(3)
+        self.decision_title_lbl = QLabel("扫描独立资产数量为 0 项 (80% 可能性为集合判断错误)")
+        self.decision_title_lbl.setStyleSheet("font-size: 13px; font-weight: bold; color: #FBBF24;")
+        self.decision_sub_lbl = QLabel("检测到大量独立散落资产，建议前往文件整理进行应用/工程级收拢聚合；亦可由您自主决定强制执行 AI 全景总结。")
+        self.decision_sub_lbl.setStyleSheet("font-size: 11px; color: #94A3B8;")
+        decision_text_layout.addWidget(self.decision_title_lbl)
+        decision_text_layout.addWidget(self.decision_sub_lbl)
+        decision_layout.addLayout(decision_text_layout, 1)
+
+        # 选项1: 运行文件整理 (跳转至文件整理页面)
+        self.btn_decision_organize = QPushButton("📁 运行文件整理 (推荐)")
+        self.btn_decision_organize.setProperty("class", "SuccessButton")
+        self.btn_decision_organize.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
+        self.btn_decision_organize.clicked.connect(self.navigate_to_organizer_page)
+        decision_layout.addWidget(self.btn_decision_organize)
+
+        # 选项2: 强制 AI 总结
+        self.btn_decision_force_ai = QPushButton("⚡ 强制 AI 总结")
+        self.btn_decision_force_ai.setProperty("class", "PrimaryButton")
+        self.btn_decision_force_ai.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
+        self.btn_decision_force_ai.clicked.connect(lambda: self.generate_ai_report(force=True))
+        decision_layout.addWidget(self.btn_decision_force_ai)
+
+        # 选项3: 重试 AI 总结 (异常时显示)
+        self.btn_decision_retry_ai = QPushButton("🔄 重试 AI 总结")
+        self.btn_decision_retry_ai.setStyleSheet("background-color: #3B82F6; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
+        self.btn_decision_retry_ai.clicked.connect(lambda: self.generate_ai_report(force=True))
+        decision_layout.addWidget(self.btn_decision_retry_ai)
+        self.btn_decision_retry_ai.hide()
+
+        # 选项4: 载入本地专家应急报告 (异常时由用户决定是否载入，绝不自动越权)
+        self.btn_decision_load_fallback = QPushButton("📑 载入本地专家应急报告")
+        self.btn_decision_load_fallback.setStyleSheet("background-color: #64748B; color: white; font-weight: bold; padding: 6px 14px; border-radius: 6px;")
+        self.btn_decision_load_fallback.clicked.connect(self.load_local_expert_fallback)
+        decision_layout.addWidget(self.btn_decision_load_fallback)
+        self.btn_decision_load_fallback.hide()
+
+        self.ai_decision_banner.hide()
+        report_layout.addWidget(self.ai_decision_banner)
         report_layout.addWidget(report_splitter)
         self.tabs.addTab(report_widget, "📑 AI 深度分析报告预览")
         
@@ -868,9 +928,37 @@ class HomeView(QWidget):
         elif all_files:
             self.tabs.setCurrentIndex(1)
 
-        # 自动触发 AI 分析
-        self.report_text_edit.setPlainText("⏳ 等待分析: 正在准备后台分析任务...")
-        self.generate_ai_report(auto_triggered=True)
+        # 准则一架构：AI 为核心编排器，本地的抛出必须要缩紧、精准
+        # 扫描目录后独立资产如果超过 100，80% 可能性是集合判断错误，由用户决定运行文件整理或强制 AI 总结，绝不因超时直接越权
+        standalone_count = s_cnt if (s_cnt > 0 or c_cnt > 0) else total_phys
+        if standalone_count > 100:
+            report_idx = self.tabs.indexOf(self.report_widget)
+            if report_idx >= 0:
+                self.tabs.setTabText(report_idx, f"📑 AI 深度分析报告 (待决策: {standalone_count} 独立资产)")
+                self.tabs.setCurrentIndex(report_idx)
+
+            self.decision_title_lbl.setText(f"扫描独立资产数量为 {standalone_count} 项 (80% 可能性为集合判断错误)")
+            self.decision_sub_lbl.setText("当前目录下存在超过 100 项散落独立资产，极可能存在未聚合的目录集体或未整理工具链。请由您决定下一步治理路径：")
+            self.btn_decision_organize.setVisible(True)
+            self.btn_decision_force_ai.setVisible(True)
+            self.btn_decision_retry_ai.setVisible(False)
+            self.btn_decision_load_fallback.setVisible(False)
+            self.ai_decision_banner.show()
+
+            decision_md = (
+                f"# ⚠️ 扫描独立资产数量为 {standalone_count} 项\n\n"
+                f"> **架构诊断提示**：当前目录扫描识别出 `{standalone_count}` 项离散独立资产（阈值 > 100 项）。"
+                f"根据存储治理规律，**有 80% 可能性是集合判断错误**（如应用工程、业务单据、虚拟机/模型角色或散落工具链未收拢为原子实体集体）。\n\n"
+                f"### 🎯 请选择治理路径（严格遵从 AI 为核心，由您自主决定，绝不越权）：\n\n"
+                f"1. **【📁 运行文件整理】（推荐）**：前往文件整理模块，按应用工具链、工程、前缀或业务类型进行目录级收拢聚合，从根源上消除文件散落；\n"
+                f"2. **【⚡ 强制 AI 总结】**：跳过集合收拢建议，直接启动 AI 核心编排器对当前扫描样本进行全景深度分析与执行清单生成。\n\n"
+                f"*请点击上方横幅按钮执行相应操作。*"
+            )
+            self.report_text_edit.setPlainText(decision_md)
+        else:
+            self.ai_decision_banner.hide()
+            self.report_text_edit.setPlainText("⏳ 等待分析: 正在准备后台分析任务...")
+            self.generate_ai_report(auto_triggered=True)
 
         msg = (
             f"空间全景深度扫描已全部完成！\n"
@@ -1222,11 +1310,18 @@ class HomeView(QWidget):
         self.ai_worker.failed.connect(on_process_failed)
         self.ai_worker.start()
 
-    def generate_ai_report(self, auto_triggered=False):
+    def generate_ai_report(self, auto_triggered=False, force=False):
         if not self.current_scan_result:
             if not auto_triggered:
                 QMessageBox.warning(self, "提示", "请先执行扫描！")
             return
+
+        # 隐藏决策横幅并更新标签页状态
+        self.ai_decision_banner.hide()
+        report_idx = self.tabs.indexOf(self.report_widget)
+        if report_idx >= 0:
+            self.tabs.setTabText(report_idx, "📑 AI 深度分析报告预览 (分析中...)")
+            self.tabs.setCurrentIndex(report_idx)
 
         # Check AI config
         llm_cfg = app_config.get("llm", default={})
@@ -1238,14 +1333,14 @@ class HomeView(QWidget):
         self.pause_ai_report_btn.setEnabled(True)
         self.pause_ai_report_btn.setText("⏸️ 暂停")
         self.stop_ai_report_btn.setEnabled(True)
-        
-        self.report_text_edit.setPlainText("🤖 分析中: 正在调用大模型生成全景深度分析与治理报告，请稍候...")
-        
-                # 建立 5 类核心资产前置过滤管道，小碎片 0 Token 阻断
+
+        self.report_text_edit.setPlainText("🤖 分析中: 正在调用 AI 核心编排器生成全景深度分析与治理报告，请稍候...")
+
+        # 本地抛出缩紧精准：建立 5 类核心高价值资产前置过滤管道 (max 25 项，碎文件 0-Token 阻断)
         scan_copy = dict(self.current_scan_result)
         raw_redundant = scan_copy.get("redundant_files", [])
         if raw_redundant:
-            scan_copy["redundant_files"] = AIService.filter_high_value_assets_for_ai(raw_redundant, max_items=60)
+            scan_copy["redundant_files"] = AIService.filter_high_value_assets_for_ai(raw_redundant, max_items=25)
         self.ai_worker = AIWorker("report", scan_copy)
         self.ai_task_id = global_task_manager.create_task("生成深度分析报告", TaskType.AI_ANALYSIS, self.ai_worker).task_id
         self.ai_worker.report_done.connect(self.on_ai_report_done)
@@ -1314,28 +1409,89 @@ class HomeView(QWidget):
         if getattr(self, "ai_task_id", None):
             global_task_manager.set_task_status(self.ai_task_id, TaskStatus.FAILED, str(err))
             self.ai_task_id = None
-        if self.current_scan_result and err != "已手动停止任务":
-            try:
-                fallback_md = AIService._generate_fallback_report(self.current_scan_result)
-                notice = f"> ⚠️ **在线模型降级提示**：调用在线大模型遇到异常（`{err}`），系统已自动无缝切换至本地专家治理报告。\n\n"
-                full_md = notice + fallback_md
-                self.report_text_edit.setPlainText(full_md)
-                exec_plan = AIService.parse_markdown_table_to_execution_plan(fallback_md) or AIService._generate_fallback_execution_plan(self.current_scan_result)
-                if exec_plan:
-                    self.current_scan_result["ai_execution_plan"] = exec_plan
-                    self.global_detail_table.apply_ai_execution_plan(exec_plan)
-                    self.duplicate_table.apply_ai_execution_plan(exec_plan)
-                    self.releasable_table.apply_ai_execution_plan(exec_plan)
-                    self.top100_table.apply_ai_execution_plan(exec_plan)
-                report_idx = self.tabs.indexOf(self.report_widget)
-                if report_idx >= 0:
-                    self.tabs.setTabText(report_idx, "📑 AI 深度分析报告预览 (降级版)")
-                    self.tabs.setCurrentIndex(report_idx)
-                return
-            except Exception as ex:
-                app_logger.error(f"本地专家兜底降级异常: {ex}")
 
-        self.report_text_edit.setPlainText(f"❌ 请求失败或响应解析失败\n\n调用大模型失败: {err}\n\n请检查网络连接或 API Key 设置，并点击上方“重新生成 AI 深度分析报告”重试。")
+        if err == "已手动停止任务":
+            self.report_text_edit.setPlainText("⏹️ 已手动停止 AI 生成任务。")
+            self.ai_decision_banner.hide()
+            return
+
+        # 恪守 AI 核心编排架构：不因超时直接越权，向用户呈现决策选项由用户定夺
+        self.decision_title_lbl.setText("AI 深度分析报告请求超时或异常")
+        self.decision_sub_lbl.setText(f"原因: {err}。系统恪守 AI 为核心编排架构，绝不自作主张以本地离线兜底越权替代 AI 输出。")
+        self.btn_decision_organize.setVisible(True)
+        self.btn_decision_force_ai.setVisible(False)
+        self.btn_decision_retry_ai.setVisible(True)
+        self.btn_decision_load_fallback.setVisible(True)
+        self.ai_decision_banner.show()
+
+        report_idx = self.tabs.indexOf(self.report_widget)
+        if report_idx >= 0:
+            self.tabs.setTabText(report_idx, "📑 AI 深度分析报告 (调用未完成)")
+            self.tabs.setCurrentIndex(report_idx)
+
+        err_md = (
+            f"# ⚠️ AI 大模型深度分析调用未完成\n\n"
+            f"> **异常详情**：`{err}`\n\n"
+            f"**架构契约保障**：本系统严格恪守 **「AI 为核心编排器架构」** 原则，**严禁在超时或异常时直接越权**使用离线规则静默覆盖。\n\n"
+            f"### 🛠️ 请由您决定后续治理路径：\n\n"
+            f"1. **【🔄 重试 AI 总结】**：网络抖动或大模型排队可能导致偶发超时，点击可重新向大模型发起深度分析；\n"
+            f"2. **【📑 载入本地专家应急报告】**：若当前无可用网络或模型服务暂不可用，可由您明确授权临时载入本地专家引擎分析；\n"
+            f"3. **【📁 运行文件整理】**：若散落资产过多，可先前往整理页面收拢聚合后再行分析。\n\n"
+            f"*请点击上方横幅按钮执行相应操作。*"
+        )
+        self.report_text_edit.setPlainText(err_md)
+
+    def load_local_expert_fallback(self):
+        """由用户明确授权载入本地专家应急报告，绝不自作主张越权替代"""
+        if not self.current_scan_result:
+            return
+        try:
+            fallback_md = AIService._generate_fallback_report(self.current_scan_result)
+            notice = (
+                "> 💡 **用户授权提示**：已根据您的选择，载入**本地智能专家离线分析引擎**生成的数据全景报告与推荐清单。\n"
+                "> （注：本报告由本地专家引擎根据启发式规则生成，AI 核心模型未参与本次推演）。\n\n"
+            )
+            full_md = notice + fallback_md
+            self.report_text_edit.setPlainText(full_md)
+            exec_plan = AIService.parse_markdown_table_to_execution_plan(fallback_md) or AIService._generate_fallback_execution_plan(self.current_scan_result)
+            if exec_plan:
+                self.current_scan_result["ai_execution_plan"] = exec_plan
+                self.global_detail_table.apply_ai_execution_plan(exec_plan)
+                self.duplicate_table.apply_ai_execution_plan(exec_plan)
+                self.releasable_table.apply_ai_execution_plan(exec_plan)
+                self.top100_table.apply_ai_execution_plan(exec_plan)
+            self.ai_decision_banner.hide()
+            report_idx = self.tabs.indexOf(self.report_widget)
+            if report_idx >= 0:
+                self.tabs.setTabText(report_idx, "📑 AI 深度分析报告预览 (本地专家已载入)")
+                self.tabs.setCurrentIndex(report_idx)
+        except Exception as ex:
+            app_logger.error(f"载入本地专家应急报告失败: {ex}")
+            QMessageBox.warning(self, "错误", f"载入本地应急报告失败: {ex}")
+
+    def navigate_to_organizer_page(self):
+        """跳转至文件整理页面，复用现有 OrganizerView，切忌重写脚本"""
+        target_dir = ""
+        if self.current_scan_result and self.current_scan_result.get("target_paths"):
+            paths = self.current_scan_result.get("target_paths", [])
+            if paths:
+                target_dir = paths[0]
+        if not target_dir:
+            targets = self.get_selected_targets()
+            if targets:
+                target_dir = targets[0]
+
+        self.navigate_to_organizer.emit(target_dir)
+
+        # 遍历父级寻找 switch_view 兜底
+        p = self.parent()
+        while p:
+            if hasattr(p, "switch_view"):
+                if hasattr(p, "organizer_view") and target_dir and os.path.exists(target_dir):
+                    p.organizer_view.dir_input.setText(target_dir)
+                p.switch_view(1)
+                break
+            p = p.parent()
 
     def execute_archive_selected_async(self):
         """一键快速归档 (完全在后台 Worker 中执行，杜绝主线程卡死)"""

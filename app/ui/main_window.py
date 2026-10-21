@@ -185,7 +185,17 @@ class MainWindow(QMainWindow):
         self.stacked_widget.addWidget(self.app_manager_view) # 4
         self.stacked_widget.addWidget(self.settings_view)    # 5
 
+        # 连接 HomeView 的导航跳转请求 (切忌重写脚本，无缝路由至既有 OrganizerView)
+        self.home_view.navigate_to_organizer.connect(self.navigate_to_organizer_with_path)
+
         main_layout.addWidget(self.stacked_widget, 1)
+
+    def navigate_to_organizer_with_path(self, target_path: str = ""):
+        """从主控扫描直接无缝路由跳转至文件整理页，并同步目标路径"""
+        import os
+        if target_path and os.path.exists(target_path):
+            self.organizer_view.dir_input.setText(target_path)
+        self.switch_view(1)
 
     def _on_automation_clicked(self):
         """点击自动化中心主按钮：切换视图并折叠/展开子菜单"""

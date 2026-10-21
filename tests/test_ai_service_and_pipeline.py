@@ -98,15 +98,27 @@ def test_generate_health_report_timeout_graceful_degradation():
     }
 
     with patch.object(AIService, "_execute_with_retry", return_value=(False, {"error": "读取响应超时 (耗时 > 300.38s)"})):
+        # 1. 默认准则一契约：严禁越权替代 AI，抛出异常交由前端用户界面呈现选项由用户定夺
+        with pytest.raises(RuntimeError, match="读取响应超时"):
+            AIService.generate_health_report_with_ai(
+                base_url="https://api.minimaxi.com/v1",
+                api_key="mock_key",
+                model="MiniMax-Text-01",
+                scan_summary=summary,
+                allow_fallback=False
+            )
+
+        # 2. 授权兜底模式：生成本地智能专家应急治理报告
         resp = AIService.generate_health_report_with_ai(
             base_url="https://api.minimaxi.com/v1",
             api_key="mock_key",
             model="MiniMax-Text-01",
-            scan_summary=summary
+            scan_summary=summary,
+            allow_fallback=True
         )
         assert resp is not None
         assert resp.parse_status == "SUCCESS"
-        assert "已平稳降级至本地智能专家规则" in resp.model
+        assert "已降级至本地智能专家规则" in resp.model
         assert "在线模型降级提示" in resp.final_text
         assert resp.structured_data is not None
         assert "execution_plan" in resp.structured_data

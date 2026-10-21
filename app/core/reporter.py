@@ -28,7 +28,8 @@ class ReportExporter:
                     base_url=base_url,
                     api_key=api_key,
                     model=model,
-                    scan_summary=scan_result
+                    scan_summary=scan_result,
+                    allow_fallback=True
                 )
                 report_md = ai_resp.final_text if hasattr(ai_resp, "final_text") else str(ai_resp)
             else:

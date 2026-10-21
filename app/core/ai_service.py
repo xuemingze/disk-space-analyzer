@@ -1719,7 +1719,8 @@ class AIService:
         api_key: str,
         model: str,
         scan_summary: Dict[str, Any],
-        progress_callback=None
+        progress_callback=None,
+        allow_fallback: bool = False
     ) -> AIResponse:
         if not (api_key and base_url and model):
             raise ValueError("AI 模型未配置：缺少 base_url、api_key 或 model。")
@@ -1885,35 +1886,38 @@ class AIService:
 
         if not success:
             err_msg = result.get('error') or "在线请求超时或异常"
-            app_logger.warning("AI 在线生成报告异常 (%s)，触发准则一契约无缝降级至本地智能专家治理报告", err_msg)
-            fallback_md = cls._generate_fallback_report(scan_summary)
-            # 在报告头部附加轻量友好的降级通知
-            header_notice = (
-                f"> ⚠️ **在线模型降级提示**：在线调用大模型未在预期时间内完成（`{err_msg}`），"
-                "系统已基于准则一契约自动无缝切换至**本地智能专家离线分析引擎**为您生成以下全景报告与推荐清单。\n\n"
-            )
-            full_md = header_notice + fallback_md
-            exec_plan = cls.parse_markdown_table_to_execution_plan(fallback_md)
-            if not exec_plan:
-                exec_plan = cls._generate_fallback_execution_plan(scan_summary)
+            app_logger.warning("AI 在线生成报告异常: %s", err_msg)
+            if allow_fallback:
+                fallback_md = cls._generate_fallback_report(scan_summary)
+                header_notice = (
+                    f"> ⚠️ **在线模型降级提示**：在线调用大模型未在预期时间内完成（`{err_msg}`），"
+                    "系统已切换至**本地智能专家离线分析引擎**生成以下全景报告与推荐清单。\n\n"
+                )
+                full_md = header_notice + fallback_md
+                exec_plan = cls.parse_markdown_table_to_execution_plan(fallback_md)
+                if not exec_plan:
+                    exec_plan = cls._generate_fallback_execution_plan(scan_summary)
 
-            ai_resp = AIResponse(
-                task_id=f"FALLBACK_{int(time.time()*100)}",
-                model=f"{model} (已平稳降级至本地智能专家规则)",
-                parse_status="SUCCESS",
-                final_text=full_md,
-                structured_data={
-                    "markdown_report": full_md,
-                    "execution_plan": exec_plan,
-                    "chart_categories": [
-                        {"category": cat, "bytes": data.get("bytes", 0), "percent": data.get("percent", 0.0)}
-                        for cat, data in scan_summary.get("category_stats", {}).items()
-                        if isinstance(data, dict)
-                    ]
-                },
-                report_id=f"REP_FALLBACK_{int(time.time()*100)}"
-            )
-            return ai_resp
+                ai_resp = AIResponse(
+                    task_id=f"FALLBACK_{int(time.time()*100)}",
+                    model=f"{model} (已降级至本地智能专家规则)",
+                    parse_status="SUCCESS",
+                    final_text=full_md,
+                    structured_data={
+                        "markdown_report": full_md,
+                        "execution_plan": exec_plan,
+                        "chart_categories": [
+                            {"category": cat, "bytes": data.get("bytes", 0), "percent": data.get("percent", 0.0)}
+                            for cat, data in scan_summary.get("category_stats", {}).items()
+                            if isinstance(data, dict)
+                        ]
+                    },
+                    report_id=f"REP_FALLBACK_{int(time.time()*100)}"
+                )
+                return ai_resp
+
+            # 默认恪守 AI 为核心编排架构，不因超时直接越权，抛出异常交由前端用户界面呈现决策选项由用户定夺
+            raise RuntimeError(f"AI 生成报告失败: {err_msg}")
             
         ai_resp = result.get("parsed_data")
         if ai_resp is None and "data" in result:
