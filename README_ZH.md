@@ -5,18 +5,18 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
 [![AI Orchestrated](https://img.shields.io/badge/AI-OpenAI%20%7C%20DeepSeek%20%7C%20MiniMax%20%7C%20Ollama-orange.svg)](https://github.com/xuemingze/disk-space-analyzer)
-[![Test Suite: 109 Passed](https://img.shields.io/badge/Tests-109%20Passed%20(100%25)-brightgreen.svg)](./tests/)
+[![Test Suite: 116 Passed](https://img.shields.io/badge/Tests-116%20Passed%20(100%25)-brightgreen.svg)](./tests/)
 
 ---
 
 ## 📥 下载与使用
 
-**➡️ [最新版本 Release (v1.6.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [历史版本](https://github.com/xuemingze/disk-space-analyzer/releases) · [使用说明与安全须知](./docs/使用说明.md)
+**➡️ [最新版本 Release (v1.7.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [历史版本](https://github.com/xuemingze/disk-space-analyzer/releases) · [使用说明与安全须知](./docs/使用说明.md)
 
 | 文件 | 大小 | 适用场景 | 下载 |
 | --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.6.0-win64-portable.zip`** | ~80 MB | **推荐**。绿色便携包，解压到任意位置双击 `DiskSpaceAnalyzer.exe` 即可运行，**无需安装 Python**，秒级启动。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.6.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.6.0-win64.exe` | ~80 MB | 单文件版，双击直接运行、无需手动解压；首次启动会有瞬时自解压过程。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.6.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.7.0-win64-portable.zip`** | ~80 MB | **推荐**。绿色便携包，解压到任意位置双击 `DiskSpaceAnalyzer.exe` 即可运行，**无需安装 Python**，秒级启动。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.7.0-win64.exe` | ~80 MB | 单文件版，双击直接运行、无需手动解压；首次启动会有瞬时自解压过程。 | [⬇️ 下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64.exe) |
 | 源码包（`.zip` / `.tar.gz`） | — | 源码运行：`pip install -r requirements.txt && python main.py` | [Releases 页面](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **系统要求**：Windows 10 / 11 64 位。预编译可执行文件内置完整运行环境。  
@@ -33,7 +33,27 @@
 
 ## 📢 最新版本更新说明 (Changelog)
 
-### 🔥 v1.6.0 重大特性（AI 为核心编排器架构、2~3 级分类拓扑树、归档路径就地编辑与 1 秒极速自沉淀）
+### 🔥 v1.7.0 重大特性（AI 核心编排不越权原则、资产>100诊断决策、规划路径就地编辑保全原路径、高对比度视觉）
+
+- 🧠 **准则一深化：AI 为核心编排架构与用户决策权保全 (AI-First & Non-Overreach Contract)**：
+  - **杜绝离线越权替代**：彻底纠正了大模型请求超时或失败时本地离线兜底直接越权篡夺 AI 编排主导权的架构缺陷，确立“AI 为核心、用户定夺、绝不越权”交互原则；
+  - **独立资产 > 100 项架构诊断决策**：扫描识别出散落独立资产超过 100 项时，研判给出“80% 可能性为集合判断错误”诊断，暂停静默向 AI 倾泻碎片，唤起统一面向对象诊断卡片；
+  - **全屏最大化明细工作台联动**：推荐选项【🔍 查看全局扫描资产明细 (推荐并最大化)】直接无感切换至全局资产明细并一键全屏最大化，引导用户就地右键「向上收拢转集合」，从根本上消解离散碎片；
+  - **显式授权强制 AI 分析**：保留【⚡ 强制 AI 总结 / 强制 AI 整理】选项，由用户定夺是否忽略碎片风险立即执行 AI 智能全景分析，严禁后台未经授权私自调用大模型或静默兜底越权覆盖。
+- 🧩 **面向对象统一诊断决策组件 (`AIDecisionBannerWidget`)**：
+  - 将诊断与决策卡片封装为面向对象统一独立组件，同构深度复用于主控全景扫描看板 (`HomeView`) 与 AI 智能文件整理中心 (`OrganizerView`)，实现跨视图路由联动与明细调阅。
+- ✏️ **规划路径就地编辑原路径保全与高保真微调 (In-Place Path Preserving Edit)**：
+  - **彻底消灭先清空缺陷**：明细表格第 3 列挂载专有就地编辑委托 `PlanningPathItemDelegate`，支持 `Qt.EditRole`，双击或 `F2` 进入编辑时 100% 预填并保全既有建议归档路径文本，并默认全选高亮，用户可直接就地在原路径上增删微调或回车提交极速自沉淀。
+- 🎨 **全局高对比度视觉重塑与排版无障碍规范 (High-Contrast UI & Dark Theme Accessibility)**：
+  - 严禁列表及树组件出现白底白字或黑底黑字，禁用黑白交叉斑马纹；
+  - 分类拓扑树全面重构为蓝底亮白字（`#38BDF8`）、绿底亮白字（`#10B981`）与深邃暗底纯亮白文本（`#F8FAFC`），搭配 44px 黄金行高锁定，视觉对比度鲜明清晰。
+- 🛡️ **Shiboken6 C++ 对象生命周期与日志安全隔离 (Memory & Lifecycle Hardening)**：
+  - 针对 PySide6/Shiboken 组件销毁后全局日志句柄调用已释放 `QTextEdit` 的异常隐患实施生命周期保护与自解耦机制，杜绝崩溃。
+- 🧪 **自动化测试套件扩充至 116 项，100% 全部通过**。
+
+---
+
+### 🌲 v1.6.0 历史特性（2~3 级分类拓扑树、归档路径就地编辑与 1 秒极速自沉淀）
 
 - 🧠 **两大根本开发准则与架构确立**：
   - **准则一：AI 为核心编排器架构 (AI-First Orchestration Contract)**：本地客户端仅作为原始物理特征的采集者与结构化执行清单的最终落轨者。给 AI 明确的标准微契约，由 AI 统揽全局构建分类树并对变更决策实施语义审核与规则抽象；
@@ -214,7 +234,7 @@ flowchart LR
 │       ├── file_helper.py             # 系统保护白名单、格式化与扩展名映射
 │       ├── lock_detector.py           # 文件/进程占用状态深度安全探测 (In-Use Guard)
 │       └── logger.py                  # 日志滚动持久化、全局异常拦截与崩溃快照
-├── tests/                             # 自动化单元测试与集成回归套件 (109 项)
+├── tests/                             # 自动化单元测试与集成回归套件 (116 项)
 │   ├── test_category_tree_and_self_precipitation.py # 分类树建树、<1s微契约、就地编辑自沉淀专项测试
 │   ├── test_restart_inheritance_and_select_recommended.py # 重启继承与安全推荐项勾选测试
 │   ├── test_three_core_principles_unified.py       # 三大整理核心原则全场景测试
@@ -255,7 +275,7 @@ python main.py
 
 ### 3. 运行全量自动化测试套件
 ```bash
-# 执行全部 109 项单元与集成测试（约 17 秒全部通过）
+# 执行全部 116 项单元与集成测试（约 17 秒全部通过）
 python -m pytest tests/ -v
 ```
 

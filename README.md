@@ -5,18 +5,18 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
 [![AI Orchestrated](https://img.shields.io/badge/AI-OpenAI%20%7C%20DeepSeek%20%7C%20MiniMax%20%7C%20Ollama-orange.svg)](https://github.com/xuemingze/disk-space-analyzer)
-[![Test Suite: 109 Passed](https://img.shields.io/badge/Tests-109%20Passed%20(100%25)-brightgreen.svg)](./tests/)
+[![Test Suite: 116 Passed](https://img.shields.io/badge/Tests-116%20Passed%20(100%25)-brightgreen.svg)](./tests/)
 
 ---
 
 ## 📥 Download & Usage
 
-**➡️ [Latest Release (v1.6.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [All Releases](https://github.com/xuemingze/disk-space-analyzer/releases) · [Usage & Safety Guide (Chinese)](./docs/使用说明.md)
+**➡️ [Latest Release (v1.7.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [All Releases](https://github.com/xuemingze/disk-space-analyzer/releases) · [Usage & Safety Guide (Chinese)](./docs/使用说明.md)
 
 | Package | Size | Best for | Download |
 | --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.6.0-win64-portable.zip`** | ~80 MB | **Recommended.** Green portable package — unzip anywhere and launch `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.6.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.6.0-win64.exe` | ~80 MB | Single-file executable — run directly without manual decompression (fast self-extraction on first boot). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.6.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.7.0-win64-portable.zip`** | ~80 MB | **Recommended.** Green portable package — unzip anywhere and launch `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.7.0-win64.exe` | ~80 MB | Single-file executable — run directly without manual decompression (fast self-extraction on first boot). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64.exe) |
 | Source Archive (`.zip` / `.tar.gz`) | — | Run from source: `pip install -r requirements.txt && python main.py` | [Releases page](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **Operating System**: Windows 10 / 11 64-bit. Precompiled binaries include all necessary runtime components.  
@@ -33,7 +33,27 @@
 
 ## 📢 What's New in v1.6.0 (Changelog)
 
-### 🔥 v1.6.0 Major Release (AI-First Orchestrator, 2~3 Level Category Tree, In-Place Path Editing & Sub-Second Self-Precipitation)
+### 🔥 v1.7.0 Major Release (AI-First & Non-Overreach Contract, >100 Items Diagnosis, In-Place Path Preserving Edit, High-Contrast UI)
+
+- 🧠 **Deepened Tenet 1: AI-First & User Sovereignty Contract (Non-Overreach)**:
+  - **No Silent Fallback Usurpation**: Corrected the architectural defect where offline heuristic fallbacks would silently overwrite AI summaries on timeout or network exceptions. Enforced "AI as core orchestrator, user decides, zero unauthorized overreach";
+  - **Standalone Assets > 100 Architectural Diagnosis Card**: When a scan identifies > 100 discrete standalone assets, the system diagnoses that "there is an 80% likelihood of collective misjudgment" (such as app projects, receipts, VM roles not yet bundled into atomic collectives). Automatically pauses sending mass fragment tokens to AI, preventing prompt explosion and timeouts, and renders a unified OOP decision banner;
+  - **Direct Fullscreen Maximized Asset Detail Grid**: Recommended option 1 directly routes to and maximizes the Global Scanned Assets Detail Table (Tab 1), guiding users to right-click and "Promote to Collective" to eliminate fragments at root;
+  - **Explicit User Authorization for Forced AI Analysis**: Preserved explicit option to "⚡ Force AI Summary / Organize" at user discretion, strictly prohibiting unauthorized background AI invocation or silent overwriting.
+- 🧩 **Unified Object-Oriented Decision Banner Component (`AIDecisionBannerWidget`)**:
+  - Encapsulated diagnosis and decision cards into a dedicated reusable component, isomorphically shared between Home View (`HomeView`) and AI Smart Organizer View (`OrganizerView`).
+- ✏️ **In-Place Path Preserving Edit & High-Fidelity Fine-Tuning**:
+  - **Zero Content Clearing**: Deployed dedicated `PlanningPathItemDelegate` supporting `Qt.EditRole`. When entering edit mode via double-click or `F2`, existing planned paths are 100% pre-filled and highlighted, allowing instant in-place character adjustments or hierarchy modifications before submission.
+- 🎨 **High-Contrast UI & Dark Theme Accessibility**:
+  - Strictly banned illegible white-on-white and black-on-black text rendering across all tables and tree controls, eliminating alternating zebra striping;
+  - Category topology trees overhauled with bright blue (`#38BDF8`), vibrant green (`#10B981`) and deep slate backgrounds with crisp pure-white text (`#F8FAFC`), combined with a locked 44px row height.
+- 🛡️ **Shiboken6 C++ Lifecycle & Logging Hardening**:
+  - Prevented dangling pointers in logging handlers attached to global loggers when Qt UI widgets are destroyed during teardown or view transitions.
+- 🧪 **Enterprise Test Suite Expanded to 116 Tests (100% Passed)**.
+
+---
+
+### 🌲 v1.6.0 Historical Highlights (Category Tree Skeleton Capture & Sub-Second Self-Precipitation)
 
 - 🧠 **Two Foundational Architectural Tenets**:
   - **Tenet 1: AI-First Orchestration Contract**: The local client acts exclusively as the collector of raw physical signatures and the landing executor of structured manifests. The AI model is provided with a standardized micro-contract to orchestrate category trees and validate path edits;
@@ -248,7 +268,7 @@ python main.py
 
 ### 3. Run Automated Test Suite
 ```bash
-# Run all 109 unit and integration tests (~17s)
+# Run all 116 unit and integration tests (~17s)
 python -m pytest tests/ -v
 ```
 
