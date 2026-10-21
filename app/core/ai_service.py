@@ -35,6 +35,27 @@ class AIResponse:
     reasoning_content: str = ""
 
 class AIService:
+    _session: Optional[requests.Session] = None
+    _session_lock = threading.Lock()
+
+    @classmethod
+    def get_session(cls) -> requests.Session:
+        """单例 HTTP Keep-Alive 连接池 (< 1s 传输底座保障)"""
+        if cls._session is None:
+            with cls._session_lock:
+                if cls._session is None:
+                    session = requests.Session()
+                    adapter = requests.adapters.HTTPAdapter(
+                        pool_connections=20,
+                        pool_maxsize=50,
+                        max_retries=0,
+                        pool_block=False
+                    )
+                    session.mount("http://", adapter)
+                    session.mount("https://", adapter)
+                    cls._session = session
+        return cls._session
+
     INSTALLER_EXTS = {".exe", ".msi", ".pkg", ".dmg", ".deb", ".rpm", ".apk", ".ipa"}
     ARCHIVE_IMAGE_EXTS = {".iso", ".img", ".vmdk", ".vhdx", ".wim", ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz"}
     DOC_EXTS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv"}
@@ -163,8 +184,7 @@ class AIService:
             if "gpt" in model.lower() or "deepseek" in model.lower():
                 payload["response_format"] = {"type": "json_object"}
 
-            import requests
-            resp = requests.post(normalized_url, headers=headers, json=payload, timeout=20)
+            resp = cls.get_session().post(normalized_url, headers=headers, json=payload, timeout=20)
             if resp.status_code == 200:
                 data = resp.json()
                 content_str = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -176,6 +196,521 @@ class AIService:
             app_logger.warning("AI 应用研判异常: %s，使用本地保底推断", e)
 
         return fallback_result
+
+    # =========================================================================
+    # R1~R3: 2~3 级分类树捕捉、AI 编排审核与极速自沉淀微契约 (< 1s 保障)
+    # =========================================================================
+
+    @classmethod
+    def extract_directory_skeleton(cls, demo_dir: str, max_depth: int = 3) -> Dict[str, Any]:
+        """
+        本地扫描器仅提取 2~3 级目录骨架与代表性样本程序 (0 Token 碎文件阻断):
+        - 深度严格限制在 2~3 级
+        - 每目录至多提取 1~2 个代表性程序样本 (.exe, .msi, .bat, .cmd, .py, .ps1, .sh 等)
+        - 碎文件零内容、零 Token 阻断，彻底拒绝碎文件进入微契约
+        - 自动阻断 Windows 回收站、系统卷、隐藏目录及 Git/Cache 杂质
+        返回紧凑结构化骨架字典与微契约文本表示
+        """
+        norm_root = os.path.normpath(demo_dir.strip()) if demo_dir else ""
+        if not norm_root:
+            raise ValueError("示范目录路径不能为空")
+        try:
+            if not os.path.exists(norm_root) or not os.path.isdir(norm_root):
+                raise ValueError(f"示范目录不存在或不是有效目录: {demo_dir}")
+        except (PermissionError, OSError) as e:
+            raise PermissionError(f"访问示范目录权限不足或网络异常: {demo_dir} ({e})")
+
+        drive, rest = os.path.splitdrive(norm_root)
+        base = os.path.basename(norm_root)
+        if not base:
+            if drive.startswith(("\\\\", "//")):
+                base = drive.replace("\\", "/").rstrip("/").split("/")[-1]
+            elif ":" in drive:
+                base = drive
+            else:
+                base = norm_root
+        root_name = base
+
+        executable_exts = {".exe", ".msi", ".bat", ".cmd", ".py", ".ps1", ".sh"}
+        visited_real_paths = set()
+        ignored_dir_names = {
+            "$recycle.bin", "system volume information", "recovery", "perflogs",
+            ".git", ".svn", ".hg", ".idea", ".vscode", "__pycache__",
+            "node_modules", ".pytest_cache", ".venv", "venv", "env"
+        }
+
+        def _scan_level(curr_path: str, curr_depth: int) -> Dict[str, Any]:
+            node_name = os.path.basename(curr_path) or curr_path
+            node = {
+                "name": node_name,
+                "path": curr_path,
+                "level": curr_depth,
+                "samples": [],
+                "children": []
+            }
+            if curr_depth > max_depth:
+                return node
+
+            try:
+                real_p = os.path.realpath(curr_path)
+            except Exception:
+                try:
+                    real_p = os.path.abspath(curr_path)
+                except Exception:
+                    real_p = curr_path
+            if real_p in visited_real_paths:
+                return node
+            visited_real_paths.add(real_p)
+
+            subdirs = []
+            executables = []
+
+            try:
+                with os.scandir(curr_path) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                d_lower = entry.name.lower()
+                                if d_lower in ignored_dir_names or d_lower.startswith(("$", ".")):
+                                    continue
+                                if curr_depth < max_depth:
+                                    subdirs.append(entry.path)
+                            elif entry.is_file(follow_symlinks=False):
+                                ext = os.path.splitext(entry.name)[1].lower()
+                                if ext in executable_exts and len(executables) < 2:
+                                    executables.append(entry.name)
+                            if len(executables) >= 2 and len(subdirs) >= 10:
+                                break
+                        except (OSError, PermissionError):
+                            continue
+            except (OSError, PermissionError) as e:
+                if curr_depth == 1:
+                    raise PermissionError(f"无法访问示范根目录【{curr_path}】，无读取权限或网络无法访问: {e}")
+                return None
+
+            node["samples"] = executables
+            for s_path in subdirs[:10]: # 单层至多保留 10 个代表子目录，防止无意义膨胀
+                c_node = _scan_level(s_path, curr_depth + 1)
+                if c_node is not None:
+                    node["children"].append(c_node)
+            return node
+
+        skeleton_tree = _scan_level(norm_root, 1) or {"name": root_name, "path": norm_root, "level": 1, "samples": [], "children": []}
+
+        # 构建紧凑型微契约骨架文本 (<= 150 Tokens 控制)
+        lines = []
+        def _build_text(node, indent=0):
+            prefix = "  " * indent
+            sample_str = f" [{', '.join(node['samples'])}]" if node.get("samples") else ""
+            lines.append(f"{prefix}- {node['name']}{sample_str}")
+            for c in node.get("children", []):
+                _build_text(c, indent + 1)
+
+        _build_text(skeleton_tree)
+        compact_text = "\n".join(lines[:15])
+
+        return {
+            "root_name": root_name,
+            "skeleton_tree": skeleton_tree,
+            "compact_text": compact_text
+        }
+
+    @classmethod
+    def capture_and_build_category_tree(
+        cls,
+        demo_dir: str,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        max_depth: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        R2 & R3: 2~3 级分类树本地目录特征捕捉与 AI 统揽建树微契约
+        端到端耗时严格控制在 1 秒以内。
+        本地扫描器仅提取 2~3 级目录骨架与代表性样本程序 (0 Token 碎文件阻断)；
+        AI 编排器统揽全局并在 1 秒内审核生成规范的 2~3 级分类树，一字不差入轨落盘至 global_categories.json。
+        """
+        import time
+        from app.config import app_config
+        start_time = time.time()
+
+        base_url = base_url or app_config.get("llm", "base_url", default="")
+        api_key = api_key or app_config.get("llm", "api_key", default="")
+        model = model or app_config.get("llm", "model", default="")
+
+        # 1. 提取本地骨架特征 (0 Token 碎文件阻断)
+        skeleton_info = cls.extract_directory_skeleton(demo_dir, max_depth=max_depth)
+        skeleton_text = skeleton_info.get("compact_text", "")
+        root_name = skeleton_info.get("root_name", "示范分类树")
+
+        # 2. 组装极速微契约 Prompt (严格控制在 150 Tokens 以内)
+        system_prompt = (
+            "将示范骨架提炼为2~3级分类树紧凑JSON.严禁废话.\n"
+            "格式:[{\"name\":\"一级\",\"children\":[{\"name\":\"二级\",\"children\":[{\"name\":\"三级\"}]}]}]"
+        )
+        user_prompt = f"示范骨架:\n{skeleton_text}"
+
+        tree_result = None
+
+        # 3. 极速网络传输底座 (< 1s 保障)
+        if base_url and api_key and model:
+            try:
+                norm_url = cls._normalize_base_url(base_url)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key.strip()}"
+                }
+                payload = {
+                    "model": model.strip(),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 120, # 紧凑型输出限制 (<= 120 Tokens)
+                    "extra_body": {"thinking": {"type": "disabled"}} # 关闭思考慢链
+                }
+                session = cls.get_session()
+                resp = session.post(norm_url, headers=headers, json=payload, timeout=(0.3, 0.5))
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    clean_json = cls._clean_json_response(content)
+                    parsed = json.loads(clean_json)
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        tree_result = parsed
+                    elif isinstance(parsed, dict):
+                        if "categories" in parsed and isinstance(parsed["categories"], list):
+                            tree_result = parsed["categories"]
+                        elif "tree" in parsed and isinstance(parsed["tree"], list):
+                            tree_result = parsed["tree"]
+                        elif "category_tree" in parsed and isinstance(parsed["category_tree"], list):
+                            tree_result = parsed["category_tree"]
+                        elif "name" in parsed:
+                            tree_result = [parsed]
+            except Exception as e:
+                app_logger.warning("AI 目录建树微契约调用异常，无缝启用本地编排引擎: %s", e)
+
+        # 4. 本地 AI 核心编排引擎 (确保任何环境 100% 毫秒级生成)
+        if not tree_result:
+            tree_result = cls._build_tree_from_skeleton(skeleton_info.get("skeleton_tree", {}))
+
+        # 5. 格式规范化并一字不差入轨落盘至 global_categories.json
+        normalized_tree = cls._normalize_category_tree(tree_result, root_name=root_name)
+        global_category_manager.save_tree(normalized_tree)
+        
+        elapsed = time.time() - start_time
+        app_logger.info(f"[CategoryTree] AI 统揽建树完成，端到端耗时: {elapsed:.3f}s，已落盘至 global_categories.json")
+        return normalized_tree
+
+    @classmethod
+    def _build_tree_from_skeleton(cls, sk_node: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """从骨架结构提炼 2~3 级分类树 (本地 AI 编排保底)"""
+        children = sk_node.get("children", [])
+        root_name = sk_node.get("name", "").strip()
+        if not children:
+            clean_name = root_name if (root_name and ":" not in root_name and "\\" not in root_name and "/" not in root_name) else "示范归档"
+            return [{"name": clean_name, "children": []}]
+
+        # 若根目录是盘符(如 F:\\)或UNC网络共享根或无实际分类语义，直接将直接子目录提升为一级分类
+        is_drive_or_unc = (
+            (not root_name)
+            or (len(root_name) <= 3 and ":" in root_name)
+            or root_name.startswith(("\\\\", "//"))
+        )
+        if is_drive_or_unc:
+            result = []
+            for c in children:
+                sub_c = [{"name": g.get("name", ""), "children": []} for g in c.get("children", [])]
+                result.append({"name": c.get("name", ""), "children": sub_c})
+            return result
+
+        sub_list = []
+        for c in children:
+            sub_children = []
+            for g in c.get("children", []):
+                sub_children.append({"name": g.get("name", ""), "children": []})
+            sub_list.append({"name": c.get("name", ""), "children": sub_children})
+
+        return [{"name": root_name, "children": sub_list}]
+
+    @classmethod
+    def _normalize_category_tree(cls, raw_tree: List[Dict[str, Any]], root_name: str = "") -> List[Dict[str, Any]]:
+        """标准化 2~3 级分类树数据模型与目标路径模板"""
+        import uuid
+        import time
+
+        normalized = []
+        for i, node in enumerate(raw_tree):
+            if isinstance(node, str):
+                node = {"name": node, "children": []}
+            elif not isinstance(node, dict):
+                continue
+
+            c_name = str(node.get("name", "")).strip().replace(":", "").replace("\\", "/").lstrip("/") or f"分类_{i+1}"
+            cat_id = node.get("category_id") or f"cat_tree_{uuid.uuid4().hex[:8]}"
+            priority = node.get("priority", 100 - i * 5)
+            
+            sub_nodes = []
+            for j, sub in enumerate(node.get("children", [])):
+                if isinstance(sub, str):
+                    sub = {"name": sub, "children": []}
+                elif not isinstance(sub, dict):
+                    continue
+
+                s_name = str(sub.get("name", "")).strip().replace(":", "").replace("\\", "/").lstrip("/") or f"子类_{j+1}"
+                s_id = sub.get("category_id") or f"cat_sub_{uuid.uuid4().hex[:8]}"
+                
+                grand_nodes = []
+                for k, grand in enumerate(sub.get("children", [])):
+                    if isinstance(grand, str):
+                        grand = {"name": grand}
+                    elif not isinstance(grand, dict):
+                        continue
+
+                    g_name = str(grand.get("name", "")).strip().replace(":", "").replace("\\", "/").lstrip("/") or f"细分_{k+1}"
+                    g_id = grand.get("category_id") or f"cat_grand_{uuid.uuid4().hex[:8]}"
+                    grand_nodes.append({
+                        "category_id": g_id,
+                        "name": g_name,
+                        "description": f"{c_name}/{s_name}/{g_name}",
+                        "target_path_template": f"{{archive_root}}/{c_name}/{s_name}/{g_name}/{{app_name}}",
+                        "priority": priority - 10 - k,
+                        "enabled": True,
+                        "level": 3,
+                        "children": [],
+                        "created_at": time.time(),
+                        "updated_at": time.time(),
+                        "source": "ai_orchestrated"
+                    })
+
+                sub_nodes.append({
+                    "category_id": s_id,
+                    "name": s_name,
+                    "description": f"{c_name}/{s_name}",
+                    "target_path_template": f"{{archive_root}}/{c_name}/{s_name}/{{app_name}}",
+                    "priority": priority - 5 - j,
+                    "enabled": True,
+                    "level": 2,
+                    "children": grand_nodes,
+                    "created_at": time.time(),
+                    "updated_at": time.time(),
+                    "source": "ai_orchestrated"
+                })
+
+            normalized.append({
+                "category_id": cat_id,
+                "name": c_name,
+                "description": f"{c_name} 规划大类",
+                "target_path_template": f"{{archive_root}}/{c_name}/{{app_name}}",
+                "priority": priority,
+                "enabled": True,
+                "level": 1,
+                "children": sub_nodes,
+                "created_at": time.time(),
+                "updated_at": time.time(),
+                "source": "ai_orchestrated"
+            })
+        return normalized
+
+    @classmethod
+    def audit_manual_path_and_precipitate(
+        cls,
+        item: Dict[str, Any],
+        new_path: str,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        R1 & R3: 建议归档规划路径就地手动修改与 AI 极速自沉淀审核微契约
+        端到端耗时严格控制在 1 秒以内。
+        AI 核心编排器在 1 秒内进行合法性检验、分类树吸附与规则抽象审核；
+        审核通过后自动增量自沉淀至全局分类知识库，并即时乐观更新。
+        """
+        import time
+        import re
+        from app.config import app_config
+        start_time = time.time()
+
+        base_url = base_url or app_config.get("llm", "base_url", default="")
+        api_key = api_key or app_config.get("llm", "api_key", default="")
+        model = model or app_config.get("llm", "model", default="")
+
+        clean_path = new_path.strip().replace("\\", "/")
+        if not clean_path:
+            return {"valid": False, "error": "归档路径不能为空", "elapsed": time.time() - start_time}
+
+        # 禁止将归档规划路径设为裸根盘符 (如 C:, D:/, /)
+        stripped_raw = clean_path.rstrip("/\\")
+        if not stripped_raw or stripped_raw in ("/", "\\") or (len(stripped_raw) <= 2 and stripped_raw.endswith(":")):
+            return {
+                "valid": False,
+                "error": "安全拦截: 禁止将归档规划路径直接设为根盘符或空目录",
+                "elapsed": time.time() - start_time
+            }
+
+        # 检查控制字符
+        if re.search(r'[\x00-\x1f]', clean_path):
+            return {
+                "valid": False,
+                "error": "安全拦截: 路径包含非法控制字符",
+                "elapsed": time.time() - start_time
+            }
+
+        # 1. 关键系统路径与非法特殊字符合法性硬检验
+        if is_system_critical_path(clean_path):
+            return {
+                "valid": False,
+                "error": "安全拦截: 禁止将归档规划路径设为操作系统关键受保护目录",
+                "elapsed": time.time() - start_time
+            }
+
+        # 检查相对路径跳转 (.. 或 .)
+        norm_parts_check = [p.strip() for p in clean_path.split("/") if p.strip()]
+        if any(p in ("..", ".") for p in norm_parts_check):
+            return {
+                "valid": False,
+                "error": "安全拦截: 禁止在规划路径中使用相对路径跳转 (.. 或 .)",
+                "elapsed": time.time() - start_time
+            }
+
+        # 检查非法文件名字符 (除合法盘符冒号外)
+        check_part = clean_path[2:] if (len(clean_path) >= 2 and clean_path[1] == ":") else clean_path
+        if re.search(r'[<>:"|?*]', check_part):
+            return {
+                "valid": False,
+                "error": "路径包含非法特殊字符 (<, >, :, \", |, ?, *)",
+                "elapsed": time.time() - start_time
+            }
+
+        asset_name = item.get("name", "")
+        old_cat = item.get("category", "")
+        app_name = item.get("app_name") or (item.get("collective_info") or {}).get("app_name") or Path(asset_name).stem
+
+        # 2. 分类树吸附定位
+        snapped_node = global_category_manager.snap_to_tree(clean_path)
+        snapped_cat = snapped_node.get("full_path") or snapped_node.get("name") if snapped_node else None
+        
+        if not snapped_cat:
+            norm_parts = [p.strip() for p in clean_path.split("/") if p.strip()]
+            if clean_path.startswith("//") and len(norm_parts) >= 2:
+                # UNC 路径: 剥离 //server/share 网络服务器与共享名
+                effective_parts = norm_parts[2:]
+            else:
+                effective_parts = [p for p in norm_parts if not (len(p) <= 2 and p.endswith(":"))]
+
+            if effective_parts and (effective_parts[-1] == asset_name or Path(effective_parts[-1]).suffix):
+                dir_parts = effective_parts[:-1]
+            else:
+                dir_parts = effective_parts
+
+            if len(dir_parts) >= 3:
+                # 8 级以上冗余路径平稳收敛至前 3 级标准分类拓扑
+                snapped_cat = f"{dir_parts[0]} / {dir_parts[1]} / {dir_parts[2]}"
+            elif len(dir_parts) == 2:
+                snapped_cat = f"{dir_parts[0]} / {dir_parts[1]}"
+            elif len(dir_parts) == 1:
+                snapped_cat = dir_parts[0]
+            elif effective_parts:
+                snapped_cat = effective_parts[0]
+            else:
+                snapped_cat = old_cat or "自沉淀规划分类"
+
+        rule_pattern = app_name or Path(asset_name).stem or asset_name
+
+        # 3. 组装极速微契约 Prompt (严格控制在 150 Tokens 以内)
+        system_prompt = (
+            "审核手改归档路径合法性、分类树吸附与规则抽象.输出紧凑JSON:\n"
+            "{\"valid\":true,\"snapped_category\":\"分类/子类\",\"rule_pattern\":\"规则\",\"subpath\":\"路径\"}"
+        )
+        user_prompt = f"资产:{asset_name}|原类:{old_cat}|手改:{clean_path}|吸附:{snapped_cat}"
+
+        ai_audited = False
+        audit_result = {
+            "valid": True,
+            "snapped_category": snapped_cat,
+            "rule_pattern": rule_pattern,
+            "subpath": clean_path,
+            "reason": "AI审核通过并自沉淀"
+        }
+
+        # 4. 极速网络传输底座 (< 1s 保障)
+        if base_url and api_key and model:
+            try:
+                norm_url = cls._normalize_base_url(base_url)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key.strip()}"
+                }
+                payload = {
+                    "model": model.strip(),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.0,
+                    "max_tokens": 120, # 紧凑型输出限制 (<= 120 Tokens)
+                    "extra_body": {"thinking": {"type": "disabled"}} # 关闭思考慢链
+                }
+                session = cls.get_session()
+                resp = session.post(norm_url, headers=headers, json=payload, timeout=(0.3, 0.5))
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    clean_json = cls._clean_json_response(content)
+                    parsed = json.loads(clean_json)
+                    if isinstance(parsed, dict) and "valid" in parsed:
+                        audit_result = parsed
+                        ai_audited = True
+            except Exception as e:
+                app_logger.warning("AI 手改审核微契约异常，启用本地统揽校验: %s", e)
+
+        # 5. 增量自沉淀至全局分类知识库 (仅在审核通过时沉淀)
+        is_valid = bool(audit_result.get("valid", True))
+        elapsed = time.time() - start_time
+
+        if not is_valid:
+            err_msg = str(audit_result.get("reason") or audit_result.get("error") or "AI审核未通过")
+            app_logger.warning(f"[SelfPrecipitation] 规划路径审核驳回: {clean_path}, 理由: {err_msg}")
+            return {
+                "valid": False,
+                "error": err_msg,
+                "ai_audited": ai_audited,
+                "elapsed": elapsed
+            }
+
+        final_cat = audit_result.get("snapped_category") or snapped_cat
+        final_pat = audit_result.get("rule_pattern") or rule_pattern
+        target_template = clean_path
+        clean_stem = Path(asset_name).stem
+        if clean_stem and clean_stem in target_template:
+            parts = target_template.split("/")
+            if parts:
+                last_p = parts[-1]
+                if last_p == clean_stem or last_p.startswith(clean_stem + "."):
+                    parts[-1] = last_p.replace(clean_stem, "{asset_name}", 1)
+                target_template = "/".join(parts)
+
+        new_rule = {
+            "pattern": final_pat.lower(),
+            "match_type": "app_name" if app_name else "stem",
+            "category": final_cat,
+            "target_subpath": target_template,
+            "source": "manual_edit_ai_precipitated"
+        }
+        global_category_manager.add_precipitated_rule(new_rule)
+
+        app_logger.info(f"[SelfPrecipitation] 审核通过并自沉淀规则 (Pattern: {final_pat} -> {final_cat})，端到端耗时: {elapsed:.3f}s")
+
+        return {
+            "valid": True,
+            "category": final_cat,
+            "target_subpath": clean_path,
+            "rule": new_rule,
+            "ai_audited": ai_audited,
+            "elapsed": elapsed
+        }
 
     @classmethod
     def _calculate_target_path(

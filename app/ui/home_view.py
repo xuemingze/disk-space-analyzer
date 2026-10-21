@@ -268,24 +268,32 @@ class HomeView(QWidget):
         self.global_detail_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.global_detail_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
         self.global_detail_table.promote_collective_requested.connect(self.on_promote_collective_requested)
+        self.global_detail_table.path_edited_signal.connect(self.on_asset_path_edited)
+        self.global_detail_table.category_changed_signal.connect(self.on_asset_category_changed)
         self.tabs.addTab(self.global_detail_table, "📑 全局扫描资产明细 (阶段一即显)")
 
         self.duplicate_table = FileDataGridWidget(is_selectable=True)
         self.duplicate_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.duplicate_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
         self.duplicate_table.promote_collective_requested.connect(self.on_promote_collective_requested)
+        self.duplicate_table.path_edited_signal.connect(self.on_asset_path_edited)
+        self.duplicate_table.category_changed_signal.connect(self.on_asset_category_changed)
         self.tabs.addTab(self.duplicate_table, "🔄 重复资产明细 (哈希确认)")
         
         self.releasable_table = FileDataGridWidget(is_selectable=True)
         self.releasable_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.releasable_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
         self.releasable_table.promote_collective_requested.connect(self.on_promote_collective_requested)
+        self.releasable_table.path_edited_signal.connect(self.on_asset_path_edited)
+        self.releasable_table.category_changed_signal.connect(self.on_asset_category_changed)
         self.tabs.addTab(self.releasable_table, "🗑️ 可释放资产明细 (规则识别)")
         
         self.top100_table = FileDataGridWidget(is_selectable=True)
         self.top100_table.selection_changed_signal.connect(self.on_redundant_selection_changed)
         self.top100_table.migrate_requested_signal.connect(self.open_migration_dialog_for_paths)
         self.top100_table.promote_collective_requested.connect(self.on_promote_collective_requested)
+        self.top100_table.path_edited_signal.connect(self.on_asset_path_edited)
+        self.top100_table.category_changed_signal.connect(self.on_asset_category_changed)
         self.tabs.addTab(self.top100_table, "🏆 全局 Top 100 超大资产 (>300MB) (阶段一即显)")
         
         self.rollback_tab = RollbackWidget()
@@ -536,6 +544,133 @@ class HomeView(QWidget):
         elif idx == 4:
             return self.top100_table
         return self.global_detail_table
+
+    def on_asset_path_edited(self, item: Dict[str, Any], new_path: str):
+        """
+        建议归档规划路径就地手动修改后，同构同步四大表格并触发空间分布多级聚合重算
+        """
+        target_path = item.get("path")
+        if not target_path:
+            return
+        norm_target = os.path.normcase(os.path.normpath(target_path))
+
+        tables = [self.global_detail_table, self.duplicate_table, self.releasable_table, self.top100_table]
+        for table in tables:
+            for row, data_item in enumerate(table.source_model._data):
+                p = data_item.get("path")
+                if p and (p == target_path or os.path.normcase(os.path.normpath(p)) == norm_target):
+                    data_item["suggested_archive_path"] = new_path
+                    data_item["target_subpath"] = new_path
+                    if item.get("category"):
+                        data_item["category"] = item["category"]
+                    if item.get("tag"):
+                        data_item["tag"] = item["tag"]
+                    if item.get("phase_status"):
+                        data_item["phase_status"] = item["phase_status"]
+                    idx1 = table.source_model.index(row, 0)
+                    idx2 = table.source_model.index(row, table.source_model.columnCount() - 1)
+                    table.source_model.dataChanged.emit(idx1, idx2)
+
+        if self.current_scan_result:
+            for key in ["all_scanned_files", "redundant_files", "top_100_files"]:
+                if key in self.current_scan_result and isinstance(self.current_scan_result[key], list):
+                    for f_item in self.current_scan_result[key]:
+                        p = f_item.get("path")
+                        if p and (p == target_path or os.path.normcase(os.path.normpath(p)) == norm_target):
+                            f_item["suggested_archive_path"] = new_path
+                            f_item["target_subpath"] = new_path
+                            if item.get("category"):
+                                f_item["category"] = item["category"]
+                            if item.get("tag"):
+                                f_item["tag"] = item["tag"]
+                            if item.get("phase_status"):
+                                f_item["phase_status"] = item["phase_status"]
+
+        self.recalculate_space_distribution()
+
+    def on_asset_category_changed(self, item: Dict[str, Any]):
+        """
+        分类树吸附或右键树状级联分类变更后，同构同步四大表格并触发空间分布多级聚合重算
+        """
+        target_path = item.get("path")
+        if not target_path:
+            return
+        norm_target = os.path.normcase(os.path.normpath(target_path))
+
+        tables = [self.global_detail_table, self.duplicate_table, self.releasable_table, self.top100_table]
+        for table in tables:
+            for row, data_item in enumerate(table.source_model._data):
+                p = data_item.get("path")
+                if p and (p == target_path or os.path.normcase(os.path.normpath(p)) == norm_target):
+                    if item.get("category"):
+                        data_item["category"] = item["category"]
+                    if item.get("suggested_archive_path"):
+                        data_item["suggested_archive_path"] = item["suggested_archive_path"]
+                    if item.get("target_subpath"):
+                        data_item["target_subpath"] = item["target_subpath"]
+                    if item.get("tag"):
+                        data_item["tag"] = item["tag"]
+                    if item.get("phase_status"):
+                        data_item["phase_status"] = item["phase_status"]
+                    idx1 = table.source_model.index(row, 0)
+                    idx2 = table.source_model.index(row, table.source_model.columnCount() - 1)
+                    table.source_model.dataChanged.emit(idx1, idx2)
+
+        if self.current_scan_result:
+            for key in ["all_scanned_files", "redundant_files", "top_100_files"]:
+                if key in self.current_scan_result and isinstance(self.current_scan_result[key], list):
+                    for f_item in self.current_scan_result[key]:
+                        p = f_item.get("path")
+                        if p and (p == target_path or os.path.normcase(os.path.normpath(p)) == norm_target):
+                            if item.get("category"):
+                                f_item["category"] = item["category"]
+                            if item.get("suggested_archive_path"):
+                                f_item["suggested_archive_path"] = item["suggested_archive_path"]
+                            if item.get("target_subpath"):
+                                f_item["target_subpath"] = item["target_subpath"]
+                            if item.get("tag"):
+                                f_item["tag"] = item["tag"]
+                            if item.get("phase_status"):
+                                f_item["phase_status"] = item["phase_status"]
+
+        self.recalculate_space_distribution()
+
+    def recalculate_space_distribution(self):
+        """
+        多级聚合重算：全域同构联动，重新汇总分类占用并刷新空间分布饼图/柱状图
+        """
+        items = self.global_detail_table.source_model._data
+        if not items and self.current_scan_result:
+            items = self.current_scan_result.get("all_scanned_files", [])
+
+        if not items:
+            return
+
+        category_bytes = {}
+        category_counts = {}
+        total_bytes = 0
+
+        for it in items:
+            cat = it.get("category") or "未分类"
+            sz = it.get("size", 0)
+            total_bytes += sz
+            category_bytes[cat] = category_bytes.get(cat, 0) + sz
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+
+        cat_stats = {
+            cat: {
+                "bytes": cb,
+                "count": category_counts[cat],
+                "percent": round((cb / total_bytes * 100), 2) if total_bytes > 0 else 0.0
+            }
+            for cat, cb in sorted(category_bytes.items(), key=lambda x: x[1], reverse=True)
+        }
+
+        if self.current_scan_result is None:
+            self.current_scan_result = {}
+        self.current_scan_result["category_stats"] = cat_stats
+
+        self.chart_widget.update_chart(cat_stats)
 
     def open_task_manager(self):
         dlg = TaskManagerDialog(self)

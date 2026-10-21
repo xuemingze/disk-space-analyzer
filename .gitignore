@@ -120,3 +120,6 @@ context-export-*.json
 /verify_phase4*.py
 /test_*.py
 app/scratch_*.py
+
+# Teamwork agent workspaces
+.agents/

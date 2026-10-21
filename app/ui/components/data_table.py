@@ -6,9 +6,9 @@ from typing import List, Dict, Any, Optional, Set
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableView,
     QHeaderView, QMenu, QLineEdit, QLabel, QPushButton, QAbstractItemView,
-    QApplication, QStyledItemDelegate
+    QApplication, QStyledItemDelegate, QMessageBox
 )
-from PySide6.QtCore import Qt, QObject, Signal, QTimer, QAbstractTableModel, QModelIndex, QSortFilterProxyModel
+from PySide6.QtCore import Qt, QObject, Signal, QTimer, QAbstractTableModel, QModelIndex, QSortFilterProxyModel, QEvent
 from PySide6.QtGui import QAction, QColor, QBrush
 
 from app.utils.file_helper import format_size
@@ -19,9 +19,10 @@ class FileTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._data = data_list
         self._is_selectable = is_selectable
-        self._headers = ["勾选", "资产项 / 实体名称", "高阶全景分类", "占用大小", "治理形态与阶段", "治理标记 / 建议", "查重分组", "修改时间", "完整绝对路径"]
+        self._headers = ["勾选", "资产项 / 实体名称", "高阶全景分类", "建议归档规划路径", "占用大小", "治理形态与阶段", "治理标记 / 建议", "查重分组", "修改时间", "完整绝对路径"]
         self.checked_paths: Set[str] = set()
         self.checked_bytes: int = 0
+        self._on_path_edited_handler = None
 
     def rowCount(self, parent=QModelIndex()):
         return len(self._data)
@@ -83,29 +84,37 @@ class FileTableModel(QAbstractTableModel):
                 return f"{prefix}{name}"
             elif col == 2:
                 cat = item.get("category", "其他")
+                prefix = "🏷️ "
                 if item.get("is_directory_collective"):
                     f_count = item.get("file_count", 1)
-                    return f"{cat} [{f_count:,} 子文件]"
-                return cat
-            elif col == 3: return format_size(item.get("size", 0))
-            elif col == 4:
+                    return f"{prefix}{cat} [{f_count:,} 子文件]"
+                return f"{prefix}{cat}"
+            elif col == 3:
+                subpath = item.get("target_subpath") or item.get("suggested_archive_path") or item.get("recommended_subpath") or ""
+                if not subpath:
+                    cat = item.get("category", "")
+                    name = item.get("name", "")
+                    subpath = f"{cat}/{name}" if cat and name else (name or "-")
+                return subpath
+            elif col == 4: return format_size(item.get("size", 0))
+            elif col == 5:
                 if item.get("is_directory_collective"):
                     return item.get("phase_status", "阶段一已归类 (原子保全)")
                 return item.get("phase_status", "阶段一已归类 (独立单项)")
-            elif col == 5:
+            elif col == 6:
                 tag = item.get("tag", "")
                 if not tag or tag == "-":
                     if item.get("is_directory_collective"):
                         return "原子保全 (防撕裂整体)"
                     return "标准资产 (保留)"
                 return tag
-            elif col == 6: 
+            elif col == 7: 
                 gid = item.get("duplicate_group_id", "")
                 return gid if gid else "-"
-            elif col == 7:
+            elif col == 8:
                 mtime = item.get("mtime", 0)
                 return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M") if mtime > 0 else "-"
-            elif col == 8: return item.get("path", "")
+            elif col == 9: return item.get("path", "")
             
         elif role == Qt.UserRole:
             return item
@@ -114,33 +123,48 @@ class FileTableModel(QAbstractTableModel):
             return Qt.Checked if item.get("path") in self.checked_paths else Qt.Unchecked
             
         elif role == Qt.TextAlignmentRole:
-            if col in (2, 4, 6, 7): return int(Qt.AlignCenter)
-            if col == 3: return int(Qt.AlignRight | Qt.AlignVCenter)
+            if col in (2, 5, 7, 8): return int(Qt.AlignCenter)
+            if col == 4: return int(Qt.AlignRight | Qt.AlignVCenter)
             
         elif role == Qt.ForegroundRole:
             if col == 1 and item.get("is_directory_collective"):
                 return QBrush(QColor("#A78BFA"))
-            elif col == 4:
+            elif col == 2:
+                return QBrush(QColor("#38BDF8")) # 天蓝多级分类树标签
+            elif col == 3:
+                return QBrush(QColor("#FBBF24")) # 琥珀金建议归档规划路径
+            elif col == 5:
                 status = item.get("phase_status", "")
                 if "哈希已确认" in status: return QBrush(QColor("#10B981"))
-                elif "原子保全" in status or "规则" in status: return QBrush(QColor("#38BDF8"))
+                elif "AI" in status or "原子保全" in status or "规则" in status: return QBrush(QColor("#38BDF8"))
                 else: return QBrush(QColor("#94A3B8"))
-            elif col == 5:
+            elif col == 6:
                 tag = item.get("tag", "")
                 if "重复副本" in tag: return QBrush(QColor("#F59E0B"))
                 elif "安全可清理" in tag or "临时" in tag: return QBrush(QColor("#10B981"))
                 elif "防撕裂" in tag or "保全" in tag: return QBrush(QColor("#818CF8"))
-                elif "归档" in tag: return QBrush(QColor("#38BDF8"))
+                elif "归档" in tag or "自沉淀" in tag: return QBrush(QColor("#38BDF8"))
                 
         elif role == Qt.ToolTipRole:
-            if col == 1 or col == 8:
+            if col == 1 or col == 9:
                 p = item.get("path", "")
                 if item.get("is_directory_collective"):
                     c_info = item.get("collective_info") or {}
                     return f"{p}\n[原子实体集体] 文件数: {item.get('file_count', 1):,} | 类型: {c_info.get('type', 'collective')} | 推荐泛归类: {item.get('category', '')}"
                 return p
-            if col == 5: return item.get("reason", "")
+            elif col == 2:
+                cat = item.get("category", "")
+                sub = item.get("target_subpath") or item.get("suggested_archive_path") or ""
+                return f"全局分类树节点: {cat}\n建议规划路径: {sub}"
+            elif col == 3:
+                sub = item.get("target_subpath") or item.get("suggested_archive_path") or ""
+                return f"建议归档规划路径: {sub}\n[双击或快捷键 F2 激活就地编辑，回车提交 AI 审核自沉淀]"
+            elif col == 6: return item.get("reason", "")
             
+        elif role == Qt.SizeHintRole:
+            from PySide6.QtCore import QSize
+            return QSize(0, 44)
+
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -150,13 +174,21 @@ class FileTableModel(QAbstractTableModel):
 
     def flags(self, index):
         default_flags = super().flags(index)
-        if index.column() == 0 and self._is_selectable:
+        col = index.column()
+        if col == 0 and self._is_selectable:
             return default_flags | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled
+        if col == 3:
+            return default_flags | Qt.ItemIsEditable | Qt.ItemIsEnabled | Qt.ItemIsSelectable
         return default_flags
 
     def setData(self, index, value, role=Qt.EditRole):
-        if role == Qt.CheckStateRole and index.column() == 0 and self._is_selectable:
-            item = self._data[index.row()]
+        if not index.isValid():
+            return False
+        col = index.column()
+        row = index.row()
+        item = self._data[row]
+
+        if role == Qt.CheckStateRole and col == 0 and self._is_selectable:
             path = item.get("path", "")
             size = int(item.get("size", 0))
             if value == Qt.Checked or value == Qt.Checked.value:
@@ -168,6 +200,31 @@ class FileTableModel(QAbstractTableModel):
                     self.checked_paths.remove(path)
                     self.checked_bytes -= size
             self.dataChanged.emit(index, index, [Qt.CheckStateRole])
+            return True
+        elif role == Qt.EditRole and col == 3:
+            new_val = str(value).strip()
+            if not new_val:
+                return False
+            old_val = item.get("target_subpath") or item.get("suggested_archive_path") or ""
+            if new_val == old_val:
+                return True
+
+            old_state = {
+                "target_subpath": item.get("target_subpath", ""),
+                "suggested_archive_path": item.get("suggested_archive_path", ""),
+                "category": item.get("category", ""),
+                "phase_status": item.get("phase_status", ""),
+                "tag": item.get("tag", "")
+            }
+            # 乐观即时更新当前项
+            item["target_subpath"] = new_val
+            item["suggested_archive_path"] = new_val
+            start_idx = self.index(row, 0)
+            end_idx = self.index(row, self.columnCount() - 1)
+            self.dataChanged.emit(start_idx, end_idx, [Qt.DisplayRole, Qt.EditRole, Qt.ToolTipRole, Qt.ForegroundRole])
+            # 回调通知外部组件进行 AI 编排审核与自沉淀
+            if hasattr(self, "_on_path_edited_handler") and self._on_path_edited_handler:
+                self._on_path_edited_handler(item, new_val, index, old_state)
             return True
         return False
 
@@ -364,11 +421,12 @@ class FileSortFilterProxyModel(QSortFilterProxyModel):
         
         name = item.get("name", "").lower()
         cat = item.get("category", "").lower()
+        subpath = str(item.get("target_subpath") or item.get("suggested_archive_path") or "").lower()
         phase = item.get("phase_status", "").lower()
         tag = item.get("tag", "").lower()
         path = item.get("path", "").lower()
         
-        if kw in name or kw in cat or kw in phase or kw in tag or kw in path:
+        if kw in name or kw in cat or kw in subpath or kw in phase or kw in tag or kw in path:
             return True
         return False
 
@@ -378,9 +436,9 @@ class FileSortFilterProxyModel(QSortFilterProxyModel):
         left_item = model._data[left.row()]
         right_item = model._data[right.row()]
         
-        if col == 3:
+        if col == 4:
             return left_item.get("size", 0) < right_item.get("size", 0)
-        elif col == 7:
+        elif col == 8:
             return left_item.get("mtime", 0) < right_item.get("mtime", 0)
             
         left_str = model.data(left, Qt.DisplayRole) or ""
@@ -397,6 +455,8 @@ class FileDataGridWidget(QWidget):
     migrate_requested_signal = Signal(list)            # (选中的路径列表)
     promote_collective_requested = Signal(str, str)    # (target_dir, app_name) 统一收拢转集合信号
     ai_insight_requested = Signal(dict)                # AI 资产深度研判信号 (资产条目字典)
+    path_edited_signal = Signal(dict, str)             # (资产项, 新规划路径) 就地修改完成信号
+    category_changed_signal = Signal(dict)             # (资产项) 分类树吸附或变更信号
 
     def __init__(self, is_selectable: bool = True, parent=None):
         super().__init__(parent)
@@ -436,12 +496,15 @@ class FileDataGridWidget(QWidget):
         self.table_view.verticalHeader().setVisible(False)
         # UI 铁律: 锁死 44px 行高
         self.table_view.verticalHeader().setDefaultSectionSize(44)
+        self.table_view.verticalHeader().setMinimumSectionSize(44)
         self.table_view.verticalHeader().setSectionResizeMode(QHeaderView.Fixed)
         self.table_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table_view.customContextMenuRequested.connect(self.show_context_menu)
         self.table_view.doubleClicked.connect(self._on_table_double_clicked)
+        self.table_view.installEventFilter(self)
         
         self.source_model = FileTableModel([], self.is_selectable, self)
+        self.source_model._on_path_edited_handler = self._handle_archive_path_edited
         self.proxy_model = FileSortFilterProxyModel(self)
         self.proxy_model.setSourceModel(self.source_model)
         self.table_view.setModel(self.proxy_model)
@@ -455,14 +518,17 @@ class FileDataGridWidget(QWidget):
         self.table_view.setColumnWidth(0, 50)
         header.setSectionResizeMode(1, QHeaderView.Interactive)
         self.table_view.setColumnWidth(1, 190)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        self.table_view.setColumnWidth(2, 170)
+        header.setSectionResizeMode(3, QHeaderView.Interactive)
+        self.table_view.setColumnWidth(3, 230)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.Interactive)
-        self.table_view.setColumnWidth(5, 130)
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.Interactive)
+        self.table_view.setColumnWidth(6, 130)
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(8, QHeaderView.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.Stretch)
         
         layout.addWidget(self.table_view)
 
@@ -534,6 +600,18 @@ class FileDataGridWidget(QWidget):
         self.proxy_model.set_filter_keyword(keyword)
         self._update_stats_label()
 
+    def eventFilter(self, obj, event):
+        if obj == self.table_view and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_F2:
+                cur = self.table_view.currentIndex()
+                row = cur.row() if cur.isValid() else 0
+                if self.proxy_model.rowCount() > 0:
+                    target_idx = self.proxy_model.index(row, 3)
+                    self.table_view.setCurrentIndex(target_idx)
+                    self.table_view.edit(target_idx)
+                return True
+        return super().eventFilter(obj, event)
+
     def show_context_menu(self, pos):
         index = self.table_view.indexAt(pos)
         if not index.isValid():
@@ -544,40 +622,189 @@ class FileDataGridWidget(QWidget):
         file_path = item.get("path", "")
         if not file_path:
             return
+
+        # 检查是否同时多选了多行
+        selected_proxy_rows = self.table_view.selectionModel().selectedRows()
+        selected_source_rows = []
+        for p_idx in selected_proxy_rows:
+            s_idx = self.proxy_model.mapToSource(p_idx)
+            if s_idx.isValid() and 0 <= s_idx.row() < len(self.source_model._data):
+                selected_source_rows.append(s_idx.row())
+
+        if source_index.row() in selected_source_rows and len(selected_source_rows) > 1:
+            target_items = [self.source_model._data[r] for r in selected_source_rows]
+        else:
+            target_items = [item]
+
+        is_multi = len(target_items) > 1
+        target_paths = [it.get("path") for it in target_items if it.get("path")]
         
         menu = QMenu(self)
-        action_open_dir = QAction("📂 在文件资源管理器中定位", self)
-        action_open_dir.triggered.connect(lambda: self._locate_in_explorer(file_path))
-        
-        action_open_file = QAction("📄 打开文件", self)
-        action_open_file.triggered.connect(lambda: self._open_file(file_path))
-        
-        action_ai = QAction("🤖 AI 智能研判与治理建议...", self)
-        action_ai.triggered.connect(lambda: self._on_ai_insight_action(item))
+        if not is_multi:
+            action_open_dir = QAction("📂 在文件资源管理器中定位", self)
+            action_open_dir.triggered.connect(lambda: self._locate_in_explorer(file_path))
+            
+            action_open_file = QAction("📄 打开文件", self)
+            action_open_file.triggered.connect(lambda: self._open_file(file_path))
+            
+            action_ai = QAction("🤖 AI 智能研判与治理建议...", self)
+            action_ai.triggered.connect(lambda: self._on_ai_insight_action(item))
 
-        action_promote = QAction("📦 向上收拢并转为集合...", self)
-        action_promote.triggered.connect(lambda: self._on_promote_collective_action(file_path))
+            action_promote = QAction("📦 向上收拢并转为集合...", self)
+            action_promote.triggered.connect(lambda: self._on_promote_collective_action(file_path))
 
-        action_migrate = QAction("📦 智能迁移此项", self)
-        action_migrate.triggered.connect(lambda: self.migrate_requested_signal.emit([file_path]))
+            menu.addAction(action_open_dir)
+            menu.addAction(action_open_file)
+            menu.addSeparator()
+            menu.addAction(action_ai)
+            menu.addAction(action_promote)
+
+        action_migrate = QAction(f"📦 智能迁移所选项 ({len(target_items)} 项)", self) if is_multi else QAction("📦 智能迁移此项", self)
+        action_migrate.triggered.connect(lambda: self.migrate_requested_signal.emit(target_paths))
         
-        action_copy_path = QAction("📋 复制绝对路径", self)
-        action_copy_path.triggered.connect(lambda: QApplication.clipboard().setText(file_path))
+        action_copy_path = QAction(f"📋 复制所选绝对路径 ({len(target_items)} 项)", self) if is_multi else QAction("📋 复制绝对路径", self)
+        action_copy_path.triggered.connect(lambda: QApplication.clipboard().setText("\n".join(target_paths) if is_multi else file_path))
         
-        menu.addAction(action_open_dir)
-        menu.addAction(action_open_file)
-        menu.addSeparator()
-        menu.addAction(action_ai)
-        menu.addAction(action_promote)
+        # 树状级联归类子菜单 (支持多选批量)
+        cascade_title = f"🏷️ 树状级联归档分类与规划 (批量 {len(target_items)} 项)" if is_multi else "🏷️ 树状级联归档分类与规划"
+        cascade_menu = menu.addMenu(cascade_title)
+        self._populate_category_cascade_menu(cascade_menu, target_items)
+
         menu.addAction(action_migrate)
         menu.addSeparator()
         menu.addAction(action_copy_path)
         
         menu.exec(self.table_view.viewport().mapToGlobal(pos))
 
+    def _populate_category_cascade_menu(self, parent_menu: QMenu, target_items: Any):
+        """根据 2~3 级分类树动态构建级联右键归类菜单 (支持单项与多选批量，自动过滤未启用分类)"""
+        from app.core.category_manager import global_category_manager
+        tree = global_category_manager.get_tree()
+
+        def _add_nodes(menu, nodes, prefix=""):
+            for node in nodes:
+                if not node.get("enabled", True):
+                    continue
+                n_name = node.get("name", "")
+                full_path = f"{prefix} / {n_name}" if prefix else n_name
+                active_children = [c for c in node.get("children", []) if c.get("enabled", True)]
+                if active_children:
+                    sub_m = menu.addMenu(f"📁 {n_name}")
+                    act_self = sub_m.addAction(f"🎯 直接归为此大类 ({n_name})")
+                    act_self.triggered.connect(lambda _, c=node, p=full_path: self._apply_category_change(target_items, c, p))
+                    sub_m.addSeparator()
+                    _add_nodes(sub_m, active_children, full_path)
+                else:
+                    act = menu.addAction(f"📄 {n_name}")
+                    act.triggered.connect(lambda _, c=node, p=full_path: self._apply_category_change(target_items, c, p))
+
+        _add_nodes(parent_menu, tree)
+
+    def _apply_category_change(self, target_items: Any, cat_node: Dict[str, Any], full_path: str):
+        """应用右键树状级联分类变更并触发 AI 极速自沉淀 (支持单项与多选批量原子回滚)"""
+        from app.core.ai_service import AIService
+        if isinstance(target_items, dict):
+            items_list = [target_items]
+        elif isinstance(target_items, list):
+            items_list = list(target_items)
+        else:
+            items_list = [target_items]
+
+        if not items_list:
+            return
+
+        success_count = 0
+        fail_reasons = []
+
+        template = cat_node.get("target_path_template", "")
+        clean_tmpl = ""
+        if template:
+            clean_tmpl = template.replace("{archive_root}/", "").replace("{archive_root}\\", "").replace("{archive_root}", "").lstrip("/\\")
+
+        for item in items_list:
+            old_cat = item.get("category", "")
+            old_subpath = item.get("target_subpath") or item.get("suggested_archive_path") or ""
+            old_status = item.get("phase_status", "")
+            old_tag = item.get("tag", "")
+
+            name = item.get("name", "")
+            if clean_tmpl:
+                new_path = clean_tmpl.replace("{app_name}", name).replace("{asset_name}", name).replace("{category_name}", cat_node.get("name", ""))
+            else:
+                new_path = f"{full_path.replace(' / ', '/')}/{name}"
+
+            item["category"] = full_path
+            item["target_subpath"] = new_path
+            item["suggested_archive_path"] = new_path
+
+            # 触发 AI 审核与自沉淀
+            res = AIService.audit_manual_path_and_precipitate(item, new_path)
+            if res.get("valid"):
+                item["phase_status"] = "AI已审核 (自沉淀)"
+                item["tag"] = f"AI沉淀 ({cat_node.get('name')})"
+                success_count += 1
+                self.path_edited_signal.emit(item, new_path)
+                self.category_changed_signal.emit(item)
+            else:
+                # 单项失败回滚
+                item["category"] = old_cat
+                item["target_subpath"] = old_subpath
+                item["suggested_archive_path"] = old_subpath
+                item["phase_status"] = old_status
+                item["tag"] = old_tag
+                fail_reasons.append(f"{name}: {res.get('error', '未知原因')}")
+
+        self.source_model.layoutChanged.emit()
+
+        if fail_reasons:
+            if len(items_list) == 1:
+                QMessageBox.warning(self, "分类变更失败", f"AI审核未通过:\n{fail_reasons[0]}")
+            else:
+                msg = f"批量分类完成：成功 {success_count} 项，失败 {len(fail_reasons)} 项。\n" + "\n".join(fail_reasons[:5])
+                if len(fail_reasons) > 5:
+                    msg += f"\n... 等共 {len(fail_reasons)} 项失败"
+                QMessageBox.warning(self, "批量分类部分未通过", msg)
+
+    def _handle_archive_path_edited(
+        self,
+        item: Dict[str, Any],
+        new_path: str,
+        model_index: QModelIndex,
+        old_state: Optional[Dict[str, Any]] = None
+    ):
+        """就地编辑提交后，由 AI 核心编排器在 1 秒以内进行合法性检验、分类树吸附与规则抽象审核，审核通过后自动增量自沉淀并在当前视图乐观更新"""
+        from app.core.ai_service import AIService
+        res = AIService.audit_manual_path_and_precipitate(item, new_path)
+        row = model_index.row()
+        start_idx = self.source_model.index(row, 0)
+        end_idx = self.source_model.index(row, self.source_model.columnCount() - 1)
+
+        if res.get("valid"):
+            if res.get("category"):
+                item["category"] = res["category"]
+            item["phase_status"] = "AI已审核 (自沉淀)"
+            item["tag"] = f"AI沉淀 ({item.get('category', '已归类')})"
+            self.source_model.dataChanged.emit(start_idx, end_idx, [Qt.DisplayRole, Qt.ToolTipRole, Qt.ForegroundRole])
+            self.path_edited_signal.emit(item, new_path)
+            self.category_changed_signal.emit(item)
+        else:
+            # 回滚乐观更新，还原为修改前状态
+            if old_state:
+                item["target_subpath"] = old_state.get("target_subpath", "")
+                item["suggested_archive_path"] = old_state.get("suggested_archive_path", "")
+                item["category"] = old_state.get("category", "")
+                item["phase_status"] = old_state.get("phase_status", "")
+                item["tag"] = old_state.get("tag", "")
+            self.source_model.dataChanged.emit(start_idx, end_idx, [Qt.DisplayRole, Qt.ToolTipRole, Qt.ForegroundRole])
+            err = res.get("error", "规划路径未通过合法性检验")
+            QMessageBox.warning(self, "AI 规划审核未通过", f"建议归档规划路径审核未通过:\n{err}")
+
     def _on_table_double_clicked(self, index: QModelIndex):
-        """双击表格行: 直接打开目录或在资源管理器中高亮定位"""
+        """双击表格行: 若双击建议归档规划路径列(col 3)，激活就地编辑；其余列打开目录或在资源管理器中定位"""
         if not index.isValid():
+            return
+        if index.column() == 3:
+            self.table_view.edit(index)
             return
         source_index = self.proxy_model.mapToSource(index)
         if 0 <= source_index.row() < len(self.source_model._data):

@@ -29,6 +29,7 @@ from app.utils.file_helper import (
     format_size
 )
 from app.utils.logger import app_logger
+from app.core.category_manager import global_category_manager
 
 
 @dataclass
@@ -51,6 +52,7 @@ class AssetUnit:
     collective_info: Dict[str, Any] = field(default_factory=dict)
     tag: str = ""                            # 呈现标签
     reason: str = ""                         # 归类裁决理由
+    target_subpath: str = ""                 # 建议归档规划路径 (AI 推荐或手改自沉淀)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -70,7 +72,9 @@ class AssetUnit:
             "is_snapshot_backup": self.is_snapshot_backup,
             "collective_info": self.collective_info,
             "tag": self.tag,
-            "reason": self.reason
+            "reason": self.reason,
+            "target_subpath": self.target_subpath,
+            "suggested_archive_path": self.target_subpath
         }
 
 
@@ -241,7 +245,14 @@ class UnifiedScanner:
                         c_cat = normalize_unified_category(
                             curr_collective.get("suggested_category", "软件安装与程序 (Apps & Installers)")
                         )
+                        c_subpath = ""
+                        precip_match = global_category_manager.match_asset(curr_name, curr_dir, is_collective=True, collective_info=curr_collective)
+                        if precip_match:
+                            c_cat = precip_match.get("category") or c_cat
+                            c_subpath = precip_match.get("target_subpath") or ""
+
                         c_type = curr_collective.get("collective_type") or "已安装应用"
+                        c_tag = "AI自沉淀继承" if precip_match else f"原子保全 ({c_type})"
                         asset = AssetUnit(
                             id=f"COLL_{int(time.time()*1000)}_{len(results)}",
                             name=curr_name,
@@ -258,8 +269,9 @@ class UnifiedScanner:
                             umbrella_category=curr_broad_cat,
                             is_snapshot_backup=(curr_broad_cat == "backup"),
                             collective_info=curr_collective,
-                            tag=f"原子保全 ({c_type})",
-                            reason=curr_collective.get("reason", "不可拆分原子集体整体治理")
+                            tag=c_tag,
+                            reason=curr_collective.get("reason", "不可拆分原子集体整体治理"),
+                            target_subpath=c_subpath
                         )
                         results.append(asset)
                         total_scanned_files += c_files
@@ -298,11 +310,21 @@ class UnifiedScanner:
                             # 判定分类
                             cat_raw = categorize_file_by_ext(Path(entry.path))
                             unified_cat = normalize_unified_category(cat_raw)
+                            file_subpath = ""
+
+                            # 自沉淀优先命中
+                            precip_match = global_category_manager.match_asset(entry.name, entry.path)
+                            if precip_match:
+                                unified_cat = precip_match.get("category") or unified_cat
+                                file_subpath = precip_match.get("target_subpath") or ""
 
                             # 同源同宿：判断是否在备份大抽屉下
                             is_backup_pack = (curr_broad_cat == "backup") and (f_ext in {".zip", ".tar", ".gz", ".7z", ".rar", ".iso"})
                             if is_backup_pack:
                                 unified_cat = "归档包与系统镜像 (Archives & Images)"
+
+                            file_tag = "AI自沉淀继承" if precip_match else ("备份快照" if is_backup_pack else "")
+                            file_reason = f"自沉淀规则命中: {precip_match.get('rule_pattern', '')}" if precip_match else ("历史备份大抽屉归档资产" if is_backup_pack else "")
 
                             asset = AssetUnit(
                                 id=f"FILE_{int(time.time()*1000)}_{total_scanned_files}",
@@ -318,8 +340,9 @@ class UnifiedScanner:
                                 umbrella_anchor=curr_umbrella,
                                 umbrella_category=curr_broad_cat,
                                 is_snapshot_backup=is_backup_pack,
-                                tag="备份快照" if is_backup_pack else "",
-                                reason="历史备份大抽屉归档资产" if is_backup_pack else ""
+                                tag=file_tag,
+                                reason=file_reason,
+                                target_subpath=file_subpath
                             )
                             results.append(asset)
                             total_scanned_files += 1
@@ -377,8 +400,14 @@ class UnifiedScanner:
                             c_cat = normalize_unified_category(
                                 collective_info.get("suggested_category", "软件安装与程序 (Apps & Installers)")
                             )
-                            c_type = collective_info.get("collective_type") or collective_info.get("type") or "原子实体"
+                            sub_subpath = ""
+                            precip_match = global_category_manager.match_asset(d_entry.name, d_path, is_collective=True, collective_info=collective_info)
+                            if precip_match:
+                                c_cat = precip_match.get("category") or c_cat
+                                sub_subpath = precip_match.get("target_subpath") or ""
 
+                            c_type = collective_info.get("collective_type") or collective_info.get("type") or "原子实体"
+                            c_tag = "AI自沉淀继承" if precip_match else f"原子保全 ({c_type})"
                             asset = AssetUnit(
                                 id=f"COLL_{int(time.time()*1000)}_{len(results)}",
                                 name=d_entry.name,
@@ -395,8 +424,9 @@ class UnifiedScanner:
                                 umbrella_category=curr_broad_cat,
                                 is_snapshot_backup=(curr_broad_cat == "backup"),
                                 collective_info=collective_info,
-                                tag=f"原子保全 ({c_type})",
-                                reason=collective_info.get("reason", "不可拆分原子集体整体治理")
+                                tag=c_tag,
+                                reason=collective_info.get("reason", "不可拆分原子集体整体治理"),
+                                target_subpath=sub_subpath
                             )
                             results.append(asset)
                             total_scanned_files += c_files
