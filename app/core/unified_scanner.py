@@ -193,7 +193,9 @@ class UnifiedScanner:
                     curr_broad_cat = parent_broad_cat
 
                 # 顶层/当前目录原子集体拦截（仅对未经历入栈前置检查的根目录 curr_depth == 0 实施源头封存）
-                if prune_collectives and curr_depth == 0:
+                # 准则四：泛式大抽屉上位语义赋权法则 —— 若根目录属于大抽屉 (curr_umbrella / broad_check)，
+                # 绝不可在顶层直接整包封存，必须放行入栈遍历其下级子资产！
+                if prune_collectives and curr_depth == 0 and not curr_umbrella and not broad_check:
                     curr_collective = _safe_detect_collective(curr_dir)
                     if curr_collective and isinstance(curr_collective, dict) and (
                         curr_collective.get("is_collective") or "software_name" in curr_collective

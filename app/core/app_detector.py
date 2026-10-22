@@ -252,7 +252,11 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "description": "开发工程、代码库与工作区容器"
     },
     "app": {
-        "keywords": {"软件", "应用", "工具", "程序", "客户端", "绿色软件", "便携软件", "apps", "software", "tools", "utilities", "applications", "programs", "movedapps", "softwares", "myapps", "portable", "app", "tool"},
+        "keywords": {
+            "软件", "应用", "工具", "程序", "客户端", "绿色软件", "便携软件", "安装包", "软件安装包", "安装程序", "软件下载", "下载安装", "我的安装包",
+            "apps", "software", "tools", "utilities", "applications", "programs", "movedapps", "softwares", "myapps", "portable", "app", "tool",
+            "installer", "installers", "packages", "package", "setup", "setups"
+        },
         "suggested_category": "软件安装与镜像 (Apps & Installers)",
         "subpath_prefix": "应用软件",
         "description": "独立应用、安装程序与绿色工具包"
@@ -415,7 +419,8 @@ class AppDetector:
 
 # 0.3 系统核心保留大容器与已知顶层系统目录黑名单
         SYSTEM_CONTAINER_NAMES = {
-            "downloads", "desktop", "documents", "user", "users", "administrator",
+            "downloads", "download", "下载", "我的下载", "下载内容", "安装包", "软件安装包", "安装程序", "软件下载", "临时下载",
+            "desktop", "桌面", "documents", "文档", "user", "users", "administrator",
             "program files", "program files (x86)", "appdata", "local", "roaming",
             "$recycle.bin", "system volume information", "windows", "perflogs",
             "recovery", "boot"
@@ -928,17 +933,37 @@ class AppDetector:
             name_matches_dir = (best_exe.stem.lower() in dname_lower or dname_lower in best_exe.stem.lower())
             has_lnk_or_asar = (p / f"{best_exe.stem}.lnk").exists() or (p / "electron.asar").exists()
 
-            # 解禁数据盘根目录独立软件法则 (Broad vs Narrow Topology Law)：
-            # 若位于非系统盘根目录下一级 (如 D:\Clash, D:\Everything)，只要存在核心主程序 exe 即解禁判定为独立软件实体
-            is_data_drive_root_app = (len(p.parts) == 2 and not p.parts[0].lower().startswith("c:")) and len(main_exes) >= 1
+            # 独立软件与安装包集合池辨别守则 (Standalone App vs Installer Pool)：
+            # 1. 若当前目录含有明显的下载/安装包词干，坚决判定为安装包池，绝不可作为单体软件剪枝！
+            is_installer_pool_dir = any(k in dname_lower for k in [
+                "安装包", "安装程序", "软件下载", "我的下载", "下载", "download", "downloads", "installer", "installers", "packages", "setup"
+            ])
+            if is_installer_pool_dir:
+                return None
 
-            is_app_collective = (
+            # 2. 检查核心伴生运行时特征
+            has_runtime_components = (
                 has_accompanying_dll
                 or has_companion_folder
                 or has_sub_dll
                 or has_pyinstaller
-                or len(exe_files) > 1
                 or has_lnk_or_asar
+            )
+
+            # 3. 若存在 2 个以上 exe 且无伴生运行时（无 dll、无配套资源文件夹、无 pyinstaller、无 asar）且名称不匹配，
+            # 判定为独立工具包散落或下载集合池，禁止作为单一软件实体整体封印！
+            if len(exe_files) >= 2 and not has_runtime_components and not name_matches_dir:
+                return None
+
+            # 解禁数据盘根目录独立软件法则 (Broad vs Narrow Topology Law)：
+            # 若位于非系统盘根目录下一级 (如 D:\Clash, D:\Everything)，要求主程序名与目录强匹配，或具备明确的伴生运行时
+            is_data_drive_root_app = (
+                (len(p.parts) == 2 and not p.parts[0].lower().startswith("c:"))
+                and (name_matches_dir or has_runtime_components)
+            )
+
+            is_app_collective = (
+                has_runtime_components
                 or name_matches_dir
                 or is_data_drive_root_app
             )
