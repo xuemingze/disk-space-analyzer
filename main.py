@@ -14,7 +14,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 APP_NAME = "空间全景深度分析与冗余文件扫描"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 
 from app.utils.logger import (  # noqa: E402
     LOG_DIR,

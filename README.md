@@ -4,8 +4,8 @@
 [![PySide6 / Qt6](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-brightgreen.svg)](https://pypi.org/project/PySide6/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
-[![Version: v1.7.0](https://img.shields.io/badge/Release-v1.7.0-blue.svg)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)
-[![Test Suite: 116 Passed](https://img.shields.io/badge/Tests-116%20Passed%20(100%25)-brightgreen.svg)](./tests/)
+[![Version: v1.8.0](https://img.shields.io/badge/Release-v1.8.0-blue.svg)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)
+[![Test Suite: 154 Passed](https://img.shields.io/badge/Tests-154%20Passed%20(100%25)-brightgreen.svg)](./tests/)
 
 > **A high-performance Windows desktop application built for deep disk space cleanup, AI-assisted file classification, and storage lifecycle governance**.  
 > Say goodbye to full C: drive anxiety, tens of thousands of scattered files slowing down your PC, and duplicated gigabytes eating your storage. **Utility-driven, easy to use, and lightning-fast.**
@@ -16,12 +16,12 @@
 
 ## 📥 Quick Download & Installation
 
-**➡️ [Go to Latest Release (v1.7.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [Release Notes History](./docs/) · [Detailed Usage Guide (Chinese)](./docs/使用说明.md)
+**➡️ [Go to Latest Release (v1.8.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [Release Notes History](./docs/) · [Detailed Usage Guide (Chinese)](./docs/使用说明.md)
 
 | Package | Size | Highlights & Best For | Download |
 | :--- | ---: | :--- | :---: |
-| **`DiskSpaceAnalyzer-1.7.0-win64-portable.zip`** | ~80 MB | **⭐ Highly Recommended (Portable Zip)**. Extract to any folder and double-click `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.7.0-win64.exe` | ~80 MB | **Single-file standalone executable**. Run directly without extraction. Fast automatic self-decompression on first boot. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.8.0-win64-portable.zip`** | ~80 MB | **⭐ Highly Recommended (Portable Zip)**. Extract to any folder and double-click `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.8.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.8.0-win64.exe` | ~80 MB | **Single-file standalone executable**. Run directly without extraction. Fast automatic self-decompression on first boot. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.8.0-win64.exe) |
 | Run from Source (Developers) | — | Command-line execution: `pip install -r requirements.txt && python main.py` | [View GitHub Releases](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 * 🖥️ **Operating System**: Windows 10 / 11 64-bit.

@@ -11,12 +11,12 @@
 
 ## 📥 Download & Usage
 
-**➡️ [Latest Release (v1.7.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [All Releases](https://github.com/xuemingze/disk-space-analyzer/releases) · [Usage & Safety Guide (Chinese)](./docs/使用说明.md)
+**➡️ [Latest Release (v1.8.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [All Releases](https://github.com/xuemingze/disk-space-analyzer/releases) · [Usage & Safety Guide (Chinese)](./docs/使用说明.md)
 
 | Package | Size | Best for | Download |
 | --- | ---: | --- | :---: |
-| **`DiskSpaceAnalyzer-1.7.0-win64-portable.zip`** | ~80 MB | **Recommended.** Green portable package — unzip anywhere and launch `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.7.0-win64.exe` | ~80 MB | Single-file executable — run directly without manual decompression (fast self-extraction on first boot). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.7.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.8.0-win64-portable.zip`** | ~80 MB | **Recommended.** Green portable package — unzip anywhere and launch `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.8.0-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.8.0-win64.exe` | ~80 MB | Single-file executable — run directly without manual decompression (fast self-extraction on first boot). | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.8.0-win64.exe) |
 | Source Archive (`.zip` / `.tar.gz`) | — | Run from source: `pip install -r requirements.txt && python main.py` | [Releases page](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 > 🖥️ **Operating System**: Windows 10 / 11 64-bit. Precompiled binaries include all necessary runtime components.  
@@ -33,7 +33,7 @@
 
 ## 📢 What's New in v1.6.0 (Changelog)
 
-### 🔥 v1.7.0 Major Release (AI-First & Non-Overreach Contract, >100 Items Diagnosis, In-Place Path Preserving Edit, High-Contrast UI)
+### 🔥 v1.8.0 Major Release (AI-First & Non-Overreach Contract, >100 Items Diagnosis, In-Place Path Preserving Edit, High-Contrast UI)
 
 - 🧠 **Deepened Tenet 1: AI-First & User Sovereignty Contract (Non-Overreach)**:
   - **No Silent Fallback Usurpation**: Corrected the architectural defect where offline heuristic fallbacks would silently overwrite AI summaries on timeout or network exceptions. Enforced "AI as core orchestrator, user decides, zero unauthorized overreach";

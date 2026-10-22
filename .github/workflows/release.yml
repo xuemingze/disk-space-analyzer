@@ -71,6 +71,7 @@ jobs:
           }
 
       - name: Run test suite
+        shell: cmd
         run: python -m pytest tests/ -v
 
       - name: Build release artifacts

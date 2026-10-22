@@ -161,7 +161,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addStretch()
 
         # 底部状态信息
-        bottom_info = QLabel("v1.7.0 | Pro Edition\n全后台异步架构\nAI辅助文件归档引擎")
+        bottom_info = QLabel("v1.8.0 | Pro Edition\n全后台异步架构\nAI辅助文件归档引擎")
         bottom_info.setStyleSheet("color: #475569; font-size: 11px; padding-left: 20px; line-height: 140%;")
         sidebar_layout.addWidget(bottom_info)
 
