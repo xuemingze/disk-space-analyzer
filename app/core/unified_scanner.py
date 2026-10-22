@@ -32,50 +32,7 @@ from app.utils.logger import app_logger
 from app.core.category_manager import global_category_manager
 
 
-@dataclass
-class AssetUnit:
-    """统一治理资产单元契约 (Universal Asset Unit Contract)"""
-    id: str                                  # 唯一资产 ID
-    name: str                                # 文件名或集体目录名
-    path: str                                # 物理规范路径
-    size: int                                # 总体积字节数
-    mtime: float                             # 最后修改时间戳
-    file_count: int = 1                      # 文件数量 (单文件为1，原子集体为内部文件总数)
-    is_collective: bool = False              # 是否为不可拆分的原子狭义集体
-    collective_type: str = ""                # 独立软件 | 开发工程 | 历史快照 | 业务账套 | 依赖集体
-    category: str = "其他文件"               # 归一化全景资产分类
-    ext: str = ""                            # 扩展名 (集体为空)
-    scan_root: str = ""                      # 扫描发起的顶层根路径
-    umbrella_anchor: str = ""                # 祖先广义大抽屉路径/名称 (血统继承)
-    umbrella_category: str = ""              # 广义分类 (app | backup | finance | design | project 等)
-    is_snapshot_backup: bool = False         # 是否属于历史备份/快照资产 (免除冗余归档包误判)
-    collective_info: Dict[str, Any] = field(default_factory=dict)
-    tag: str = ""                            # 呈现标签
-    reason: str = ""                         # 归类裁决理由
-    target_subpath: str = ""                 # 建议归档规划路径 (AI 推荐或手改自沉淀)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "path": self.path,
-            "size": self.size,
-            "mtime": self.mtime,
-            "file_count": self.file_count,
-            "is_collective": self.is_collective,
-            "is_directory_collective": self.is_collective,
-            "collective_type": self.collective_type,
-            "category": self.category,
-            "ext": self.ext,
-            "umbrella_anchor": self.umbrella_anchor,
-            "umbrella_category": self.umbrella_category,
-            "is_snapshot_backup": self.is_snapshot_backup,
-            "collective_info": self.collective_info,
-            "tag": self.tag,
-            "reason": self.reason,
-            "target_subpath": self.target_subpath,
-            "suggested_archive_path": self.target_subpath
-        }
+from app.core.domain_models import ScannedAsset, AssetUnit
 
 
 def fast_aggregate_directory(dir_path: str, max_files_limit: int = 150000) -> Tuple[int, int, float]:
