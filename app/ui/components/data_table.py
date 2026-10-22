@@ -153,9 +153,11 @@ class FileTableModel(QAbstractTableModel):
                 elif "归档" in tag or "自沉淀" in tag: return QBrush(QColor("#38BDF8"))
                 
         elif role == Qt.ToolTipRole:
+            if col == 0:
+                return "勾选以进行批量操作"
+            p = item.get("path", "")
+            meta = item.get("metadata") or {}
             if col == 1 or col == 9:
-                p = item.get("path", "")
-                meta = item.get("metadata") or {}
                 meta_details = []
                 if meta.get("software_name"):
                     meta_details.append(f"真实软件名称: {meta['software_name']}")
@@ -176,11 +178,24 @@ class FileTableModel(QAbstractTableModel):
             elif col == 2:
                 cat = item.get("category", "")
                 sub = item.get("target_subpath") or item.get("suggested_archive_path") or ""
-                return f"全局分类树节点: {cat}\n建议规划路径: {sub}"
+                return f"全局分类: {cat}\n建议规划路径: {sub}"
             elif col == 3:
                 sub = item.get("target_subpath") or item.get("suggested_archive_path") or ""
                 return f"建议归档规划路径: {sub}\n[双击或快捷键 F2 激活就地编辑，回车提交 AI 审核自沉淀]"
-            elif col == 6: return item.get("reason", "")
+            elif col == 4:
+                return f"占用空间: {format_size(item.get('size', 0))} ({item.get('size', 0):,} 字节)"
+            elif col == 5:
+                return f"治理形态与阶段: {item.get('phase_status', '')}"
+            elif col == 6:
+                tag = item.get("tag", "")
+                reason = item.get("reason", "")
+                return f"治理标记: {tag}\n依据理由: {reason}" if reason else f"治理标记: {tag}"
+            elif col == 7:
+                gid = item.get("duplicate_group_id", "")
+                return f"查重分组编号: {gid}" if gid else "未查重 / 独立资产"
+            elif col == 8:
+                mtime = item.get("mtime", 0)
+                return f"修改时间: {datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')}" if mtime > 0 else "-"
             
         elif role == Qt.SizeHintRole:
             from PySide6.QtCore import QSize
@@ -574,6 +589,7 @@ class FileDataGridWidget(QWidget):
         self.proxy_model.layoutChanged.connect(self._update_stats_label)
         
         header = self.table_view.horizontalHeader()
+        header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Fixed)
         self.table_view.setColumnWidth(0, 50)
         header.setSectionResizeMode(1, QHeaderView.Interactive)
@@ -588,15 +604,52 @@ class FileDataGridWidget(QWidget):
         self.table_view.setColumnWidth(6, 130)
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(9, QHeaderView.Stretch)
+        header.setSectionResizeMode(9, QHeaderView.Interactive)
+        self.table_view.setColumnWidth(9, 320)
         # 规划路径列就地编辑专用委托 (原路径基础上修改，绝不先清空)
         self.table_view.setItemDelegateForColumn(3, PlanningPathItemDelegate(self.table_view))
         
         layout.addWidget(self.table_view)
 
+    def auto_fit_columns(self):
+        """
+        智能自适应列宽动态计算：
+        防止文件名、规划路径、分类与治理建议过长直接显示省略号。
+        为每列设置合理的动态下限与安全缓冲 (padding)。
+        """
+        header = self.table_view.horizontalHeader()
+        header.setStretchLastSection(False)
+
+        col_configs = {
+            0: (50, 60, QHeaderView.Fixed),           # 勾选
+            1: (280, 560, QHeaderView.Interactive),   # 资产项 / 实体名称
+            2: (180, 320, QHeaderView.Interactive),   # 高阶全景分类
+            3: (220, 420, QHeaderView.Interactive),   # 建议归档规划路径
+            4: (85, 140, QHeaderView.ResizeToContents),  # 占用大小
+            5: (140, 220, QHeaderView.ResizeToContents), # 治理形态与阶段
+            6: (180, 340, QHeaderView.Interactive),   # 治理标记 / 建议
+            7: (85, 140, QHeaderView.ResizeToContents),  # 查重分组
+            8: (130, 180, QHeaderView.ResizeToContents), # 修改时间
+            9: (260, 800, QHeaderView.Interactive),   # 完整绝对路径
+        }
+
+        for col, (min_w, max_w, mode) in col_configs.items():
+            if mode == QHeaderView.Fixed:
+                header.setSectionResizeMode(col, QHeaderView.Fixed)
+                self.table_view.setColumnWidth(col, min_w)
+            elif mode == QHeaderView.ResizeToContents:
+                header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            else:
+                self.table_view.resizeColumnToContents(col)
+                w = self.table_view.columnWidth(col)
+                clamped = max(min_w, min(w + 28, max_w))
+                header.setSectionResizeMode(col, QHeaderView.Interactive)
+                self.table_view.setColumnWidth(col, clamped)
+
     def populate_data(self, data_list: List[Dict[str, Any]], total_scan_bytes: int = 0):
         self.source_model.update_data(data_list)
         self._update_stats_label()
+        self.auto_fit_columns()
 
     def _schedule_selection_update(self, *args):
         self._debounce_timer.start()

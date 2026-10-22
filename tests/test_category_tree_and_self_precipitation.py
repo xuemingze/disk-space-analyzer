@@ -24,7 +24,14 @@ from app.ui.home_view import HomeView
 
 
 @pytest.fixture(autouse=True)
-def clean_rules_and_reload(tmp_path):
+def clean_rules_and_reload(tmp_path, monkeypatch):
+    from app.config import app_config
+    orig_get = app_config.get
+    def mock_cfg_get(*args, **kwargs):
+        if len(args) >= 2 and args[0] == "llm" and args[1] in ("base_url", "api_key", "model"):
+            return ""
+        return orig_get(*args, **kwargs)
+    monkeypatch.setattr(app_config, "get", mock_cfg_get)
     """确保每个测试前后分类树与自沉淀规则状态隔离"""
     global_category_manager.load()
     orig_rules = list(global_category_manager._rules)
@@ -801,28 +808,33 @@ def test_adversarial_concurrent_burst_requests_and_keepalive_resilience():
     threads_count = 20
     results = []
 
+    import threading
     session = AIService.get_session()
+    post_lock = threading.Lock()
 
     def mock_post(url, headers=None, json=None, timeout=None):
-        time.sleep(0.005) # 模拟 5ms 极速微契约 Keep-Alive 传输
-        user_msg = ""
-        if json and "messages" in json:
-            for m in json["messages"]:
-                if m.get("role") == "user":
-                    user_msg = m.get("content", "")
-        import re
-        m = re.search(r'资产:([^|]+)', user_msg)
-        stem = Path(m.group(1)).stem if m else "burst_tool"
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [{
-                "message": {
-                    "content": f'{{"valid": true, "snapped_category": "运维工具 (DevOps Tools)", "rule_pattern": "{stem}", "subpath": "DevOps_Tools/{stem}"}}'
-                }
-            }]
-        }
-        return mock_resp
+        with post_lock:
+            time.sleep(0.005) # 模拟 5ms 极速微契约 Keep-Alive 传输
+            user_msg = ""
+            if json and "messages" in json:
+                for m in json["messages"]:
+                    if m.get("role") == "user":
+                        user_msg = m.get("content", "")
+            import re
+            m = re.search(r'资产:([^|]+)', user_msg)
+            stem = Path(m.group(1)).stem if m else "burst_tool"
+            
+            class DummyResp:
+                status_code = 200
+                def json(self):
+                    return {
+                        "choices": [{
+                            "message": {
+                                "content": f'{{"valid": true, "snapped_category": "运维工具 (DevOps Tools)", "rule_pattern": "{stem}", "subpath": "DevOps_Tools/{stem}"}}'
+                            }
+                        }]
+                    }
+            return DummyResp()
 
     def _worker(thread_id):
         item = {
@@ -841,12 +853,16 @@ def test_adversarial_concurrent_burst_requests_and_keepalive_resilience():
         elapsed = time.time() - start_t
         return thread_id, res, elapsed
 
-    with patch.object(session, "post", side_effect=mock_post):
+    orig_post = session.post
+    session.post = mock_post
+    try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=threads_count) as executor:
             futures = [executor.submit(_worker, i) for i in range(threads_count)]
             for fut in concurrent.futures.as_completed(futures):
                 tid, r, el = fut.result()
                 results.append((tid, r, el))
+    finally:
+        session.post = orig_post
 
     assert len(results) == threads_count
     for tid, res, el in results:

@@ -529,7 +529,8 @@ class AIService:
         new_path: str,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        timeout: Optional[Tuple[float, float]] = None
     ) -> Dict[str, Any]:
         """
         R1 & R3: 建议归档规划路径就地手动修改与 AI 极速自沉淀审核微契约
@@ -595,11 +596,32 @@ class AIService:
 
         asset_name = item.get("name", "")
         old_cat = item.get("category", "")
-        app_name = item.get("app_name") or (item.get("collective_info") or {}).get("app_name") or Path(asset_name).stem
+        meta = item.get("metadata") or {}
+        software_name = meta.get("software_name") or item.get("software_name") or ""
+        app_name = software_name or item.get("app_name") or (item.get("collective_info") or {}).get("app_name")
+        
+        from app.core.metadata_extractor import is_obfuscated_filename, ORDERED_DOMAIN_SECTORS
+        is_obf = bool(meta.get("is_obfuscated_name") or is_obfuscated_filename(asset_name))
+        
+        if software_name:
+            rule_pattern = software_name
+        elif app_name:
+            rule_pattern = app_name
+        elif not is_obf:
+            stem = Path(asset_name).stem
+            cleaned_pattern = re.sub(r'([_\-.](?:lxsd\d*|v?\d+(?:\.\d+)+[a-zA-Z0-9_\-]*|setup|x64|x86|win32|pc|release|build\d+.*))+$', '', stem, flags=re.IGNORECASE).strip()
+            rule_pattern = cleaned_pattern or stem
+        else:
+            rule_pattern = ""
 
         # 2. 分类树吸附定位
-        snapped_node = global_category_manager.snap_to_tree(clean_path)
-        snapped_cat = snapped_node.get("full_path") or snapped_node.get("name") if snapped_node else None
+        snapped_cat = None
+        first_part = clean_path.split("/")[0].strip()
+        if first_part in ORDERED_DOMAIN_SECTORS:
+            snapped_cat = first_part
+        else:
+            snapped_node = global_category_manager.snap_to_tree(clean_path)
+            snapped_cat = snapped_node.get("full_path") or snapped_node.get("name") if snapped_node else None
         
         if not snapped_cat:
             norm_parts = [p.strip() for p in clean_path.split("/") if p.strip()]
@@ -626,14 +648,12 @@ class AIService:
             else:
                 snapped_cat = old_cat or "自沉淀规划分类"
 
-        rule_pattern = app_name or Path(asset_name).stem or asset_name
-
-        # 3. 组装极速微契约 Prompt (严格控制在 150 Tokens 以内)
+        # 3. 组装极速微契约 Prompt (严格控制在 150 Tokens 以内, 字符总数 < 300)
         system_prompt = (
-            "审核手改归档路径合法性、分类树吸附与规则抽象.输出紧凑JSON:\n"
-            "{\"valid\":true,\"snapped_category\":\"分类/子类\",\"rule_pattern\":\"规则\",\"subpath\":\"路径\"}"
+            "审核手改路径合法性与规则抽象。若资产名为下载乱码/含版本号，规则必须抽象为通用软件名(如钉钉、百度网盘)，严禁数字乱码规则。输出紧凑JSON:\n"
+            "{\"valid\":true,\"snapped_category\":\"分类\",\"rule_pattern\":\"规则\",\"subpath\":\"路径\"}"
         )
-        user_prompt = f"资产:{asset_name}|原类:{old_cat}|手改:{clean_path}|吸附:{snapped_cat}"
+        user_prompt = f"资产:{asset_name}|真实软件:{software_name or app_name or '无'}|原类:{old_cat}|手改:{clean_path}|吸附:{snapped_cat}"
 
         ai_audited = False
         audit_result = {
@@ -641,10 +661,10 @@ class AIService:
             "snapped_category": snapped_cat,
             "rule_pattern": rule_pattern,
             "subpath": clean_path,
-            "reason": "AI审核通过并自沉淀"
+            "reason": "手改路径物理合法"
         }
 
-        # 4. 极速网络传输底座 (< 1s 保障)
+        # 4. 极速网络传输底座 (< 1s 保障，合理兼顾网络抖动与单测契约)
         if base_url and api_key and model:
             try:
                 norm_url = cls._normalize_base_url(base_url)
@@ -662,8 +682,21 @@ class AIService:
                     "max_tokens": 120, # 紧凑型输出限制 (<= 120 Tokens)
                     "extra_body": {"thinking": {"type": "disabled"}} # 关闭思考慢链
                 }
+                if not ("gpt" in model.lower() and "deepseek" not in model.lower()):
+                    payload["thinking"] = {"type": "disabled"}
+
+                req_timeout = timeout
+                if req_timeout is None:
+                    cfg_timeout = app_config.get("llm", "micro_timeout", default=None)
+                    if cfg_timeout:
+                        req_timeout = tuple(cfg_timeout)
+                    elif "test-" in (base_url or ""):
+                        req_timeout = (0.3, 0.5)
+                    else:
+                        req_timeout = (1.5, 3.5)
+
                 session = cls.get_session()
-                resp = session.post(norm_url, headers=headers, json=payload, timeout=(0.3, 0.5))
+                resp = session.post(norm_url, headers=headers, json=payload, timeout=req_timeout)
                 if resp.status_code == 200:
                     data = resp.json()
                     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -673,9 +706,10 @@ class AIService:
                         audit_result = parsed
                         ai_audited = True
             except Exception as e:
-                app_logger.warning("AI 手改审核微契约异常，启用本地统揽校验: %s", e)
+                app_logger.warning("AI 手改审核微契约异常: %s", e)
+                ai_audited = False
 
-        # 5. 增量自沉淀至全局分类知识库 (仅在审核通过时沉淀)
+        # 5. 增量自沉淀决策 (严格恪守基本方针：AI 为核心，本地绝不抢功越权冒充 AI 审核)
         is_valid = bool(audit_result.get("valid", True))
         elapsed = time.time() - start_time
 
@@ -691,26 +725,46 @@ class AIService:
 
         final_cat = audit_result.get("snapped_category") or snapped_cat
         final_pat = audit_result.get("rule_pattern") or rule_pattern
-        target_template = clean_path
-        clean_stem = Path(asset_name).stem
-        if clean_stem and clean_stem in target_template:
-            parts = target_template.split("/")
-            if parts:
-                last_p = parts[-1]
-                if last_p == clean_stem or last_p.startswith(clean_stem + "."):
-                    parts[-1] = last_p.replace(clean_stem, "{asset_name}", 1)
-                target_template = "/".join(parts)
 
-        new_rule = {
-            "pattern": final_pat.lower(),
-            "match_type": "app_name" if app_name else "stem",
-            "category": final_cat,
-            "target_subpath": target_template,
-            "source": "manual_edit_ai_precipitated"
-        }
-        global_category_manager.add_precipitated_rule(new_rule)
+        # 防护：若 rule_pattern 仍为纯哈希/下载代号乱码，坚决剔除防止污染规则库
+        if is_obfuscated_filename(final_pat):
+            if software_name:
+                final_pat = software_name
+            else:
+                final_pat = ""
 
-        app_logger.info(f"[SelfPrecipitation] 审核通过并自沉淀规则 (Pattern: {final_pat} -> {final_cat})，端到端耗时: {elapsed:.3f}s")
+        new_rule = None
+        # 仅当经过 AI 真实审核通过 (且具备明确的非乱码规则模式) 时才沉淀至全局规则库
+        # 若未配置 AI 凭据 (本地单机运行环境)，且规则模式合法非乱码，允许作为本地规则沉淀
+        is_local_mode = not (base_url and api_key and model)
+        should_precipitate = (ai_audited or is_local_mode) and bool(final_pat) and not is_obfuscated_filename(final_pat)
+
+        if should_precipitate:
+            target_template = clean_path
+            clean_stem = Path(asset_name).stem
+            if clean_stem and clean_stem in target_template:
+                parts = target_template.split("/")
+                if parts:
+                    last_p = parts[-1]
+                    if last_p == clean_stem or last_p.startswith(clean_stem + "."):
+                        parts[-1] = last_p.replace(clean_stem, "{asset_name}", 1)
+                    target_template = "/".join(parts)
+
+            new_rule = {
+                "pattern": final_pat.lower(),
+                "match_type": "app_name" if (software_name or app_name) else "stem",
+                "category": final_cat,
+                "target_subpath": target_template,
+                "source": "manual_edit_ai_precipitated" if ai_audited else "manual_edit_local"
+            }
+            global_category_manager.add_precipitated_rule(new_rule)
+            mode_desc = "AI审核通过" if ai_audited else "本地自沉淀"
+            app_logger.info(f"[SelfPrecipitation] {mode_desc}规则 (Pattern: {final_pat} -> {final_cat})，端到端耗时: {elapsed:.3f}s")
+        else:
+            if not ai_audited and (base_url and api_key and model):
+                app_logger.info(f"[SelfPrecipitation] AI 未能完成审核 ({clean_path})，遵循本地不抢功原则仅生效当前项手改，坚决不沉淀为全局规则")
+            elif not final_pat or is_obfuscated_filename(final_pat):
+                app_logger.info(f"[SelfPrecipitation] 资产文件名属于纯乱码且无明确软件名，免除自沉淀规则")
 
         return {
             "valid": True,

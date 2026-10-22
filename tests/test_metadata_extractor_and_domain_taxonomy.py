@@ -5,12 +5,15 @@
 
 import os
 import sys
+import json
 import tempfile
 import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
+from PySide6.QtWidgets import QApplication
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -28,7 +31,7 @@ from app.core.metadata_extractor import (
 )
 from app.core.domain_models import ScannedAsset, AssetUnit
 from app.core.app_detector import AppDetector
-from app.ui.components.data_table import FileTableModel
+from app.ui.components.data_table import FileTableModel, FileDataGridWidget
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
@@ -323,3 +326,112 @@ def test_unified_scanner_extracts_collective_runtime_dir():
                 assert asset.metadata["morphology"] == "portable_runtime_dir"
                 assert asset.target_subpath == "_已解压程序与归档/向日葵"
 
+
+
+def test_table_column_auto_fit_and_rich_tooltips():
+    """验证表格自适应列宽动态计算与全字段 ToolTip 提示，杜绝省略号截断"""
+    app = QApplication.instance() or QApplication(sys.argv)
+    grid = FileDataGridWidget(is_selectable=True)
+    
+    test_data = [
+        {
+            "name": "BaiduNetdisk_lxsd1_8.8.6.102_pc_pf30002_release.exe",
+            "path": "D:/安装包/BaiduNetdisk_lxsd1_8.8.6.102_pc_pf30002_release.exe",
+            "category": "02_云盘与同步 (Cloud & Sync)",
+            "suggested_archive_path": "02_云盘与同步/百度网盘/BaiduNetdisk.exe",
+            "size": 520 * 1024 * 1024,
+            "phase_status": "阶段一已归类 (待治理)",
+            "tag": "建议保留最新正本",
+            "reason": "已识别官方完整安装程序并解析真实版本号",
+            "duplicate_group_id": "DUP-GRP-001",
+            "mtime": 1700000000
+        }
+    ]
+    
+    # 填充数据，触发 auto_fit_columns
+    grid.populate_data(test_data)
+    
+    # 验证动态列宽下限均足够充裕，杜绝 ... 省略号截断
+    assert grid.table_view.columnWidth(1) >= 280 # 资产名称
+    assert grid.table_view.columnWidth(2) >= 180 # 高阶分类
+    assert grid.table_view.columnWidth(3) >= 220 # 规划路径
+    assert grid.table_view.columnWidth(6) >= 180 # 治理标记/理由
+    assert grid.table_view.columnWidth(9) >= 260 # 绝对路径
+    
+    # 验证所有 10 列均支持悬浮显示无截断完整信息
+    model = grid.source_model
+    for col in range(10):
+        tip = model.data(model.index(0, col), Qt.ToolTipRole)
+        assert tip is not None and str(tip).strip() != ""
+
+
+def test_ai_audit_and_precipitation_safety_and_obfuscation_guard():
+    """
+    验证 AI 手改审核与自沉淀安全防护：
+    1. 超时或网络异常时，恪守本地不抢功原则，严禁自沉淀乱码规则；
+    2. 乱码文件名 (8799-...) 坚决杜绝进入规则库；
+    3. 安装包冗余版本后缀 (BaiduNetdisk_lxsd1_8.8.6.102) 自动提炼为通用软件名并吸附至有序业务领域目录。
+    """
+    from app.core.ai_service import AIService
+    from app.core.category_manager import global_category_manager
+
+    # 1. 模拟乱码安装包超时场景
+    obf_item = {
+        "name": "8799-2026-10-13020405-1791871445526.exe",
+        "path": "D:/Downloads/8799-2026-10-13020405-1791871445526.exe",
+        "category": "未分类"
+    }
+    
+    # 模拟网络超时
+    with patch.object(AIService.get_session(), "post", side_effect=requests.exceptions.ReadTimeout("read timeout=0.5")):
+        res_timeout = AIService.audit_manual_path_and_precipitate(
+            obf_item,
+            "06_办公与通讯/钉钉/钉钉_9.0.2.exe",
+            base_url="https://api.test-llm.com/v1",
+            api_key="sk-test",
+            model="fast-model"
+        )
+        assert res_timeout["valid"] is True
+        assert res_timeout["ai_audited"] is False
+        assert res_timeout["rule"] is None # 严禁沉淀乱码规则
+        assert not any("8799-2026" in r.get("pattern", "") for r in global_category_manager.get_precipitated_rules())
+
+    # 2. 模拟真实 AI 审核通过 BaiduNetdisk 安装包
+    baidu_item = {
+        "name": "BaiduNetdisk_lxsd1_8.8.6.102.exe",
+        "path": "D:/安装包/BaiduNetdisk_lxsd1_8.8.6.102.exe",
+        "category": "未分类",
+        "metadata": {"software_name": "百度网盘"}
+    }
+    
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "valid": True,
+                    "snapped_category": "02_云盘与同步",
+                    "rule_pattern": "百度网盘",
+                    "subpath": "02_云盘与同步/百度网盘/BaiduNetdisk_lxsd1_8.8.6.102.exe"
+                })
+            }
+        }]
+    }
+    
+    with patch.object(AIService.get_session(), "post", return_value=mock_resp):
+        res_baidu = AIService.audit_manual_path_and_precipitate(
+            baidu_item,
+            "02_云盘与同步/百度网盘/BaiduNetdisk_lxsd1_8.8.6.102.exe",
+            base_url="https://api.test-llm.com/v1",
+            api_key="sk-test",
+            model="fast-model"
+        )
+        assert res_baidu["valid"] is True
+        assert res_baidu["ai_audited"] is True
+        rule = res_baidu["rule"]
+        assert rule is not None
+        assert rule["pattern"] == "百度网盘"
+        assert rule["category"] == "02_云盘与同步"
+        assert "{asset_name}" in rule["target_subpath"]
+        assert "lxsd1_8.8.6.102" not in rule["pattern"]
