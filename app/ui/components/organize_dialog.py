@@ -230,7 +230,8 @@ class OrganizePreviewDialog(QDialog):
         
         # 绑定专用就地微调编辑委托 (防清空重写、历史候选预览、F2/双击激活)
         self.tree_delegate = TreeInplaceItemDelegate(self, self.tree)
-        self.tree.setItemDelegate(self.tree_delegate)
+        self.tree.setItemDelegateForColumn(2, self.tree_delegate)
+        self.tree.setItemDelegateForColumn(3, self.tree_delegate)
         self.tree.setEditTriggers(
             QAbstractItemView.DoubleClicked |
             QAbstractItemView.EditKeyPressed |
@@ -376,7 +377,8 @@ class OrganizePreviewDialog(QDialog):
                 Qt.ItemIsEnabled |
                 Qt.ItemIsSelectable
             )
-            group_item.setCheckState(0, Qt.Checked if default_checked else Qt.Unchecked)
+            init_check_state = Qt.Checked if default_checked else Qt.Unchecked
+            group_item.setCheckState(0, init_check_state)
             group_item.setData(0, Qt.UserRole, {"type": "group", "data": group})
             
             from pathlib import Path
@@ -452,12 +454,71 @@ class OrganizePreviewDialog(QDialog):
             if sub_items:
                 dummy = QTreeWidgetItem(group_item)
                 dummy.setText(0, "加载中...")
+                dummy.setFlags(dummy.flags() | Qt.ItemIsUserCheckable)
+                dummy.setCheckState(0, init_check_state)
+            
+            # 关键：在添加 dummy 子项后重新强制设定顶级项的 CheckState，防止 Qt ItemIsAutoTristate 计算丢失复选框
+            group_item.setCheckState(0, init_check_state)
 
         self._is_updating_checks = False
         self.tree.setUpdatesEnabled(True)
         # self.tree.expandToDepth(0)
+        self.update_stats()
 
 
+    def _is_unexpanded(self, item: QTreeWidgetItem) -> bool:
+        """判断顶级节点是否尚处于分批延迟加载状态（未展开真实子节点）"""
+        return item is not None and item.childCount() == 1 and item.child(0).text(0) == "加载中..."
+
+    def get_selected_file_items(self) -> List[Dict[str, Any]]:
+        """
+        获取当前所有勾选的文件项。
+        支持：
+        1. 未展开的顶级分组节点（以顶级节点勾选状态为准，提取其 group['sub_items']）；
+        2. 已展开的节点（以各个子项的逐项独立勾选状态为准，支持局部勾选/反选）。
+        """
+        selected_file_items = []
+
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            u_data = item.data(0, Qt.UserRole) or {}
+            if u_data.get("type") != "group":
+                continue
+            group = u_data.get("data", {})
+            eff_cat = group.get("effective_category", group.get("suggested_category", ""))
+            sub_items = group.get("sub_items", [])
+
+            if self._is_unexpanded(item):
+                if item.checkState(0) == Qt.Checked:
+                    if sub_items:
+                        for sub in sub_items:
+                            selected_file_items.append({
+                                "path": sub.get("original_path", ""),
+                                "target_category": eff_cat,
+                                "custom_target": sub.get("target_path", ""),
+                                "size": sub.get("size", 0)
+                            })
+                    elif group.get("original_root"):
+                        selected_file_items.append({
+                            "path": group.get("original_root", ""),
+                            "target_category": eff_cat,
+                            "custom_target": group.get("target_root", ""),
+                            "size": group.get("total_size", 0)
+                        })
+            else:
+                for j in range(item.childCount()):
+                    child = item.child(j)
+                    c_data = child.data(0, Qt.UserRole) or {}
+                    if c_data.get("type") == "file" and child.checkState(0) == Qt.Checked:
+                        sub = c_data.get("data", {})
+                        selected_file_items.append({
+                            "path": sub.get("original_path", ""),
+                            "target_category": eff_cat,
+                            "custom_target": sub.get("target_path", ""),
+                            "size": sub.get("size", 0)
+                        })
+
+        return selected_file_items
     def _set_all_checked_state(self, state: Any):
         if isinstance(state, bool):
             check_state = Qt.Checked if state else Qt.Unchecked
@@ -477,6 +538,7 @@ class OrganizePreviewDialog(QDialog):
             recurse_check(self.tree.topLevelItem(i))
             
         self._is_updating_checks = False
+        self.update_stats()
 
 
     def _on_category_edited(self, item: QTreeWidgetItem, new_cat_name: str):
@@ -651,6 +713,7 @@ class OrganizePreviewDialog(QDialog):
             u_data = item.data(0, Qt.UserRole)
             if not u_data or u_data.get("type") != "group": return
             
+            parent_check_state = item.checkState(0)
             item.removeChild(item.child(0))
             group = u_data["data"]
             sub_items = group.get("sub_items", [])
@@ -690,7 +753,7 @@ class OrganizePreviewDialog(QDialog):
                         Qt.ItemIsEnabled |
                         Qt.ItemIsSelectable
                     )
-                    child_item.setCheckState(0, item.checkState(0))
+                    child_item.setCheckState(0, parent_check_state)
                     
                     child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "parent_group": group})
                     child_item.setText(0, sub.get("relative_path", ""))
@@ -783,6 +846,7 @@ class OrganizePreviewDialog(QDialog):
                     continue
                 
                 if item.childCount() == 1 and item.child(0).text(0) == "加载中...":
+                    parent_check_state = item.checkState(0)
                     item.removeChild(item.child(0))
                     group = u_data["data"]
                     risk = group.get("risk_level", "未知风险")
@@ -804,7 +868,7 @@ class OrganizePreviewDialog(QDialog):
                             Qt.ItemIsEnabled |
                             Qt.ItemIsSelectable
                         )
-                        child_item.setCheckState(0, item.checkState(0))
+                        child_item.setCheckState(0, parent_check_state)
                         
                         child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "parent_group": group})
                         child_item.setText(0, sub.get("relative_path", ""))
@@ -861,29 +925,21 @@ class OrganizePreviewDialog(QDialog):
     def _select_safe_only(self):
         self._is_updating_checks = True
         
-        def recurse_safe(item, parent_safe=False):
-            u_data = item.data(0, Qt.UserRole) or {}
-            if u_data.get("type") == "group":
-                g_info = u_data.get("data", {})
-            else:
-                p = item.parent()
-                p_data = p.data(0, Qt.UserRole) if p else {}
-                g_info = p_data.get("data", {})
-            
-            is_safe = parent_safe
-            if u_data.get("type") == "group" and g_info:
-                is_safe = (not g_info.get("require_confirmation", False)) and (g_info.get("confidence", 0) >= 0.7) and ("低风险" in g_info.get("risk_level", ""))
-            
-            if u_data.get("type") == "file":
-                item.setCheckState(0, Qt.Checked if is_safe else Qt.Unchecked)
-                
-            for j in range(item.childCount()):
-                recurse_safe(item.child(j), is_safe)
-                
         for i in range(self.tree.topLevelItemCount()):
-            recurse_safe(self.tree.topLevelItem(i))
+            item = self.tree.topLevelItem(i)
+            u_data = item.data(0, Qt.UserRole) or {}
+            if u_data.get("type") != "group":
+                continue
+            g_info = u_data.get("data", {})
+            is_safe = (not g_info.get("require_confirmation", False)) and (g_info.get("confidence", 0) >= 0.7) and ("低风险" in g_info.get("risk_level", ""))
+            target_state = Qt.Checked if is_safe else Qt.Unchecked
             
+            item.setCheckState(0, target_state)
+            for j in range(item.childCount()):
+                item.child(j).setCheckState(0, target_state)
+                
         self._is_updating_checks = False
+        self.update_stats()
 
 
     def _schedule_update_stats(self, item, column):
@@ -896,50 +952,26 @@ class OrganizePreviewDialog(QDialog):
         self._stats_timer.start(50) # 50ms debounce
 
     def update_stats(self):
-        selected_count = 0
-        total_bytes = 0
-        from PySide6.QtCore import Qt
+        selected_items = self.get_selected_file_items()
+        selected_count = len(selected_items)
+        total_bytes = sum(it.get("size", 0) for it in selected_items)
         
-        def recurse(item):
-            nonlocal selected_count, total_bytes
-            u_data = item.data(0, Qt.UserRole) or {}
-            if u_data.get("type") == "file" and item.checkState(0) == Qt.Checked:
-                selected_count += 1
-                sub = u_data.get("data", {})
-                total_bytes += sub.get("size", 0)
-            for i in range(item.childCount()):
-                recurse(item.child(i))
-                
-        for i in range(self.tree.topLevelItemCount()):
-            recurse(self.tree.topLevelItem(i))
-            
         from app.utils.file_helper import format_size
         self.lbl_auto_checked.setText(f"已勾选: {selected_count}项 ({format_size(total_bytes)})")
+        
+        total_groups = len(self.classification_items)
+        total_files = sum(g.get("file_count", len(g.get("sub_items", []))) for g in self.classification_items)
+        need_conf_groups = sum(1 for g in self.classification_items if g.get("require_confirmation", False))
+        if hasattr(self, "stats_label") and self.stats_label:
+            self.stats_label.setText(
+                f"待归档单元: <b>{total_groups}</b> 个目录/组 (共 <b>{total_files}</b> 个文件) | "
+                f"需人工确认: <span style='color: {'#F59E0B' if need_conf_groups > 0 else '#10B981'}; font-weight: bold;'>{need_conf_groups} 组</span> | "
+                f"已勾选: <span style='color: #10B981; font-weight: bold;'>{selected_count} 个文件 ({format_size(total_bytes)})</span>"
+            )
 
     def export_script(self):
         """仅导出执行批处理脚本"""
-        selected_file_items = []
-        
-        def recurse_collect(item):
-            state = item.checkState(0)
-            u_data = item.data(0, Qt.UserRole) or {}
-            if u_data.get("type") == "file" and state == Qt.Checked:
-                sub_info = u_data.get("data", {})
-                p = item.parent()
-                p_data = p.data(0, Qt.UserRole) if p else {}
-                group_data = p_data.get("data", {})
-                if sub_info:
-                    eff_cat = group_data.get("effective_category", group_data.get("suggested_category", ""))
-                    selected_file_items.append({
-                        "path": sub_info.get("original_path", ""),
-                        "target_category": eff_cat,
-                        "custom_target": sub_info.get("target_path", "")
-                    })
-            for j in range(item.childCount()):
-                recurse_collect(item.child(j))
-
-        for i in range(self.tree.topLevelItemCount()):
-            recurse_collect(self.tree.topLevelItem(i))
+        selected_file_items = self.get_selected_file_items()
 
         if not selected_file_items:
             QMessageBox.warning(self, "提示", "未勾选任何文件！")
@@ -978,37 +1010,19 @@ class OrganizePreviewDialog(QDialog):
 
     def execute_archive(self):
         """收集勾选的项目并启动后台流式归档"""
-        selected_file_items = []
-        selected_groups_count = 0
-
-        def recurse_collect(item):
-            state = item.checkState(0)
-            u_data = item.data(0, Qt.UserRole) or {}
-            
-            if u_data.get("type") == "file" and state == Qt.Checked:
-                sub_info = u_data.get("data", {})
-                p = item.parent()
-                p_data = p.data(0, Qt.UserRole) if p else {}
-                group_data = p_data.get("data", {})
-                if sub_info:
-                    eff_cat = group_data.get("effective_category", group_data.get("suggested_category", ""))
-                    selected_file_items.append({
-                        "path": sub_info.get("original_path", ""),
-                        "target_category": eff_cat,
-                        "custom_target": sub_info.get("target_path", "")
-                    })
-            
-            for j in range(item.childCount()):
-                recurse_collect(item.child(j))
-
-        for i in range(self.tree.topLevelItemCount()):
-            recurse_collect(self.tree.topLevelItem(i))
+        selected_file_items = self.get_selected_file_items()
 
         if not selected_file_items:
             QMessageBox.warning(self, "提示", "您尚未勾选任何需要归档的目录或文件！")
             return
 
-        total_bytes = sum(os.path.getsize(it["path"]) for it in selected_file_items if os.path.exists(it["path"]))
+        selected_groups_count = 0
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item.checkState(0) in (Qt.Checked, Qt.PartiallyChecked):
+                selected_groups_count += 1
+
+        total_bytes = sum(it.get("size", 0) for it in selected_file_items)
         reply = QMessageBox.question(
             self, "确认启动后台归档",
             f"已勾选 <b>{len(selected_file_items)}</b> 个文件 (共 {format_size(total_bytes)})\n"

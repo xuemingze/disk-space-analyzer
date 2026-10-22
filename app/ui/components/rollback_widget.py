@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QListWidget, QListWidgetItem,
-    QTreeWidget, QTreeWidgetItem, QPushButton, QLabel, QMessageBox
+    QTreeWidget, QTreeWidgetItem, QPushButton, QLabel, QMessageBox, QTreeWidgetItemIterator
 )
 from PySide6.QtCore import Qt
 from app.utils.file_helper import format_size
@@ -189,6 +189,7 @@ class RollbackWidget(QWidget):
                 node.setCheckState(0, Qt.Unchecked)
             else:
                 node.setFlags(node.flags() & ~Qt.ItemIsUserCheckable)
+                node.setCheckState(0, Qt.Unchecked)
                 if rb_status == "success":
                     node.setForeground(0, Qt.green)
                 else:
@@ -200,10 +201,10 @@ class RollbackWidget(QWidget):
         pass
 
     def select_all_rollbackable(self):
-        iterator = QTreeWidget.QTreeWidgetItemIterator(self.tree_widget)
+        iterator = QTreeWidgetItemIterator(self.tree_widget)
         while iterator.value():
             item = iterator.value()
-            if item.flags() & Qt.ItemIsUserCheckable:
+            if item.childCount() == 0 and (item.flags() & Qt.ItemIsUserCheckable):
                 item.setCheckState(0, Qt.Checked)
             iterator += 1
 
@@ -212,10 +213,10 @@ class RollbackWidget(QWidget):
             return
             
         selected_ids = []
-        iterator = QTreeWidget.QTreeWidgetItemIterator(self.tree_widget)
+        iterator = QTreeWidgetItemIterator(self.tree_widget)
         while iterator.value():
             item = iterator.value()
-            if item.childCount() == 0 and item.checkState(0) == Qt.Checked:
+            if item.childCount() == 0 and item.checkState(0) == Qt.Checked and (item.flags() & Qt.ItemIsUserCheckable):
                 e_id = item.data(0, Qt.UserRole)
                 if e_id:
                     selected_ids.append(e_id)

@@ -4,8 +4,8 @@
 [![PySide6 / Qt6](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-brightgreen.svg)](https://pypi.org/project/PySide6/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
-[![Version: v1.9.0](https://img.shields.io/badge/Release-v1.9.0-blue.svg)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)
-[![Test Suite: 178 Passed](https://img.shields.io/badge/Tests-178%20Passed%20(100%25)-brightgreen.svg)](./tests/)
+[![Version: v1.9.1](https://img.shields.io/badge/Release-v1.9.1-blue.svg)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)
+[![Test Suite: 178 Passed](https://img.shields.io/badge/Tests-182%20Passed%20(100%25)-brightgreen.svg)](./tests/)
 
 > **专为 Windows 深度空间清理、文件智能规整与生命周期治理打造的桌面客户端**。  
 > 告别 C 盘爆满焦虑、数万散落文件堆积卡顿、海量重复文件吞噬硬盘！**强用途、重上手、秒级响应**，一键帮您理清磁盘、安全释放数十 GB 空间。
@@ -16,12 +16,12 @@
 
 ## 📥 快速下载与安装
 
-**➡️ [点击前往最新发布页 (v1.9.0)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [历史版本发布记录](./docs/) · [详细使用指南](./docs/使用说明.md)
+**➡️ [点击前往最新发布页 (v1.9.1)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [历史版本发布记录](./docs/) · [详细使用指南](./docs/使用说明.md)
 
 | 分发包类型 | 大小 | 特点与适用场景 | 快速下载 |
 | :--- | ---: | :--- | :---: |
-| **`DiskSpaceAnalyzer-1.9.0-win64-portable.zip`** | ~80 MB | **⭐ 强烈推荐（绿色便携包）**。解压到任意文件夹，双击 `DiskSpaceAnalyzer.exe` 即可直接运行。**无需安装 Python**，秒级极速启动。 | [⬇️ 立即下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.0-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.9.0-win64.exe` | ~80 MB | **单文件独立版**。单文件双击直接运行，无需解压；首次运行时会有短暂自释放过程。 | [⬇️ 立即下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.0-win64.exe) |
+| **`DiskSpaceAnalyzer-1.9.1-win64-portable.zip`** | ~80 MB | **⭐ 强烈推荐（绿色便携包）**。解压到任意文件夹，双击 `DiskSpaceAnalyzer.exe` 即可直接运行。**无需安装 Python**，秒级极速启动。 | [⬇️ 立即下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.1-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.9.1-win64.exe` | ~80 MB | **单文件独立版**。单文件双击直接运行，无需解压；首次运行时会有短暂自释放过程。 | [⬇️ 立即下载](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.1-win64.exe) |
 | 源码运行（开发者） | — | 命令行运行：`pip install -r requirements.txt && python main.py` | [查看 GitHub Releases](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
 
 * 🖥️ **系统要求**：Windows 10 / 11 64 位。
