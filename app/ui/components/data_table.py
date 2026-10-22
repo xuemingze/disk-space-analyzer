@@ -380,7 +380,7 @@ class FileTableModel(QAbstractTableModel):
     def apply_ai_execution_plan(self, execution_items: List[Dict[str, Any]]) -> int:
         """
         接收 AI 创作的结构化执行清单，直接导入并就地升级模型内部资产属性：
-        - 覆盖 category 为 AI 研判的高阶分类（如经控、业务单据）
+        - 覆盖 category 为 AI 研判的高阶分类（如业务单据、发票凭证）
         - 覆盖 target_subpath 为 AI 推荐的多级归档路径
         - 覆盖 tag 与 reason 为 AI 研判理由
         - 根据 AI 研判将安全/建议操作项纳入选中

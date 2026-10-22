@@ -17,7 +17,7 @@ from app.core.organize_models import (
     OrganizeOptions, OrganizeMode, sanitize_subpath, extract_file_content_sample
 )
 from app.core.domain_models import (
-    VersionClusterGroup, VersionClusterItem, SemanticDiffDecision
+    VersionClusterGroup, VersionClusterItem, SemanticDiffDecision, ArchiveDestinationPath
 )
 
 
@@ -947,32 +947,36 @@ class AIService:
     def _calculate_target_path(
         cls, cat_name: str, app_name: str, dest_root_p: Path, orig_root_p: Path, is_dir: bool, subpath: str = ""
     ) -> Path:
-        active_cats = global_category_manager.get_active()
         clean_sub = sanitize_subpath(subpath)
         
-        # 若提供了推荐的细粒度子目录层级，优先在主分类下构建该层级 (防止重名重复嵌套)
+        # 若提供了推荐的细粒度子目录层级，优先通过 ArchiveDestinationPath 构建 (彻底解决相邻与包含重复嵌套 Bug)
         if clean_sub:
-            sub_p = Path(clean_sub)
-            if is_dir:
-                sub_parts_lower = [part.lower() for part in sub_p.parts]
-                if orig_root_p.name.lower() == sub_p.name.lower() or (orig_root_p.name.lower() in sub_parts_lower):
-                    return dest_root_p / cat_name / sub_p
-                return dest_root_p / cat_name / sub_p / orig_root_p.name
-            else:
-                return dest_root_p / cat_name / sub_p
+            dest_obj = ArchiveDestinationPath.build(
+                dest_root=dest_root_p,
+                category=cat_name,
+                subpath=clean_sub,
+                entity_name=orig_root_p.name,
+                is_dir=is_dir
+            )
+            return dest_obj.path
 
+        active_cats = global_category_manager.get_active()
         for cat in active_cats:
             if cat["name"] == cat_name:
                 template = cat.get("target_path_template", "{archive_root}/{category_name}/{app_name}")
                 res = template.replace("{archive_root}", str(dest_root_p))
                 res = res.replace("{category_name}", cat_name)
                 res = res.replace("{app_name}", app_name if app_name else orig_root_p.name)
-                return Path(res)
+                # 使用 ArchiveDestinationPath 折叠潜在重复段
+                return ArchiveDestinationPath(res).path
         # Fallback
-        if is_dir:
-            return dest_root_p / cat_name / orig_root_p.name
-        else:
-            return dest_root_p / cat_name
+        dest_obj = ArchiveDestinationPath.build(
+            dest_root=dest_root_p,
+            category=cat_name,
+            entity_name=orig_root_p.name,
+            is_dir=is_dir
+        )
+        return dest_obj.path
 
     """
     负责对接 OpenAI 兼容规范的大模型服务接口：
@@ -1589,8 +1593,8 @@ class AIService:
             whitelist_prompt = (
                 f"\n【已有全局参考分类（仅供语义参考，非硬性限制）】\n"
                 f"系统现存的基础分类有：\n{cat_list_str}\n"
-                f"【核心说明】：上述基础分类仅作为参考基准，绝非硬性死规矩！若资产具备明确的业务主题（例如经控、财务单据、BI、工程架构、模型训练等），"
-                f"鼓励你自主提炼出最精准契合的高阶全景分类名称（如直接归为'经控'、'财务核算'，严禁机械地简单按后缀塞入'文档'）。\n"
+                f"【核心说明】：上述基础分类仅作为参考基准，绝非硬性死规矩！若资产具备明确的业务主题（例如财务单据、发票凭证、BI、工程架构、模型训练等），"
+                f"鼓励你自主提炼出最精准契合的高阶全景分类名称（如直接归为'发票凭证'、'财务核算'，严禁机械地简单按后缀塞入'文档'）。\n"
                 if cat_list_str else ""
             )
 
@@ -1619,7 +1623,7 @@ class AIService:
                 "4. 【具体多级子目录推荐】：除 suggested_category（一级大类）外，必须在 recommended_subpath 中给出具体的建议子目录层级（例如 '开发工具/VSCode'、'财务/发票/2026'）；\n"
                 "5. 若无法明确识别，必须归入 '未分类/待人工确认'，置信度设低于 0.6 并标记 require_confirmation=true；\n"
                 "6. 【父子语义广义-狭义认知】：若输入单元所属父目录或上下文为广义分类词（如 '项目'、'多媒体'、'设计'、'游戏'、'财务'、'学习'），其所属子目录即为该领域下的狭义独立实体（如 'xxx项目'、'xxx设计'、'xxx查重'），必须以实体为单位整盘原子平移归档，绝不可因内部散杂格式而拆散实体；\n"
-                "7. 【源目录锚定与同源同宿】：若待归档单元带有 source_umbrella（源泛目录锚点，如 'live2D'、'经控'、'发票'），说明它们来自源文件系统中的同一业务泛目录。同源单元严禁分裂到不同的一级分类或互不相干的深层子路径！所有具有相同 source_umbrella 的单元必须保持同一一级大类，且 recommended_subpath 必须以 source_umbrella 为基准（例如直接设为 'live2D' 或 '经控'），与源路径命名结构保持一致，不再过度人为细分；\n"
+                "7. 【源目录锚定与同源同宿】：若待归档单元带有 source_umbrella（源泛目录锚点，如 'live2D'、'发票'），说明它们来自源文件系统中的同一业务泛目录。同源单元严禁分裂到不同的一级分类或互不相干的深层子路径！所有具有相同 source_umbrella 的单元必须保持同一一级大类，且 recommended_subpath 必须以 source_umbrella 为基准（例如直接设为 'live2D' 或 '发票'），与源路径命名结构保持一致，不再过度人为细分；\n"
                 "8. 【有序业务领域目录（Ordered Domain Sectors）】：当处理软件安装包、工具或解压应用时，优先推荐将其归档规划至以下 8 大有序业务领域目录规范中：\n"
                 "   - 01_AI与模型工具 (AI助手、提示词工程、Agent客户端、大模型代理与逆向工具)\n"
                 "   - 02_云盘与同步 (百度网盘、夸克、Syncthing、坚果云、同步工具)\n"
@@ -2023,8 +2027,8 @@ class AIService:
             '    {\n'
             '      "source_path": "原始绝对路径",\n'
             '      "app_name": "所属软件或工具名称",\n'
-            '      "suggested_category": "归档分类（如经控、业务单据、安装包等，全局分类仅作参考）",\n'
-            '      "target_subpath": "推荐的多级归档子目录（例如 经控单据/2026、06_办公与通讯 等）",\n'
+            '      "suggested_category": "归档分类（如业务单据、安装包等，全局分类仅作参考）",\n'
+            '      "target_subpath": "推荐的多级归档子目录（例如 业务单据/2026、06_办公与通讯 等）",\n'
             '      "action": "归档/清理/保留",\n'
             '      "risk_level": "低风险/中风险/高风险",\n'
             '      "rationale": "研判理由（20字内）"\n'
@@ -2033,7 +2037,7 @@ class AIService:
             '  "chart_categories": [{\"category\": \"分类名称\", \"bytes\": 1024, \"percent\": 10.0}]\n'
             "}\n"
             "【全局分类参考说明】：系统现存基础分类有 [" + cat_ref_str + "]，仅供宏观参考，绝非硬性限制！"
-            "若资产具备强烈业务特征（如经控、财务单据、模型训练、微服务、直播工程等），鼓励你自主提炼出高阶业务分类（例如直接归为'经控'，严禁机械地塞入'文档'）。\n"
+            "若资产具备强烈业务特征（如财务单据、发票凭证、模型训练、微服务、直播工程等），鼓励你自主提炼出高阶业务分类（例如直接归为'财务单据'，严禁机械地塞入'文档'）。\n"
             "注意：在 JSON 中，markdown_report 字符串中的所有换行符必须转义为 \\n。若输出纯 Markdown，请确保包含标准 Markdown 表格。\n"
             "【核心原则】：系统采用原子实体集体（软件/工程/模型/账套/缓存）防撕裂与聚合保全机制，对于目录集体资产必须作为一个整体提出治理建议，严禁建议拆散其内部子文件。\n"
             "【八大有序业务领域治理规范（Ordered Domain Sectors）】：\n"

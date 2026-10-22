@@ -9,17 +9,115 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QProgressBar, QMessageBox, QFrame, QAbstractItemView,
-    QMenu
+    QMenu, QComboBox, QStyledItemDelegate, QCompleter
 )
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QBrush, QFont, QIcon
 
-from PySide6.QtWidgets import QProgressDialog, QComboBox
 from app.core.category_manager import global_category_manager
-from pathlib import Path
 from app.core.cleaner import ArchiveWorker
 from app.utils.file_helper import format_size
 from app.core.organize_models import sanitize_subpath
+from app.core.domain_models import ArchiveDestinationPath, HistorySuggestionProvider, ArchivePlanningUnit
+
+
+class TreeInplaceItemDelegate(QStyledItemDelegate):
+    """
+    目录树归档计划预览就地编辑委托：
+    1. 支持建议归档分类 (第 2 列) 与目标规划路径 (第 3 列) 就地编辑微调；
+    2. 严格践行「防清空重写原则 (Zero-clearing Rule)」：初始化时保留并全选原文本，光标就绪，严禁先清空；
+    3. 集成「历史候选与建议联想 (QCompleter)」：
+       - 第 2 列提供标准业务领域与自沉淀分类候选联想；
+       - 第 3 列提供智能生成路径、现有物理目录与历史归档路径候选联想。
+    """
+    def __init__(self, dialog: "OrganizePreviewDialog", parent=None):
+        super().__init__(parent or dialog)
+        self.dialog = dialog
+
+    def createEditor(self, parent, option, index):
+        col = index.column()
+        if col not in (2, 3):
+            return None
+
+        editor = QLineEdit(parent)
+        editor.setStyleSheet("""
+            QLineEdit {
+                background-color: #0F172A;
+                color: #F8FAFC;
+                font-weight: bold;
+                font-size: 12px;
+                padding: 2px 6px;
+                border: 2px solid #38BDF8;
+                border-radius: 4px;
+                selection-background-color: #2563EB;
+                selection-color: #FFFFFF;
+            }
+        """)
+
+        # 候选联想与历史建议 (QCompleter)
+        if col == 2:
+            candidates = HistorySuggestionProvider.get_category_suggestions()
+        else:
+            item = self.dialog.tree.itemFromIndex(index)
+            u_data = item.data(0, Qt.UserRole) if item else {}
+            gdata = u_data.get("data", {}) if isinstance(u_data, dict) else {}
+            app_name = gdata.get("app_name", "")
+            cat = gdata.get("effective_category", gdata.get("suggested_category", ""))
+            candidates = HistorySuggestionProvider.get_path_suggestions(
+                dest_root=self.dialog.destination_root,
+                current_cat=cat,
+                app_name=app_name
+            )
+
+        if candidates:
+            completer = QCompleter(candidates, editor)
+            completer.setCaseSensitivity(Qt.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchContains)
+            completer.setCompletionMode(QCompleter.PopupCompletion)
+
+            popup = completer.popup()
+            if popup:
+                popup.setStyleSheet("""
+                    QListView {
+                        background-color: #1E293B;
+                        color: #F8FAFC;
+                        border: 1px solid #475569;
+                        selection-background-color: #3B82F6;
+                        selection-color: #FFFFFF;
+                        font-size: 12px;
+                        padding: 4px;
+                    }
+                """)
+            editor.setCompleter(completer)
+
+        return editor
+
+    def setEditorData(self, editor, index):
+        # 核心防清空契约：严格在原路径/分类基础上修改，绝不先清空
+        val = index.data(Qt.EditRole) or index.data(Qt.DisplayRole) or ""
+        val_str = str(val).strip()
+        if val_str == "-":
+            val_str = ""
+        editor.setText(val_str)
+        # 文本全选保留，光标就绪，方便用户就地在原路径上增删微调或方向键单字调整
+        editor.selectAll()
+
+    def setModelData(self, editor, model, index):
+        new_text = editor.text().strip()
+        if not new_text:
+            return
+        col = index.column()
+        item = self.dialog.tree.itemFromIndex(index)
+        if not item:
+            return
+
+        if col == 2:
+            self.dialog._on_category_edited(item, new_text)
+        elif col == 3:
+            self.dialog._on_path_edited(item, new_text)
+
+    def updateEditorGeometry(self, editor, option, index):
+        editor.setGeometry(option.rect)
 
 
 class OrganizePreviewDialog(QDialog):
@@ -130,6 +228,15 @@ class OrganizePreviewDialog(QDialog):
         self.tree.itemChanged.connect(self._schedule_update_stats)
         self.tree.itemExpanded.connect(self._on_item_expanded)
         
+        # 绑定专用就地微调编辑委托 (防清空重写、历史候选预览、F2/双击激活)
+        self.tree_delegate = TreeInplaceItemDelegate(self, self.tree)
+        self.tree.setItemDelegate(self.tree_delegate)
+        self.tree.setEditTriggers(
+            QAbstractItemView.DoubleClicked |
+            QAbstractItemView.EditKeyPressed |
+            QAbstractItemView.SelectedClicked
+        )
+        
         header = self.tree.header()
         header.setSectionResizeMode(0, QHeaderView.Interactive)
         self.tree.setColumnWidth(0, 240)
@@ -197,6 +304,15 @@ class OrganizePreviewDialog(QDialog):
 
         layout.addLayout(btn_bar)
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F2:
+            curr_item = self.tree.currentItem()
+            if curr_item:
+                curr_col = self.tree.currentColumn()
+                target_col = curr_col if curr_col in (2, 3) else 3
+                self.tree.editItem(curr_item, target_col)
+                return
+        super().keyPressEvent(event)
 
     def populate_tree(self):
         self._is_updating_checks = True
@@ -252,7 +368,14 @@ class OrganizePreviewDialog(QDialog):
                 unselected_count += 1
                 
             group_item = QTreeWidgetItem(self.tree)
-            group_item.setFlags(group_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            group_item.setFlags(
+                group_item.flags() |
+                Qt.ItemIsUserCheckable |
+                Qt.ItemIsAutoTristate |
+                Qt.ItemIsEditable |
+                Qt.ItemIsEnabled |
+                Qt.ItemIsSelectable
+            )
             group_item.setCheckState(0, Qt.Checked if default_checked else Qt.Unchecked)
             group_item.setData(0, Qt.UserRole, {"type": "group", "data": group})
             
@@ -279,24 +402,26 @@ class OrganizePreviewDialog(QDialog):
                 group_item.setForeground(1, QBrush(QColor("#FFFFFF")))
             group_item.setFont(1, font)
             
-            combo = QComboBox()
-            cats = ["未分类/待人工确认"] + [c["name"] for c in global_category_manager.get_active()]
-            combo.addItems(cats)
+            # 第 2 列：建议归档分类 (采用 TreeInplaceItemDelegate 就地编辑，防清空 + 历史联想)
+            curr_cat = group.get("effective_category") or group.get("suggested_category", "未分类/待人工确认")
+            group_item.setText(2, curr_cat)
+            group_item.setTextAlignment(2, Qt.AlignCenter)
+            group_item.setForeground(2, QBrush(QColor("#38BDF8")))
+            group_item.setToolTip(2, f"建议归档分类: {curr_cat}\n[双击或按 F2 就地微调修改，输入时有历史候选联想]")
             
-            curr_cat = group.get("suggested_category", "")
-            if curr_cat in cats:
-                combo.setCurrentText(curr_cat)
-            else:
-                combo.addItem(curr_cat)
-                combo.setCurrentText(curr_cat)
-                
-            combo.currentTextChanged.connect(lambda txt, it=group_item: self._on_category_changed(it, txt))
-            self.tree.setItemWidget(group_item, 2, combo)
-            
+            # 第 3 列：建议目标规划路径 (采用 TreeInplaceItemDelegate 就地编辑，防清空 + 历史联想)
             rec_subpath = group.get("recommended_subpath", "")
-            group_item.setText(3, group.get("target_root", ""))
+            target_path_str = group.get("target_root", "")
+            group_item.setText(3, target_path_str)
+            group_item.setForeground(3, QBrush(QColor("#FBBF24")))
+            tip_parts = [f"建议目标规划路径: {target_path_str}"]
             if rec_subpath:
-                group_item.setToolTip(3, f"目标规划路径: {group.get('target_root', '')}\n推荐细分子层级: {rec_subpath}")
+                tip_parts.append(f"推荐细分子层级: {rec_subpath}")
+            tip_parts.append("[双击或按 F2 就地微调修改，输入时有历史候选联想]")
+            group_item.setToolTip(3, "\n".join(tip_parts))
+            
+            # 第 4 列：研判依据
+            if rec_subpath:
                 rationale_text = group.get("rationale", "")
                 if rec_subpath not in rationale_text:
                     group_item.setText(4, f"[{rec_subpath}] {rationale_text}")
@@ -354,71 +479,171 @@ class OrganizePreviewDialog(QDialog):
         self._is_updating_checks = False
 
 
-    def _on_category_changed(self, group_item, new_cat_name):
-        u_data = group_item.data(0, Qt.UserRole)
-        if not u_data or u_data.get("type") != "group":
+    def _on_category_edited(self, item: QTreeWidgetItem, new_cat_name: str):
+        """处理建议归档分类就地微调修改，基于 ArchiveDestinationPath 防重去冗余并全域同构级联更新"""
+        u_data = item.data(0, Qt.UserRole)
+        if not u_data or not new_cat_name:
             return
-            
-        group = u_data["data"]
-        group["effective_category"] = new_cat_name
-        group["source"] = "User"
-        
-        # Recalculate target root
-        dest_root_p = Path(self.destination_root)
-        orig_root_p = Path(group.get("original_root", ""))
-        rec_subpath = group.get("recommended_subpath", "")
-        clean_sub = sanitize_subpath(rec_subpath) if rec_subpath else ""
 
-        if clean_sub:
-            if group.get("is_directory_group", True):
-                new_target_base = dest_root_p / new_cat_name / Path(clean_sub) / orig_root_p.name
-            else:
-                new_target_base = dest_root_p / new_cat_name / Path(clean_sub)
-        else:
-            active_cats = global_category_manager.get_active()
-            template = "{archive_root}/{category_name}/{app_name}"
-            for cat in active_cats:
-                if cat["name"] == new_cat_name:
-                    template = cat.get("target_path_template", template)
-                    break
-                    
+        item_type = u_data.get("type")
+        if item_type == "group":
+            group = u_data["data"]
+            old_cat = group.get("effective_category", group.get("suggested_category", ""))
+            if new_cat_name == old_cat:
+                return
+
+            group["effective_category"] = new_cat_name
+            group["suggested_category"] = new_cat_name
+            group["source"] = "User"
+            group["require_confirmation"] = True
+
+            # 通过 ArchiveDestinationPath 构建新的目标根目录 (彻底去除重复段)
+            orig_root_p = Path(group.get("original_root", ""))
+            clean_sub = sanitize_subpath(group.get("recommended_subpath", ""))
+            dest_obj = ArchiveDestinationPath.build(
+                dest_root=self.destination_root,
+                category=new_cat_name,
+                subpath=clean_sub,
+                entity_name=orig_root_p.name,
+                is_dir=group.get("is_directory_group", True)
+            )
+            group["target_root"] = str(dest_obj)
+            item.setData(0, Qt.UserRole, u_data)
+
+            # 同步更新 self.classification_items 原始数据引用
+            for orig_g in self.classification_items:
+                if orig_g.get("group_id") == group.get("group_id") or orig_g.get("original_root") == group.get("original_root"):
+                    orig_g["target_root"] = str(dest_obj)
+                    orig_g["effective_category"] = new_cat_name
+                    orig_g["suggested_category"] = new_cat_name
+                    orig_g["source"] = "User"
+                    orig_g["require_confirmation"] = True
+                    for sub in orig_g.get("sub_items", []):
+                        rel = sub.get("relative_path", "")
+                        if rel and orig_g.get("is_directory_group", True):
+                            sub["target_path"] = dest_obj.relative_join(rel)
+                        else:
+                            sub["target_path"] = dest_obj.relative_join(sub.get("name", Path(rel).name if rel else "unnamed"))
+
+            item.setText(2, new_cat_name)
+            item.setText(3, str(dest_obj))
             app_name = group.get("app_name", orig_root_p.name)
-            res = template.replace("{archive_root}", str(dest_root_p))
-            res = res.replace("{category_name}", new_cat_name)
-            res = res.replace("{app_name}", app_name)
-            
-            new_target_base = Path(res)
-            if not group.get("is_directory_group", True):
-                if "{app_name}" not in template:
-                    new_target_base = dest_root_p / new_cat_name
-                
-        app_name = group.get("app_name", orig_root_p.name)
-        group["target_root"] = str(new_target_base)
-        group_item.setText(3, str(new_target_base))
-        if clean_sub:
-            group_item.setToolTip(3, f"目标规划路径: {new_target_base}\n推荐细分子层级: {clean_sub}")
-        group_item.setText(1, f"{app_name} [User]")
-        group_item.setForeground(1, QBrush(QColor("#F59E0B"))) # Warn color for manual
-        
-        # If manual, set requires confirmation to true
-        group["require_confirmation"] = True
-        
-        # Update children
-        for i in range(group_item.childCount()):
-            child = group_item.child(i)
-            c_data = child.data(0, Qt.UserRole)
-            if c_data and c_data.get("type") == "file":
-                sub = c_data["data"]
+            item.setText(1, f"{app_name} [User]")
+            item.setForeground(1, QBrush(QColor("#F59E0B")))  # Warn amber
+
+            # 记录历史路径
+            HistorySuggestionProvider.record_path(str(dest_obj))
+
+            # 级联更新已展开的子项
+            for i in range(item.childCount()):
+                child = item.child(i)
+                c_data = child.data(0, Qt.UserRole)
+                if c_data and c_data.get("type") == "file":
+                    sub = c_data["data"]
+                    rel = sub.get("relative_path", "")
+                    if rel and group.get("is_directory_group", True):
+                        new_sub_target = dest_obj.relative_join(rel)
+                    else:
+                        new_sub_target = dest_obj.relative_join(sub.get("name", Path(rel).name if rel else "unnamed"))
+                    sub["target_path"] = new_sub_target
+                    child.setData(0, Qt.UserRole, c_data)
+                    child.setText(2, new_cat_name)
+                    child.setText(3, new_sub_target)
+
+            # 确保原始数据模型中的 sub_items 也同步更新 (针对尚未展开的节点)
+            for sub in group.get("sub_items", []):
                 rel = sub.get("relative_path", "")
                 if rel and group.get("is_directory_group", True):
-                    new_sub_target = new_target_base / Path(rel)
+                    sub["target_path"] = dest_obj.relative_join(rel)
                 else:
-                    new_sub_target = new_target_base / Path(sub.get("name", Path(rel).name if rel else "unnamed"))
-                sub["target_path"] = str(new_sub_target)
-                child.setText(3, str(new_sub_target))
-                child.setText(2, new_cat_name)
-                
-        self.tree.viewport().update()
+                    sub["target_path"] = dest_obj.relative_join(sub.get("name", Path(rel).name if rel else "unnamed"))
+
+            self.tree.viewport().update()
+
+        elif item_type == "file":
+            sub = u_data["data"]
+            sub["category"] = new_cat_name
+            item.setText(2, new_cat_name)
+            self.tree.viewport().update()
+
+    def _on_path_edited(self, item: QTreeWidgetItem, new_path_str: str):
+        """处理目标规划路径就地微调修改，执行安全检验并全域同构级联更新"""
+        u_data = item.data(0, Qt.UserRole)
+        if not u_data or not new_path_str:
+            return
+
+        dest_obj = ArchiveDestinationPath(new_path_str)
+        is_safe, reason = dest_obj.is_safe()
+        if not is_safe:
+            QMessageBox.warning(self, "规划路径不合法", f"所填写的归档规划路径存在安全风险: {reason}")
+            return
+
+        HistorySuggestionProvider.record_path(new_path_str)
+
+        item_type = u_data.get("type")
+        if item_type == "group":
+            group = u_data["data"]
+            old_path = group.get("target_root", "")
+            if new_path_str == old_path:
+                return
+
+            group["target_root"] = new_path_str
+            item.setData(0, Qt.UserRole, u_data)
+
+            # 同步更新 self.classification_items 原始数据引用
+            for orig_g in self.classification_items:
+                if orig_g.get("group_id") == group.get("group_id") or orig_g.get("original_root") == group.get("original_root"):
+                    orig_g["target_root"] = new_path_str
+                    orig_g["source"] = "User"
+                    orig_g["require_confirmation"] = True
+                    for sub in orig_g.get("sub_items", []):
+                        rel = sub.get("relative_path", "")
+                        if rel and orig_g.get("is_directory_group", True):
+                            sub["target_path"] = dest_obj.relative_join(rel)
+                        else:
+                            sub["target_path"] = dest_obj.relative_join(sub.get("name", Path(rel).name if rel else "unnamed"))
+
+            item.setText(3, new_path_str)
+            orig_root_p = Path(group.get("original_root", ""))
+            app_name = group.get("app_name", orig_root_p.name)
+            item.setText(1, f"{app_name} [User]")
+            item.setForeground(1, QBrush(QColor("#F59E0B")))
+
+            # 级联更新已展开的子项
+            for i in range(item.childCount()):
+                child = item.child(i)
+                c_data = child.data(0, Qt.UserRole)
+                if c_data and c_data.get("type") == "file":
+                    sub = c_data["data"]
+                    rel = sub.get("relative_path", "")
+                    if rel and group.get("is_directory_group", True):
+                        new_sub_target = dest_obj.relative_join(rel)
+                    else:
+                        new_sub_target = dest_obj.relative_join(sub.get("name", Path(rel).name if rel else "unnamed"))
+                    sub["target_path"] = new_sub_target
+                    child.setData(0, Qt.UserRole, c_data)
+                    child.setText(3, new_sub_target)
+
+            # 确保原始数据模型中的 sub_items 也同步更新
+            for sub in group.get("sub_items", []):
+                rel = sub.get("relative_path", "")
+                if rel and group.get("is_directory_group", True):
+                    sub["target_path"] = dest_obj.relative_join(rel)
+                else:
+                    sub["target_path"] = dest_obj.relative_join(sub.get("name", Path(rel).name if rel else "unnamed"))
+
+            self.tree.viewport().update()
+
+        elif item_type == "file":
+            sub = u_data["data"]
+            sub["target_path"] = new_path_str
+            item.setData(0, Qt.UserRole, u_data)
+            item.setText(3, new_path_str)
+            self.tree.viewport().update()
+
+    def _on_category_changed(self, group_item, new_cat_name):
+        """向下兼容历史调用"""
+        self._on_category_edited(group_item, new_cat_name)
 
 
     def _on_item_expanded(self, item):
@@ -457,13 +682,22 @@ class OrganizePreviewDialog(QDialog):
                         break
                         
                     child_item = QTreeWidgetItem()
-                    child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+                    child_item.setFlags(
+                        child_item.flags() |
+                        Qt.ItemIsUserCheckable |
+                        Qt.ItemIsAutoTristate |
+                        Qt.ItemIsEditable |
+                        Qt.ItemIsEnabled |
+                        Qt.ItemIsSelectable
+                    )
                     child_item.setCheckState(0, item.checkState(0))
                     
-                    child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub})
+                    child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "parent_group": group})
                     child_item.setText(0, sub.get("relative_path", ""))
                     child_item.setText(1, "-")
-                    child_item.setText(2, group.get("effective_category", group.get("suggested_category", "")))
+                    child_cat = group.get("effective_category", group.get("suggested_category", ""))
+                    child_item.setText(2, child_cat)
+                    child_item.setTextAlignment(2, Qt.AlignCenter)
                     child_item.setText(3, sub.get("target_path", ""))
                     child_item.setText(4, "包含在目录单元中")
                     child_item.setText(5, format_size(sub.get("size", 0)))
@@ -476,12 +710,14 @@ class OrganizePreviewDialog(QDialog):
                     child_item.setText(8, group.get("action", ""))
                     child_item.setTextAlignment(8, Qt.AlignCenter)
                     child_item.setText(9, f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}")
-                    # 子项统一绿底黑字
+                    # 子项统一绿底白字，第2列天蓝，第3列琥珀金
                     child_bg = QBrush(QColor("#065F46"))
                     child_fg = QBrush(QColor("#FFFFFF"))
                     for c_col in range(10):
                         child_item.setBackground(c_col, child_bg)
                         child_item.setForeground(c_col, child_fg)
+                    child_item.setForeground(2, QBrush(QColor("#38BDF8")))
+                    child_item.setForeground(3, QBrush(QColor("#FBBF24")))
                     new_children.append(child_item)
                     
                     if len(new_children) >= batch_size:
@@ -560,13 +796,22 @@ class OrganizePreviewDialog(QDialog):
                         if progress and progress.wasCanceled():
                             break
                         child_item = QTreeWidgetItem()
-                        child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+                        child_item.setFlags(
+                            child_item.flags() |
+                            Qt.ItemIsUserCheckable |
+                            Qt.ItemIsAutoTristate |
+                            Qt.ItemIsEditable |
+                            Qt.ItemIsEnabled |
+                            Qt.ItemIsSelectable
+                        )
                         child_item.setCheckState(0, item.checkState(0))
                         
-                        child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub})
+                        child_item.setData(0, Qt.UserRole, {"type": "file", "data": sub, "parent_group": group})
                         child_item.setText(0, sub.get("relative_path", ""))
                         child_item.setText(1, "-")
-                        child_item.setText(2, group.get("effective_category", group.get("suggested_category", "")))
+                        child_cat = group.get("effective_category", group.get("suggested_category", ""))
+                        child_item.setText(2, child_cat)
+                        child_item.setTextAlignment(2, Qt.AlignCenter)
                         child_item.setText(3, sub.get("target_path", ""))
                         child_item.setText(4, "包含在目录单元中")
                         child_item.setText(5, format_size(sub.get("size", 0)))
@@ -579,12 +824,14 @@ class OrganizePreviewDialog(QDialog):
                         child_item.setText(8, group.get("action", ""))
                         child_item.setTextAlignment(8, Qt.AlignCenter)
                         child_item.setText(9, f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}")
-                        # 子项统一绿底黑字
+                        # 子项统一绿底白字，第2列天蓝，第3列琥珀金
                         child_bg = QBrush(QColor("#065F46"))
                         child_fg = QBrush(QColor("#FFFFFF"))
                         for c_col in range(10):
                             child_item.setBackground(c_col, child_bg)
                             child_item.setForeground(c_col, child_fg)
+                        child_item.setForeground(2, QBrush(QColor("#38BDF8")))
+                        child_item.setForeground(3, QBrush(QColor("#FBBF24")))
                         new_children.append(child_item)
                         
                         if len(new_children) >= batch_size:

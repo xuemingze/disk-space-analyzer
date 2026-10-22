@@ -10,6 +10,7 @@ from app.utils.logger import app_logger
 from app.core.organize_models import (
     OrganizeOptions, OrganizeMode, extract_file_content_sample, sanitize_subpath
 )
+from app.core.domain_models import ArchiveDestinationPath, HistorySuggestionProvider, ArchivePlanningUnit
 
 # 已知软件、工具链及生态的特征规则库
 KNOWN_APP_PATTERNS = [
@@ -280,7 +281,7 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
         "description": "独立游戏、单机游戏与游戏本体资产"
     },
     "finance": {
-        "keywords": {"财务", "合同", "商务", "订单", "薪酬", "工资", "税务", "经控", "发票", "报销", "账单", "送货单", "对账单", "finance", "contracts", "invoices", "bills", "accounting"},
+        "keywords": {"财务", "合同", "商务", "订单", "薪酬", "工资", "税务", "发票", "报销", "账单", "送货单", "对账单", "finance", "contracts", "invoices", "bills", "accounting"},
         "suggested_category": "文档与电子书 (Documents & Books)",
         "subpath_prefix": "财务商务",
         "description": "商务合同、财务报表、发票凭证与税务单据"
@@ -300,7 +301,7 @@ BROAD_CONTAINER_TAXONOMY: Dict[str, Dict[str, Any]] = {
 }
 
 NARROW_ENTITY_SUFFIX_PATTERN = re.compile(
-    r"^(.+?)(项目|工程|系统|平台|助手|工具|客户端|设计|查重|初稿|终稿|报告|汇总|方案|复盘|模版|清单|明细|账套|对账|流水|合集|三部曲|全集|汉化版|免安装版|绿色版|特别版|完整版|正式版|发票|账单|送货单|经控|模型|素材|角色|\d+月.*|v\d+.*|\d{4}.*)$",
+    r"^(.+?)(项目|工程|系统|平台|助手|工具|客户端|设计|查重|初稿|终稿|报告|汇总|方案|复盘|模版|清单|明细|账套|对账|流水|合集|三部曲|全集|汉化版|免安装版|绿色版|特别版|完整版|正式版|发票|账单|送货单|模型|素材|角色|\d+月.*|v\d+.*|\d{4}.*)$",
     re.IGNORECASE
 )
 
@@ -551,7 +552,7 @@ class AppDetector:
             }
 
         # 2. 核心泛型机制：父子语义广义-狭义落差拓扑佐证机制 (Semantic Granularity Hierarchy Corroboration)
-        # 最高仲裁法则：若父级或上层属于明确的广义分类大抽屉 (如 app/MovedApps, backup/backups, finance/财务/经控, design/Live2D)：
+        # 最高仲裁法则：若父级或上层属于明确的广义分类大抽屉 (如 app/MovedApps, backup/backups, finance/财务/商务, design/Live2D)：
         # 当前狭义业务实体必须优先继承其父级大类的上位语义！
         # 严禁将 backups 下的历史快照因包含 requirements.txt 误判为活跃开发工程；
         # 严禁将 MovedApps 下的应用软件因缺少主目录 exe 散落为碎片文件！
@@ -609,7 +610,7 @@ class AppDetector:
                         "require_confirmation": True
                     }
 
-                # 2.3 财务商务大抽屉 (财务, 经控, 发票, 合同) 下的实体
+                # 2.3 财务商务大抽屉 (财务, 发票, 合同, 订单) 下的实体
                 if broad_key == "finance":
                     return {
                         "is_collective": True,
@@ -622,7 +623,7 @@ class AppDetector:
                         "signature_type": f"广义财务容器佐证 ({parent_name} -> {dname})",
                         "suggested_category": broad_info["suggested_category"],
                         "recommended_subpath": f"{prefix}/{clean_name}",
-                        "reason": f"父级 [{parent_name}] 判定为财务经控容器，当前目录 [{dname}] 判定为业务账套不可拆分集体，整盘原子保全",
+                        "reason": f"父级 [{parent_name}] 判定为财务商务容器，当前目录 [{dname}] 判定为业务账套不可拆分集体，整盘原子保全",
                         "confidence": 0.98,
                         "risk_level": "需人工确认",
                         "require_confirmation": True
@@ -1007,10 +1008,10 @@ class AppDetector:
                     "require_confirmation": True
                 }
 
-        # 5. 补充兜底：若目录名自身直接包含明确业务单据特征（发票、经控、送货单、账单、明细、账套等）
+        # 5. 补充兜底：若目录名自身直接包含明确业务单据特征（发票、送货单、账单、明细、账套等）
         try:
             # 必须排除软件包装目录（如 发票明细软件-v2.3.4）与含有可执行程序的目录
-            if any(k in dname for k in ["发票", "经控", "送货单", "对账单", "报销单", "明细", "账套", "对账", "流水", "清单"]):
+            if any(k in dname for k in ["发票", "送货单", "对账单", "报销单", "明细", "账套", "对账", "流水", "清单"]):
                 if not re.search(r"(软件|app|tool|v\d+|_v\d+)", dname, re.I) and not exe_files:
                     clean_name = sanitize_subpath(dname)
                     return {
@@ -1024,7 +1025,7 @@ class AppDetector:
                         "signature_type": f"业务账套命名特征 ({dname})",
                         "suggested_category": "文档与电子书 (Documents & Books)",
                         "recommended_subpath": f"财务商务/{clean_name}",
-                        "reason": f"目录名命中财务/经控单据关键特征，判定为业务账套不可拆分集体",
+                        "reason": f"目录名命中财务/商务单据关键特征，判定为业务账套不可拆分集体",
                         "confidence": 0.95,
                         "risk_level": "需人工确认",
                         "require_confirmation": True
@@ -1231,13 +1232,9 @@ class AppDetector:
         low = name.lower()
         if "live2d" in low:
             return "live2D"
-        if "经控" in name:
-            return "经控"
         # 排除包含 setup, install, 软件, app 等应用安装程序关键字
         if "发票" in name and not any(k in low for k in ["setup", "install", "软件", "app", ".exe", "msi"]):
             return "发票"
-        if "泰润" in name:
-            return "泰润明细"
         if known_umbrellas:
             for k in sorted(known_umbrellas, key=len, reverse=True):
                 if len(k) >= 2 and k.lower() in low:
@@ -1258,16 +1255,10 @@ class AppDetector:
 
         if "live2d" in low:
             return "live2D"
-        if "经控" in top_dir or (sub_name and "经控" in sub_name):
-            return "经控"
         if "发票" in top_dir:
-            if sub_name and "经控" in sub_name:
-                return "经控"
             return "发票"
-        if "泰润" in top_dir:
-            return "泰润明细"
 
-        # 通用语义规整：去除末尾的日期、月份、版本号（如 '项目2025' -> '项目'，'经控9月' -> '经控'）
+        # 通用语义规整：去除末尾的日期、月份、版本号（如 '项目2025' -> '项目'，'发票9月' -> '发票'）
         base = re.sub(r'[\-_]?(?:20\d\d[-_]?\d*|v?\d+(?:\.\d+)*|\d+月).*$', '', top_dir, flags=re.I).strip()
         if base and len(base) >= 2:
             return base
@@ -1284,9 +1275,8 @@ class AppDetector:
         从文件/目录路径提取所属的源泛目录锚点 (Source Umbrella Anchor)。
         例如：E:\\共用文件\\live2D\\西域舞女 -> 'live2D'
               E:\\共用文件\\发票\\7月发票 -> '发票'
-              E:\\共用文件\\发票\\经控8月 -> '经控'
-              E:\\共用文件\\经控9月 -> '经控'
-              E:\\共用文件\\08月经控送货单发票明细及汇总.xlsx -> '经控'
+              E:\\共用文件\\发票\\8月发票 -> '发票'
+              E:\\共用文件\\08月送货单发票明细及汇总.xlsx -> '发票'
         """
         p = Path(item_path)
         norm_p_str = os.path.normpath(item_path)
@@ -1406,20 +1396,19 @@ class AppDetector:
                 if old_cat != consensus_cat and old_cat not in ["", "未分类/待人工确认"]:
                     u["rationale"] = (u.get("rationale", "") + f" [同源泛目录 '{umb}' 共识收敛至 '{consensus_cat}']").strip()
 
-                # 重新计算目标路径
+                # 重新计算目标路径 (通过 ArchiveDestinationPath 彻底解决发票/发票重复段)
                 root_p = Path(u["original_root"])
                 is_dir = u.get("is_directory_group", False)
-                sub_p = Path(clean_umb)
 
-                if is_dir:
-                    if root_p.name.lower() == sub_p.name.lower() or root_p.name.lower() in [part.lower() for part in sub_p.parts]:
-                        new_target_base = dest_root_p / consensus_cat / sub_p
-                    else:
-                        new_target_base = dest_root_p / consensus_cat / sub_p / root_p.name
-                else:
-                    new_target_base = dest_root_p / consensus_cat / sub_p
+                dest_obj = ArchiveDestinationPath.build(
+                    dest_root=dest_root_p,
+                    category=consensus_cat,
+                    subpath=clean_umb,
+                    entity_name=root_p.name,
+                    is_dir=is_dir
+                )
 
-                u["target_root"] = str(new_target_base)
+                u["target_root"] = str(dest_obj)
 
                 # 同步更新所有子项的目标路径
                 for sub in u.get("sub_items", []):
@@ -1431,9 +1420,9 @@ class AppDetector:
                                 rel = str(Path(sub_p_orig).relative_to(root_p))
                             except Exception:
                                 rel = sub.get("name", Path(sub_p_orig).name)
-                        sub["target_path"] = str(new_target_base / Path(rel))
+                        sub["target_path"] = dest_obj.relative_join(rel)
                     else:
-                        sub["target_path"] = str(new_target_base / Path(sub.get("name", Path(sub_p_orig).name)))
+                        sub["target_path"] = dest_obj.relative_join(sub.get("name", Path(sub_p_orig).name))
 
         return grouped_units
 
@@ -1530,7 +1519,7 @@ class AppDetector:
                 return sanitize_subpath(clean_app)
 
         # 5. 综合整理模式 (Comprehensive)
-        # 优先锚定源泛目录 (Source Umbrella Preservation): 若明确属于源泛目录 (如 live2D, 经控, 发票)，整盘保全该主干
+        # 优先锚定源泛目录 (Source Umbrella Preservation): 若明确属于源泛目录 (如 live2D, 发票, 合同)，整盘保全该主干
         if source_umbrella:
             clean_umb = sanitize_subpath(source_umbrella)
             if clean_umb:
@@ -1906,22 +1895,16 @@ class AppDetector:
                     source_umbrella=gdata.get("source_umbrella")
                 )
 
-            # 建议目标路径 (防止重名重复嵌套)
+            # 建议目标路径 (通过 ArchiveDestinationPath 彻底消除相邻与包含重复嵌套，如发票/发票)
             cat_name = app_info["suggested_category"]
-            if gdata["is_directory_group"]:
-                if recommended_subpath:
-                    sub_p = Path(recommended_subpath)
-                    if root_p.name.lower() == sub_p.name.lower() or root_p.name.lower() in [part.lower() for part in sub_p.parts]:
-                        target_base_dir = dest_root_path / cat_name / sub_p
-                    else:
-                        target_base_dir = dest_root_path / cat_name / sub_p / root_p.name
-                else:
-                    target_base_dir = dest_root_path / cat_name / root_p.name
-            else:
-                if recommended_subpath:
-                    target_base_dir = dest_root_path / cat_name / Path(recommended_subpath)
-                else:
-                    target_base_dir = dest_root_path / cat_name
+            dest_obj = ArchiveDestinationPath.build(
+                dest_root=dest_root_path,
+                category=cat_name,
+                subpath=recommended_subpath,
+                entity_name=root_p.name,
+                is_dir=gdata["is_directory_group"]
+            )
+            target_base_dir = dest_obj.path
 
             # 内容样本抽取 (仅当明确开启时)
             content_samples = []

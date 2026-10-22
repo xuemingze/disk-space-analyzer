@@ -96,7 +96,7 @@ def normalize_unified_category(cat: str) -> str:
         return "软件安装与程序 (Apps & Installers)"
     if any(k in c for k in ["设计", "图像", "图片", "素材", "Design", "Assets", "Live2D", "模型"]):
         return "图像设计与模型 (Design & Models)"
-    if any(k in c for k in ["文档", "办公", "财务", "发票", "经控", "商务", "电子书", "Books", "Documents", "Finance"]):
+    if any(k in c for k in ["文档", "办公", "财务", "发票", "商务", "电子书", "Books", "Documents", "Finance"]):
         return "文档报表与账套 (Docs & Business)"
     if any(k in c for k in ["视频", "音频", "影音", "媒体", "Media", "Videos"]):
         return "音视频与多媒体 (Media & Videos)"

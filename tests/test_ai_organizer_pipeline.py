@@ -1098,7 +1098,7 @@ def test_source_umbrella_anchor_and_consensus_reconciliation(tmp_path):
     (live2d_dir / "preview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     (live2d_dir / "小恶魔.zip").write_bytes(b"PK\x03\x04")
 
-    # 2. 创建发票与经控泛目录同源子项
+    # 2. 创建发票泛目录同源子项 (验证全域整合与去重，严禁离线托底脚本越权按私有企业名拆分)
     invoice_dir = scan_root / "发票"
     invoice_dir.mkdir()
     inv_july = invoice_dir / "7月发票"
@@ -1109,13 +1109,13 @@ def test_source_umbrella_anchor_and_consensus_reconciliation(tmp_path):
     inv_aug.mkdir()
     (inv_aug / "0801_inv.pdf").write_bytes(b"%PDF-1.4")
 
-    jk_aug = invoice_dir / "经控8月"
-    jk_aug.mkdir()
-    (jk_aug / "jk_summary.xlsx").write_bytes(b"PK\x03\x04")
+    inv_summary = invoice_dir / "8月财务汇总"
+    inv_summary.mkdir()
+    (inv_summary / "inv_summary.xlsx").write_bytes(b"PK\x03\x04")
 
-    # 3. 根目录下的孤儿散件
-    orphan_jk_file = scan_root / "08月经控送货单发票明细及汇总.xlsx"
-    orphan_jk_file.write_bytes(b"PK\x03\x04")
+    # 3. 根目录下的孤儿发票散件
+    orphan_inv_file = scan_root / "08月送货单发票明细及汇总.xlsx"
+    orphan_inv_file.write_bytes(b"PK\x03\x04")
 
     # 4. 独立软件集体 (不应被泛目录错误收敛)
     app_dir = scan_root / "发票明细开具软件-v2.3.4"
@@ -1154,12 +1154,14 @@ def test_source_umbrella_anchor_and_consensus_reconciliation(tmp_path):
         # 且不存在重复嵌套 live2D/live2D
         assert "live2D/live2D" not in Path(u["target_root"]).as_posix()
 
-    # 验证经控孤儿文件归巢吸引
-    jk_units = [g for g in grouped if g.get("source_umbrella") == "经控"]
-    assert any("08月经控送货单" in g["name"] for g in jk_units), "孤儿经控汇总文件必须成功归巢至 '经控' 泛目录"
-    for u in jk_units:
-        assert u["recommended_subpath"] == "经控"
-        assert "经控" in u["target_root"]
+    # 验证发票同源收敛与整合：严禁按私有名称拆分为不同泛目录，全部收敛至 '发票' 泛目录，且无 '发票/发票' 重复嵌套
+    inv_units = [g for g in grouped if g.get("source_umbrella") == "发票"]
+    assert len(inv_units) >= 3, "所有发票子目录及孤儿发票散件必须全部整合归巢至 '发票' 泛目录"
+    for u in inv_units:
+        assert u["recommended_subpath"] == "发票"
+        assert "发票" in u["target_root"]
+        norm_t = Path(u["target_root"]).as_posix()
+        assert "发票/发票" not in norm_t, f"目标路径严禁出现重复段嵌套: {norm_t}"
 
     # 验证独立软件集体隔离保全
     app_units = [g for g in grouped if "发票明细开具软件" in g["name"]]
@@ -1167,9 +1169,8 @@ def test_source_umbrella_anchor_and_consensus_reconciliation(tmp_path):
     app_u = app_units[0]
     assert app_u["suggested_category"] == "软件安装与镜像 (Apps & Installers)"
     assert app_u.get("collective_info", {}).get("collective_type") == "独立软件集体"
-    # 软件集体不能被误修改为发票/经控文档子路径
+    # 软件集体不能被误修改为发票文档子路径
     assert app_u["recommended_subpath"] != "发票"
-    assert app_u["recommended_subpath"] != "经控"
 
     # 验证多批次模拟 AI 分歧时的模型共识强制收敛
     mock_ai_groups = [
