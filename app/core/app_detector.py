@@ -920,6 +920,25 @@ class AppDetector:
             helper_pattern = re.compile(r"^(unins\w*|uninstall|setup|install|update|crashpad\w*|elevate)\.exe$", re.I)
             main_exes = [e for e in exe_files if not helper_pattern.match(e.name)] or exe_files
 
+            # 准则三：PE 元数据多态异构判定法则 (PE Heterogeneity Test)
+            # 若目录内存在 2 个及以上主要可执行文件，提取各文件软件产品名；
+            # 若存在 2 个以上不同软件产品名 (如 百度网盘 vs 钉钉 vs 夸克)，判定为安装包池或多工具集合池，
+            # 坚决禁止作为单一软件实体整体封印！
+            if len(main_exes) >= 2:
+                distinct_products = set()
+                try:
+                    from app.core.metadata_extractor import MetadataExtractorFactory
+                    for me in main_exes[:10]:
+                        p_meta = MetadataExtractorFactory.extract(str(me))
+                        s_name = (p_meta.software_name or me.stem).strip().lower()
+                        s_name_base = re.sub(r'[\d._\-]+$', '', s_name).strip()
+                        if s_name_base and len(s_name_base) >= 2:
+                            distinct_products.add(s_name_base)
+                except Exception:
+                    pass
+                if len(distinct_products) >= 2:
+                    return None
+
             best_exe = main_exes[0]
             for e in main_exes:
                 if e.stem.lower() in dname_lower or dname_lower in e.stem.lower():
@@ -1865,8 +1884,16 @@ class AppDetector:
 
             # 优先采用集体/软件已识别的推荐子路径 (如 应用软件/xxx)
             c_info = app_info.get("collective_info") or {}
+            first_item = items_in_group[0] if items_in_group else {}
+            group_metadata = first_item.get("metadata") or {}
+            group_normalized_name = first_item.get("normalized_name") or ""
+            if not group_metadata and gdata["is_directory_group"]:
+                group_metadata = (c_info.get("metadata") or {})
+
             if c_info.get("recommended_subpath"):
                 recommended_subpath = c_info["recommended_subpath"]
+            elif group_metadata.get("domain_sector"):
+                recommended_subpath = group_metadata.get("domain_sector")
             else:
                 # 生成高质量的推荐子路径 (注入源泛目录锚点)
                 recommended_subpath = cls.generate_heuristic_subpath(
@@ -1953,6 +1980,8 @@ class AppDetector:
                 "content_samples": content_samples,
                 "sub_items": sub_items_detail,
                 "collective_info": app_info.get("collective_info"),
+                "metadata": group_metadata,
+                "normalized_name": group_normalized_name,
                 "source": "离线规则"
             }
             grouped_results.append(group_unit)

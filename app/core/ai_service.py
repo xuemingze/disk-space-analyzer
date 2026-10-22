@@ -1566,6 +1566,17 @@ class AIService:
                 "5. 若无法明确识别，必须归入 '未分类/待人工确认'，置信度设低于 0.6 并标记 require_confirmation=true；\n"
                 "6. 【父子语义广义-狭义认知】：若输入单元所属父目录或上下文为广义分类词（如 '项目'、'多媒体'、'设计'、'游戏'、'财务'、'学习'），其所属子目录即为该领域下的狭义独立实体（如 'xxx项目'、'xxx设计'、'xxx查重'），必须以实体为单位整盘原子平移归档，绝不可因内部散杂格式而拆散实体；\n"
                 "7. 【源目录锚定与同源同宿】：若待归档单元带有 source_umbrella（源泛目录锚点，如 'live2D'、'经控'、'发票'），说明它们来自源文件系统中的同一业务泛目录。同源单元严禁分裂到不同的一级分类或互不相干的深层子路径！所有具有相同 source_umbrella 的单元必须保持同一一级大类，且 recommended_subpath 必须以 source_umbrella 为基准（例如直接设为 'live2D' 或 '经控'），与源路径命名结构保持一致，不再过度人为细分；\n"
+                "8. 【有序业务领域目录（Ordered Domain Sectors）】：当处理软件安装包、工具或解压应用时，优先推荐将其归档规划至以下 8 大有序业务领域目录规范中：\n"
+                "   - 01_AI与模型工具 (AI助手、提示词工程、Agent客户端、大模型代理与逆向工具)\n"
+                "   - 02_云盘与同步 (百度网盘、夸克、Syncthing、坚果云、同步工具)\n"
+                "   - 03_游戏工具与优化 (鸣潮/异环助手、游戏脚本、游戏调度与性能工具)\n"
+                "   - 04_远程控制 (向日葵、网易UU远程、GameViewer、ToDesk、AnyDesk)\n"
+                "   - 05_下载与媒体 (MediaGo视频嗅探、MotrixNext下载器、多媒体处理)\n"
+                "   - 06_办公与通讯 (钉钉、企业微信、飞书、WPS Office办公套件)\n"
+                "   - 07_系统工具 (Everything检索、fatDuck优化、垃圾清理、系统运维)\n"
+                "   - _已解压程序与归档 (混在安装包中的已释放绿色运行目录、解压文件夹)\n"
+                "9. 【智能解混淆重命名】：若输入项含有 is_obfuscated_name: true 或 normalized_name，说明原文件名属于哈希/下载代号乱码名，已解析出真实软件名。请在 rationale 中明确体现已还原软件真名，并推荐其规范命名；\n"
+                "10. 【多版本冗余治理】：若批次中存在同一软件的多个版本（如夸克 7.3 与 7.4），建议保留最新版，将旧版标注为建议淘汰或归档。\n"
                 f"{mode_prompt}\n"
                 f"{lang_prompt}\n"
                 f"{custom_prompt}"
@@ -1659,10 +1670,18 @@ class AIService:
                     }
                     if g.get("source_umbrella"):
                         summary_item["source_umbrella"] = g["source_umbrella"]
+                    meta = g.get("metadata") or {}
+                    norm_name = g.get("normalized_name") or meta.get("normalized_name") or ""
                     if g.get("is_directory_group"):
                         summary_item["unit_type"] = "软件/工程集体 (Directory Collective)"
                         summary_item["directory_name"] = g["name"]
-                        summary_item["software_name"] = c_info.get("software_name") or g.get("app_name") or g["name"]
+                        summary_item["software_name"] = meta.get("software_name") or c_info.get("software_name") or g.get("app_name") or g["name"]
+                        if meta.get("product_version"):
+                            summary_item["product_version"] = meta["product_version"]
+                        if meta.get("morphology"):
+                            summary_item["morphology"] = meta["morphology"]
+                        if norm_name:
+                            summary_item["normalized_name"] = norm_name
                         if c_info.get("primary_executable"):
                             summary_item["primary_executable"] = c_info["primary_executable"]
                         if c_info.get("product_title"):
@@ -1675,7 +1694,21 @@ class AIService:
                         summary_item["unit_type"] = "散装独立文件 (Single File)"
                         summary_item["file_name"] = g["name"]
                         summary_item["extension"] = Path(g["name"]).suffix.lower()
-                        summary_item["initial_detected_app"] = g.get("app_name", "")
+                        summary_item["initial_detected_app"] = meta.get("software_name") or g.get("app_name", "")
+                        if meta.get("software_name"):
+                            summary_item["software_name"] = meta["software_name"]
+                        if meta.get("product_version"):
+                            summary_item["product_version"] = meta["product_version"]
+                        if meta.get("publisher"):
+                            summary_item["publisher"] = meta["publisher"]
+                        if meta.get("morphology"):
+                            summary_item["morphology"] = meta["morphology"]
+                        if meta.get("is_obfuscated_name"):
+                            summary_item["is_obfuscated_name"] = True
+                        if norm_name and norm_name != g["name"]:
+                            summary_item["normalized_name"] = norm_name
+                        if meta.get("file_description"):
+                            summary_item["file_description"] = meta["file_description"]
                         if options.sample_content_enabled and g.get("content_samples"):
                             summary_item["content_samples"] = g["content_samples"]
                     batch_summaries.append(summary_item)
@@ -1937,7 +1970,7 @@ class AIService:
             '      "source_path": "原始绝对路径",\n'
             '      "app_name": "所属软件或工具名称",\n'
             '      "suggested_category": "归档分类（如经控、业务单据、安装包等，全局分类仅作参考）",\n'
-            '      "target_subpath": "推荐的多级归档子目录（例如 经控单据/2026）",\n'
+            '      "target_subpath": "推荐的多级归档子目录（例如 经控单据/2026、06_办公与通讯 等）",\n'
             '      "action": "归档/清理/保留",\n'
             '      "risk_level": "低风险/中风险/高风险",\n'
             '      "rationale": "研判理由（20字内）"\n'
@@ -1949,12 +1982,25 @@ class AIService:
             "若资产具备强烈业务特征（如经控、财务单据、模型训练、微服务、直播工程等），鼓励你自主提炼出高阶业务分类（例如直接归为'经控'，严禁机械地塞入'文档'）。\n"
             "注意：在 JSON 中，markdown_report 字符串中的所有换行符必须转义为 \\n。若输出纯 Markdown，请确保包含标准 Markdown 表格。\n"
             "【核心原则】：系统采用原子实体集体（软件/工程/模型/账套/缓存）防撕裂与聚合保全机制，对于目录集体资产必须作为一个整体提出治理建议，严禁建议拆散其内部子文件。\n"
+            "【八大有序业务领域治理规范（Ordered Domain Sectors）】：\n"
+            "当面对软件安装包、工具池及解压运行时目录治理时，必须将归档目标规范收敛至以下 8 大业务领域子目录中：\n"
+            "├── 01_AI与模型工具 (AI助手、提示词工程、Agent客户端、大模型代理与逆向工具)\n"
+            "├── 02_云盘与同步 (百度网盘、夸克、Syncthing、坚果云、同步工具)\n"
+            "├── 03_游戏工具与优化 (鸣潮/异环助手、游戏脚本、游戏调度与性能工具)\n"
+            "├── 04_远程控制 (向日葵、网易UU远程、GameViewer、ToDesk、AnyDesk)\n"
+            "├── 05_下载与媒体 (MediaGo视频嗅探、MotrixNext下载器、多媒体处理)\n"
+            "├── 06_办公与通讯 (钉钉、企业微信、飞书、WPS Office办公套件)\n"
+            "├── 07_系统工具 (Everything检索、fatDuck优化、垃圾清理、系统运维)\n"
+            "└── _已解压程序与归档 (混在安装包中的已释放绿色运行目录、解压文件夹)\n"
+            "【智能解混淆重命名与多版本裁决】：\n"
+            "- 对于哈希/纯数字等下载代号乱码名（如 8799-...exe），必须结合 PE 元数据识别真实软件名并给出规范命名建议（如 钉钉_9.0.2.exe）；\n"
+            "- 若存在同一软件的多个版本（如夸克 7.3 与 7.4），明确建议保留最新版，将旧版标注为淘汰归档或清理。\n"
             "报告必须包含：\n"
             "1. 磁盘现状与健康度评估(0-100分与等级，含资产单元总数、实体集体数与底层碎片聚合数)\n"
             "2. 空间构成与类型特征\n"
             "3. 大资产与冗余分布(Top 超大资产清单及形态)\n"
-            "4. 重复资产浪费分析\n"
-            "5. 分级治理与清理优化建议\n"
+            "4. 重复资产浪费分析(含安装包多版本重复与解压绿色包冗余)\n"
+            "5. 分级治理与清理优化建议(按上述八大规范业务领域呈现分类治理蓝图)\n"
             "6. 【核心执行清单】：必须输出一个 Markdown 表格，列出推荐处理的资产单元，表头必须包含：资产名称、治理形态、资产大小、类别、路径摘要、原始绝对路径、风险等级、建议操作(如归档/清理/保留)、分析建议。"
         )
 
@@ -1966,27 +2012,55 @@ class AIService:
             high_val = cls.filter_high_value_assets_for_ai(raw_redundant, max_items=25)
             for it in high_val:
                 is_c = bool(it.get("is_directory_collective") or it.get("is_collective"))
-                cleaned_redundant.append({
+                meta = it.get("metadata") or {}
+                norm_name = it.get("normalized_name") or meta.get("normalized_name") or ""
+                sw_name = meta.get("software_name") or it.get("software_name") or ""
+                ver = meta.get("product_version") or ""
+                morph = meta.get("morphology") or ("原子实体集体" if is_c else "独立单项")
+                item_dict = {
                     "name": it.get("name", ""),
                     "path": it.get("path", ""),
                     "size_mb": round(it.get("size", 0) / (1024 * 1024), 2),
                     "category": it.get("category", "未分类"),
-                    "morphology": "原子实体集体" if is_c else "独立单项",
+                    "morphology": morph,
                     "file_count": it.get("file_count", 1) if is_c else 1,
-                    "reason": str(it.get("reason", ""))[:30]
-                })
+                    "reason": str(it.get("reason", ""))[:40]
+                }
+                if sw_name:
+                    item_dict["software_name"] = sw_name
+                if ver:
+                    item_dict["product_version"] = ver
+                if norm_name and norm_name != it.get("name"):
+                    item_dict["normalized_name"] = norm_name
+                if meta.get("is_obfuscated_name"):
+                    item_dict["is_obfuscated_name"] = True
+                cleaned_redundant.append(item_dict)
 
-        # 2. Top 10 大文件同样瘦身
+        # 2. Top 15 大文件同样瘦身并注入真实铭牌元数据
         cleaned_top10 = []
-        for tf in scan_summary.get("top_100_files", [])[:10]:
+        for tf in scan_summary.get("top_100_files", [])[:15]:
             is_c = bool(tf.get("is_directory_collective") or tf.get("is_collective"))
-            cleaned_top10.append({
+            meta = tf.get("metadata") or {}
+            norm_name = tf.get("normalized_name") or meta.get("normalized_name") or ""
+            sw_name = meta.get("software_name") or tf.get("software_name") or ""
+            ver = meta.get("product_version") or ""
+            morph = meta.get("morphology") or ("原子实体集体" if is_c else "独立单项")
+            top_dict = {
                 "name": tf.get("name", ""),
                 "path": tf.get("path", ""),
                 "size_mb": round(tf.get("size", 0) / (1024 * 1024), 2),
-                "morphology": "原子实体集体" if is_c else "独立单项",
+                "morphology": morph,
                 "file_count": tf.get("file_count", 1) if is_c else 1
-            })
+            }
+            if sw_name:
+                top_dict["software_name"] = sw_name
+            if ver:
+                top_dict["product_version"] = ver
+            if norm_name and norm_name != tf.get("name"):
+                top_dict["normalized_name"] = norm_name
+            if meta.get("is_obfuscated_name"):
+                top_dict["is_obfuscated_name"] = True
+            cleaned_top10.append(top_dict)
 
         c_cnt = scan_summary.get("collective_count", 0)
         s_cnt = scan_summary.get("standalone_file_count", 0)

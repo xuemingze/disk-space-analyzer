@@ -33,6 +33,7 @@ from app.core.category_manager import global_category_manager
 
 
 from app.core.domain_models import ScannedAsset, AssetUnit
+from app.core.metadata_extractor import MetadataExtractorFactory
 
 
 def fast_aggregate_directory(dir_path: str, max_files_limit: int = 150000) -> Tuple[int, int, float]:
@@ -212,6 +213,15 @@ class UnifiedScanner:
 
                         c_type = curr_collective.get("collective_type") or "已安装应用"
                         c_tag = "AI自沉淀继承" if precip_match else f"原子保全 ({c_type})"
+
+                        # 萃取集合铭牌元数据
+                        primary_exe = curr_collective.get("primary_executable", "")
+                        meta_contract = MetadataExtractorFactory.extract_collective(curr_dir, primary_exe)
+                        meta_dict = meta_contract.to_dict()
+                        norm_name = meta_contract.normalized_name or curr_name
+                        if not c_subpath and meta_contract.domain_sector:
+                            c_subpath = f"{meta_contract.domain_sector}/{meta_contract.software_name or curr_name}"
+
                         asset = AssetUnit(
                             id=f"COLL_{int(time.time()*1000)}_{len(results)}",
                             name=curr_name,
@@ -230,7 +240,9 @@ class UnifiedScanner:
                             collective_info=curr_collective,
                             tag=c_tag,
                             reason=curr_collective.get("reason", "不可拆分原子集体整体治理"),
-                            target_subpath=c_subpath
+                            target_subpath=c_subpath,
+                            metadata=meta_dict,
+                            normalized_name=norm_name
                         )
                         results.append(asset)
                         total_scanned_files += c_files
@@ -266,10 +278,15 @@ class UnifiedScanner:
                             f_mtime = stat_res.st_mtime
                             f_ext = os.path.splitext(entry.name)[1].lower()
 
+                            # 萃取多态元数据 (PE / MSI / Archive / Office / Media)
+                            meta_contract = MetadataExtractorFactory.extract(entry.path)
+                            meta_dict = meta_contract.to_dict()
+                            norm_name = meta_contract.normalized_name or entry.name
+
                             # 判定分类
                             cat_raw = categorize_file_by_ext(Path(entry.path))
                             unified_cat = normalize_unified_category(cat_raw)
-                            file_subpath = ""
+                            file_subpath = meta_contract.domain_sector or ""
 
                             # 自沉淀优先命中
                             precip_match = global_category_manager.match_asset(entry.name, entry.path)
@@ -282,8 +299,19 @@ class UnifiedScanner:
                             if is_backup_pack:
                                 unified_cat = "归档包与系统镜像 (Archives & Images)"
 
-                            file_tag = "AI自沉淀继承" if precip_match else ("备份快照" if is_backup_pack else "")
-                            file_reason = f"自沉淀规则命中: {precip_match.get('rule_pattern', '')}" if precip_match else ("历史备份大抽屉归档资产" if is_backup_pack else "")
+                            if meta_contract.is_obfuscated_name:
+                                file_tag = "已还原真实软件铭牌"
+                                s_ver = f" (v{meta_contract.product_version})" if meta_contract.product_version else ""
+                                file_reason = f"已通过 PE 签名确权还原为【{meta_contract.software_name}】{s_ver}，原始哈希/下载文件名已解混淆"
+                            elif precip_match:
+                                file_tag = "AI自沉淀继承"
+                                file_reason = f"自沉淀规则命中: {precip_match.get('rule_pattern', '')}"
+                            elif is_backup_pack:
+                                file_tag = "备份快照"
+                                file_reason = "历史备份大抽屉归档资产"
+                            else:
+                                file_tag = ""
+                                file_reason = ""
 
                             asset = AssetUnit(
                                 id=f"FILE_{int(time.time()*1000)}_{total_scanned_files}",
@@ -301,7 +329,9 @@ class UnifiedScanner:
                                 is_snapshot_backup=is_backup_pack,
                                 tag=file_tag,
                                 reason=file_reason,
-                                target_subpath=file_subpath
+                                target_subpath=file_subpath,
+                                metadata=meta_dict,
+                                normalized_name=norm_name
                             )
                             results.append(asset)
                             total_scanned_files += 1
@@ -367,6 +397,15 @@ class UnifiedScanner:
 
                             c_type = collective_info.get("collective_type") or collective_info.get("type") or "原子实体"
                             c_tag = "AI自沉淀继承" if precip_match else f"原子保全 ({c_type})"
+
+                            # 萃取集合铭牌元数据
+                            primary_exe = collective_info.get("primary_executable", "")
+                            meta_contract = MetadataExtractorFactory.extract_collective(d_path, primary_exe)
+                            meta_dict = meta_contract.to_dict()
+                            norm_name = meta_contract.normalized_name or d_entry.name
+                            if not sub_subpath and meta_contract.domain_sector:
+                                sub_subpath = f"{meta_contract.domain_sector}/{meta_contract.software_name or d_entry.name}"
+
                             asset = AssetUnit(
                                 id=f"COLL_{int(time.time()*1000)}_{len(results)}",
                                 name=d_entry.name,
@@ -385,7 +424,9 @@ class UnifiedScanner:
                                 collective_info=collective_info,
                                 tag=c_tag,
                                 reason=collective_info.get("reason", "不可拆分原子集体整体治理"),
-                                target_subpath=sub_subpath
+                                target_subpath=sub_subpath,
+                                metadata=meta_dict,
+                                normalized_name=norm_name
                             )
                             results.append(asset)
                             total_scanned_files += c_files

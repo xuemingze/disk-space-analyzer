@@ -113,7 +113,15 @@ class FastMetadataDiscoveryStep(ScanPipelineStep):
                 f_phase = f"规则识别 ({heuristic[0]})" if heuristic else "阶段一已归类"
                 f_is_rec = heuristic[2] if (heuristic and len(heuristic) > 2) else False
 
-                if asset.is_snapshot_backup:
+                if asset.metadata and asset.metadata.get("is_obfuscated_name"):
+                    f_tag = "已还原真实软件铭牌"
+                    s_name = asset.metadata.get("software_name") or asset.name
+                    s_ver = asset.metadata.get("product_version") or ""
+                    ver_str = f" (v{s_ver})" if s_ver else ""
+                    f_reason = f"从 PE/安装包元数据解析真实名称: {s_name}{ver_str}，原始文件名含哈希下载特征"
+                    f_phase = "阶段一已归类 (真实铭牌确权)"
+                    f_is_rec = False
+                elif asset.is_snapshot_backup:
                     f_tag = "备份快照资产"
                     f_reason = "属于历史备份大抽屉归档资产，免除冗余误判"
                     f_phase = "阶段一已归类 (同源同宿保全)"

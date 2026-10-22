@@ -40,10 +40,12 @@ class FileTableModel(QAbstractTableModel):
         if role in (Qt.DisplayRole, Qt.EditRole):
             if col == 1:
                 name = item.get("name", "")
+                meta = item.get("metadata") or {}
+                norm_name = item.get("normalized_name") or ""
                 if item.get("is_directory_collective"):
                     c_info = item.get("collective_info") or {}
                     c_type = c_info.get("type", "") or c_info.get("collective_type", "")
-                    app_name = c_info.get("app_name") or c_info.get("project_name") or c_info.get("software_name")
+                    app_name = meta.get("software_name") or c_info.get("app_name") or c_info.get("project_name") or c_info.get("software_name")
                     f_count = item.get("file_count", 1)
                     if "缓存" in c_type or c_info.get("is_cache") is True:
                         prefix = f"🗑️ [缓存集体: {app_name}] " if app_name else "🗑️ [缓存集体] "
@@ -63,7 +65,11 @@ class FileTableModel(QAbstractTableModel):
                 # 语义化外显标识：根据资产类型与治理标记动态展示专属前缀
                 tag = item.get("tag", "")
                 cat = item.get("category", "")
-                if "安装" in tag or "安装" in cat or "程序" in tag:
+                is_obf = bool(meta.get("is_obfuscated_name"))
+                if is_obf and norm_name and norm_name != name:
+                    prefix = "📦 [已还原铭牌] "
+                    return f"{prefix}{norm_name} (原: {name})"
+                elif "安装" in tag or "安装" in cat or "程序" in tag:
                     prefix = "📦 [安装程序] "
                 elif "归档" in tag or "压缩" in cat:
                     prefix = "🗜️ [归档包] "
@@ -143,14 +149,29 @@ class FileTableModel(QAbstractTableModel):
                 if "重复副本" in tag: return QBrush(QColor("#F59E0B"))
                 elif "安全可清理" in tag or "临时" in tag: return QBrush(QColor("#10B981"))
                 elif "防撕裂" in tag or "保全" in tag: return QBrush(QColor("#818CF8"))
+                elif "已还原" in tag or "铭牌" in tag: return QBrush(QColor("#34D399"))
                 elif "归档" in tag or "自沉淀" in tag: return QBrush(QColor("#38BDF8"))
                 
         elif role == Qt.ToolTipRole:
             if col == 1 or col == 9:
                 p = item.get("path", "")
+                meta = item.get("metadata") or {}
+                meta_details = []
+                if meta.get("software_name"):
+                    meta_details.append(f"真实软件名称: {meta['software_name']}")
+                if meta.get("product_version"):
+                    meta_details.append(f"识别版本号: {meta['product_version']}")
+                if meta.get("publisher"):
+                    meta_details.append(f"开发商/发布者: {meta['publisher']}")
+                if meta.get("domain_sector"):
+                    meta_details.append(f"所属规范业务领域: {meta['domain_sector']}")
+                meta_str = "\n".join(meta_details)
                 if item.get("is_directory_collective"):
                     c_info = item.get("collective_info") or {}
-                    return f"{p}\n[原子实体集体] 文件数: {item.get('file_count', 1):,} | 类型: {c_info.get('type', 'collective')} | 推荐泛归类: {item.get('category', '')}"
+                    base_tip = f"{p}\n[原子实体集体] 文件数: {item.get('file_count', 1):,} | 类型: {c_info.get('type', 'collective')} | 推荐泛归类: {item.get('category', '')}"
+                    return f"{base_tip}\n{meta_str}" if meta_str else base_tip
+                if meta_str:
+                    return f"{p}\n{meta_str}"
                 return p
             elif col == 2:
                 cat = item.get("category", "")

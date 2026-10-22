@@ -50,9 +50,21 @@ class ScannedAsset:
     state: str = "正常"
     redundant_type: str = "无冗余"
     match_rule: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    normalized_name: str = ""
     _extra: Dict[str, Any] = field(default_factory=dict)
 
     # 属性映射与别名兼容
+    @property
+    def display_name(self) -> str:
+        return self.normalized_name or self.name
+
+    @property
+    def software_name(self) -> str:
+        if self.metadata and isinstance(self.metadata, dict):
+            return self.metadata.get("software_name", "")
+        return ""
+
     @property
     def is_directory_collective(self) -> bool:
         return self.is_collective
@@ -140,6 +152,8 @@ class ScannedAsset:
             "state": self.state,
             "redundant_type": self.redundant_type,
             "match_rule": self.match_rule,
+            "metadata": self.metadata,
+            "normalized_name": self.normalized_name,
         }
         if self._extra:
             d.update(self._extra)
@@ -155,7 +169,8 @@ class ScannedAsset:
             "collective_type", "category", "ext", "scan_root", "umbrella_anchor",
             "umbrella_category", "is_snapshot_backup", "collective_info", "tag",
             "reason", "phase_status", "is_recommended", "target_subpath", "action",
-            "state", "redundant_type", "match_rule"
+            "state", "redundant_type", "match_rule",
+            "metadata", "normalized_name"
         }
         kwargs = {}
         extra = {}
