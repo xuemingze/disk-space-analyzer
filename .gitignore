@@ -69,6 +69,7 @@ venv.bak/
 # Application specific cache and manifests
 .disk_space_analyzer/
 archive_manifests/
+archive/
 *.db
 *.log
 hash_cache.db
