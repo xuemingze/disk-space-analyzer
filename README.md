@@ -133,6 +133,7 @@ This project is engineered upon core system principles including the **"AI-First
 For deep technical insights on algorithm designs, 0-Token fragment blocking, or concurrent hash caching:
 
 👉 **[📄 Core Architecture & Theory Specification](./docs/Core_Architecture_Theory.md)**  
+👉 **[📜 Project Execution Journey & Architecture Evolution (Chinese)](./docs/项目全景执行历程与架构演化.md)**  
 👉 **[📑 Release Notes Changelog](./docs/)**
 
 ---
