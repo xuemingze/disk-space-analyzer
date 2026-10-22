@@ -83,10 +83,16 @@ def test_r1_inplace_edit_f2_and_ai_audit_latency_and_safety():
 
     # 6. 验证合法路径吸附与端到端耗时 < 1s
     start_t = time.time()
-    res_valid = AIService.audit_manual_path_and_precipitate(
-        mock_item,
-        "Developer_Workspace/Frontend/web_app"
-    )
+    mock_post_resp = MagicMock()
+    mock_post_resp.status_code = 200
+    mock_post_resp.json.return_value = {
+        "choices": [{"message": {"content": json.dumps({"valid": True, "snapped_category": "Developer_Workspace / Frontend / web_app", "rule_pattern": "dangerous_script", "subpath": "Developer_Workspace/Frontend/web_app"})}}]
+    }
+    with patch.object(AIService.get_session(), "post", return_value=mock_post_resp):
+        res_valid = AIService.audit_manual_path_and_precipitate(
+            mock_item,
+            "Developer_Workspace/Frontend/web_app"
+        )
     total_elapsed = time.time() - start_t
     assert res_valid["valid"] is True
     assert total_elapsed < 1.0

@@ -378,7 +378,7 @@ class AIService:
                     "extra_body": {"thinking": {"type": "disabled"}} # 关闭思考慢链
                 }
                 session = cls.get_session()
-                resp = session.post(norm_url, headers=headers, json=payload, timeout=(0.3, 0.5))
+                resp = session.post(norm_url, headers=headers, json=payload, timeout=(0.2, 0.4))
                 if resp.status_code == 200:
                     data = resp.json()
                     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -1676,7 +1676,9 @@ class AIService:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": f"待分类目录聚合单元批次 [{batch_label}] (共 {len(sub_batch)} 项):\n{json.dumps(batch_summaries, ensure_ascii=False, indent=2)}"}
                     ],
-                    "temperature": 0.2
+                    "temperature": 0.2,
+                    "max_tokens": 2000,
+                    "extra_body": {"thinking": {"type": "disabled"}}
                 }
                 if "gpt" in model.lower() or "deepseek" in model.lower():
                     payload["response_format"] = {"type": "json_object"}
@@ -1699,7 +1701,7 @@ class AIService:
                         return False, f"JSON 解析失败: {e}", None
 
                 success, result = cls._execute_with_retry(
-                    "post", endpoint, {"headers": headers, "json": payload},
+                    "post", endpoint, {"headers": headers, "json": payload, "timeout": (10, 60)},
                     task_desc=f"AI 分类批次 [{batch_label}]", validator=validator
                 )
 
@@ -1843,7 +1845,9 @@ class AIService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"候选清理文件列表: {json.dumps(summary_items, ensure_ascii=False, indent=2)}"}
             ],
-            "temperature": 0.2
+            "temperature": 0.2,
+            "max_tokens": 1500,
+            "extra_body": {"thinking": {"type": "disabled"}}
         }
         if "gpt" in model.lower() or "deepseek" in model.lower():
             payload["response_format"] = {"type": "json_object"}
@@ -1863,7 +1867,7 @@ class AIService:
             except Exception as e:
                 return False, f"JSON 解析失败: {e}", None
 
-        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload}, task_desc="智能推荐", validator=validator)
+        success, result = cls._execute_with_retry("post", endpoint, {"headers": headers, "json": payload, "timeout": (10, 60)}, task_desc="智能推荐", validator=validator)
         if not success:
             from app.utils.logger import app_logger
             app_logger.error(f"AI 冗余文件分析调用失败: {result.get('error')}")
@@ -1993,7 +1997,9 @@ class AIService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"扫描统计数据如下:\n{json.dumps(condensed, ensure_ascii=False, indent=2)}"}
             ],
-            "temperature": 0.5
+            "temperature": 0.3,
+            "max_tokens": 2500,
+            "extra_body": {"thinking": {"type": "disabled"}}
         }
         if "gpt" in model.lower() or "deepseek" in model.lower():
             payload["response_format"] = {"type": "json_object"}
@@ -2050,7 +2056,7 @@ class AIService:
         req_kwargs = {
             "headers": headers,
             "json": payload,
-            "timeout": (10, 100)
+            "timeout": (10, 120)
         }
         success, result = cls._execute_with_retry("post", endpoint, req_kwargs, max_retries=1, task_desc="生成报告", validator=validator)
         if progress_callback:
