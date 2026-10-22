@@ -16,6 +16,9 @@ from app.core.category_manager import global_category_manager
 from app.core.organize_models import (
     OrganizeOptions, OrganizeMode, sanitize_subpath, extract_file_content_sample
 )
+from app.core.domain_models import (
+    VersionClusterGroup, VersionClusterItem, SemanticDiffDecision
+)
 
 
 
@@ -335,9 +338,12 @@ class AIService:
         from app.config import app_config
         start_time = time.time()
 
-        base_url = base_url or app_config.get("llm", "base_url", default="")
-        api_key = api_key or app_config.get("llm", "api_key", default="")
-        model = model or app_config.get("llm", "model", default="")
+        if base_url is None:
+            base_url = app_config.get("llm", "base_url", default="")
+        if api_key is None:
+            api_key = app_config.get("llm", "api_key", default="")
+        if model is None:
+            model = app_config.get("llm", "model", default="")
 
         # 1. 提取本地骨架特征 (0 Token 碎文件阻断)
         skeleton_info = cls.extract_directory_skeleton(demo_dir, max_depth=max_depth)
@@ -712,6 +718,172 @@ class AIService:
             "ai_audited": ai_audited,
             "elapsed": elapsed
         }
+
+    @classmethod
+    def audit_similar_versions_with_ai(
+        cls,
+        cluster: VersionClusterGroup,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        timeout: float = 8.0,
+    ) -> SemanticDiffDecision:
+        """
+        AI 语义多版本差异比对与保留决策微契约 (Semantic Version Diff & Retention Decision)
+        
+        遵循系统核心方针与准则：
+        - 准则一 (AI 为核心编排器): 由 AI 统揽评估各版本演进差异与终稿建议；
+        - 方针三 (本地不抢功冒进): 若大模型未配置或异常，坦诚呈现本地物理比对事实，
+          设置 ai_evaluated=False，绝不擅自越权冒充 AI 作出裁决，交由用户定夺。
+        """
+        import time
+        from datetime import datetime
+        from app.config import app_config
+
+        if base_url is None:
+            base_url = app_config.get("llm", "base_url", default="")
+        if api_key is None:
+            api_key = app_config.get("llm", "api_key", default="")
+        if model is None:
+            model = app_config.get("llm", "model", default="")
+
+        # 整理物理特征事实清单供 AI 研判
+        items_summary = []
+        for it in cluster.items:
+            mtime_str = datetime.fromtimestamp(it.mtime).strftime("%Y-%m-%d %H:%M:%S") if it.mtime > 0 else "未知"
+            sample_snippet = it.content_snippet or ""
+            items_summary.append({
+                "path": it.path,
+                "name": it.name,
+                "size_bytes": it.size,
+                "size_formatted": format_size(it.size),
+                "mtime": mtime_str,
+                "stem": it.stem,
+                "version_suffix": it.version_suffix,
+                "content_snippet": sample_snippet[:200] if sample_snippet else "无文本内容抽样"
+            })
+
+        system_prompt = (
+            "你是一位高阶文档生命周期与代码版本治理专家。请分析以下同族多版本文件集合，"
+            "比对各版本演化差异（时间戳、大小、版本后缀语义、文本摘要），研判哪一份是最佳的正本保留项（recommended_path），"
+            "并为每个版本输出差异说明与处置动作建议（如：'建议保留'、'建议归档历史'、'建议隔离备份'）。\n"
+            "请严格输出纯 JSON 格式（无 markdown 标记），结构必须为：\n"
+            "{\n"
+            '  "recommended_path": "完整正本路径",\n'
+            '  "explanation": "综合比对结论与演化逻辑说明",\n'
+            '  "version_comparison": [\n'
+            '    {\n'
+            '      "path": "完整文件路径",\n'
+            '      "version_tag": "识别出的版本阶段标识",\n'
+            '      "difference_summary": "与主版本的关键语义/物理差异",\n'
+            '      "retention_advice": "建议保留 或 建议归档历史 或 建议隔离备份"\n'
+            "    }\n"
+            "  ]\n"
+            "}"
+        )
+
+        user_prompt = (
+            f"目标族名: {cluster.normalized_stem}\n"
+            f"所在目录: {cluster.directory}\n"
+            f"待比对版本列表 ({len(cluster.items)} 项):\n"
+            f"{json.dumps(items_summary, ensure_ascii=False, indent=2)}"
+        )
+
+        # 尝试调用 AI 核心编排器
+        ai_audited = False
+        decision_data: Optional[Dict[str, Any]] = None
+
+        if base_url and api_key and model:
+            try:
+                norm_url = cls._normalize_base_url(base_url)
+                headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key.strip()}"
+                }
+                payload = {
+                    "model": model.strip(),
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 800,
+                    "extra_body": {"thinking": {"type": "disabled"}}
+                }
+                session = cls.get_session()
+                resp = session.post(norm_url, headers=headers, json=payload, timeout=timeout)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    clean_json = cls._clean_json_response(content)
+                    parsed = json.loads(clean_json)
+                    if isinstance(parsed, dict) and "recommended_path" in parsed:
+                        decision_data = parsed
+                        ai_audited = True
+            except Exception as e:
+                app_logger.warning("AI 多版本语义比对微契约异常: %s", e)
+
+        if ai_audited and decision_data:
+            rec_path = decision_data.get("recommended_path", "")
+            explanation = decision_data.get("explanation", "AI 已完成多版本语义研判与保留推荐。")
+            comparisons = decision_data.get("version_comparison", [])
+            comp_map = {c.get("path"): c for c in comparisons if isinstance(c, dict)}
+
+            cluster.recommended_keep_path = rec_path
+            cluster.ai_summary = explanation
+            cluster.ai_evaluated = True
+
+            for it in cluster.items:
+                c_info = comp_map.get(it.path, {})
+                it.is_recommended_keep = (it.path == rec_path)
+                if it.is_recommended_keep:
+                    it.retention_action = "建议保留正本"
+                else:
+                    it.retention_action = c_info.get("retention_advice") or "建议归档历史"
+                it.decision_reason = c_info.get("difference_summary") or ("最佳保留版本" if it.is_recommended_keep else "历史演进旧版")
+
+            return SemanticDiffDecision(
+                recommended_path=rec_path,
+                explanation=explanation,
+                version_comparison=comparisons,
+                confidence=1.0
+            )
+
+        # 本地不抢功冒进降级方案：呈现物理事实，保留最终决定权给用户
+        newest_item = max(cluster.items, key=lambda x: x.mtime) if cluster.items else None
+        ref_path = newest_item.path if newest_item else ""
+        offline_explanation = (
+            "⚠️ 当前 AI 编排器未就绪或连接未响应。恪守系统基本方针，本地引擎严格遵循不越权原则，不进行主观越权推测。"
+            "已为您如实汇总时间戳与文件大小物理事实，建议保留最新修改文件，请由您亲自定夺。"
+        )
+
+        cluster.recommended_keep_path = ref_path
+        cluster.ai_summary = offline_explanation
+        cluster.ai_evaluated = False
+
+        comparisons = []
+        for it in cluster.items:
+            is_newest = (it.path == ref_path)
+            diff_desc = f"修改时间: {datetime.fromtimestamp(it.mtime).strftime('%Y-%m-%d %H:%M')}, 大小: {format_size(it.size)}"
+            if is_newest:
+                diff_desc += " [最新物理修改项]"
+            it.is_recommended_keep = is_newest
+            it.retention_action = "建议保留正本 (时间基准)" if is_newest else "建议归档历史"
+            it.decision_reason = diff_desc
+            comparisons.append({
+                "path": it.path,
+                "version_tag": it.version_suffix or "常规版本",
+                "difference_summary": diff_desc,
+                "retention_advice": it.retention_action
+            })
+
+        return SemanticDiffDecision(
+            recommended_path=ref_path,
+            explanation=offline_explanation,
+            version_comparison=comparisons,
+            confidence=0.0
+        )
+
 
     @classmethod
     def _calculate_target_path(

@@ -711,6 +711,12 @@ class FileDataGridWidget(QWidget):
         cascade_menu = menu.addMenu(cascade_title)
         self._populate_category_cascade_menu(cascade_menu, target_items)
 
+        # AI 多版本语义比对与保留建议 (支持单选寻找同族兄弟或多选比对)
+        diff_title = f"🔍 AI 多版本语义比对与保留建议 ({len(target_items)} 项)" if is_multi else "🔍 AI 多版本语义比对与保留建议..."
+        action_version_diff = QAction(diff_title, self)
+        action_version_diff.triggered.connect(lambda: self._on_version_diff_action(target_items))
+        menu.addAction(action_version_diff)
+
         menu.addAction(action_migrate)
         menu.addSeparator()
         menu.addAction(action_copy_path)
@@ -881,6 +887,82 @@ class FileDataGridWidget(QWidget):
             app_name = dlg.app_name
             if target_dir:
                 self.promote_collective_requested.emit(target_dir, app_name)
+
+    def _on_version_diff_action(self, target_items: Any):
+        """触发 AI 多版本语义比对与保留建议对话框"""
+        from app.core.version_cluster import VersionClusterDetector
+        from app.core.domain_models import VersionClusterGroup
+        from app.ui.components.version_diff_dialog import VersionDiffDialog
+
+        if not target_items:
+            return
+
+        cluster = None
+        if len(target_items) >= 2:
+            clusters = VersionClusterDetector.find_clusters(target_items, extract_snippets=True, same_dir_only=False)
+            if clusters:
+                cluster = clusters[0]
+            else:
+                items = [VersionClusterDetector.build_cluster_item(it) for it in target_items]
+                cluster = VersionClusterGroup(
+                    group_id="manual_cluster",
+                    normalized_stem=items[0].stem,
+                    directory=os.path.dirname(items[0].path),
+                    items=items,
+                    ai_evaluated=False
+                )
+        else:
+            target_path = target_items[0].get("path", "")
+            cluster = VersionClusterDetector.find_sibling_versions(
+                target_path=target_path,
+                candidate_pool=self.source_model._data,
+                search_filesystem_if_empty=True
+            )
+
+        if not cluster or len(cluster.items) < 2:
+            QMessageBox.information(
+                self,
+                "多版本比对提示",
+                "未在当前表格或同级目录中检测到该文件的同族版本（如带有 _v1, _v2, _draft, _定稿, (1) 等后缀的其他文件）。\n\n"
+                "提示：您也可以在表格中按住 Ctrl 多选 2 个以上文件，然后右键选择进行跨文件语义比对。"
+            )
+            return
+
+        dlg = VersionDiffDialog(cluster, parent=self)
+        dlg.decision_applied.connect(self._on_version_diff_decision_applied)
+        dlg.exec()
+
+    def _on_version_diff_decision_applied(self, cluster: Any, selected_keep_path: str):
+        """当用户在多版本比对弹窗中应用保留决策时，就地更新当前表格模型中的项"""
+        updated_count = 0
+        keep_norm = os.path.normpath(selected_keep_path).lower()
+        items_map = {os.path.normpath(it.path).lower(): it for it in cluster.items}
+
+        for row_data in self.source_model._data:
+            p = row_data.get("path", "")
+            p_norm = os.path.normpath(p).lower()
+            if p_norm in items_map:
+                it = items_map[p_norm]
+                if p_norm == keep_norm:
+                    row_data["tag"] = "标准资产 (保留正本)"
+                    row_data["action"] = "保留"
+                    row_data["phase_status"] = "AI多版本正本保留"
+                else:
+                    row_data["tag"] = "多版本旧稿 (建议归档)"
+                    row_data["action"] = "建议归档"
+                    row_data["phase_status"] = "AI多版本历史归档"
+                    row_data["target_subpath"] = f"历史版本/{cluster.normalized_stem}/{it.name}"
+                    row_data["planning_path"] = f"历史版本/{cluster.normalized_stem}/{it.name}"
+                    row_data["suggested_archive_path"] = f"历史版本/{cluster.normalized_stem}/{it.name}"
+                updated_count += 1
+
+        if updated_count > 0:
+            self.source_model.layoutChanged.emit()
+            QMessageBox.information(
+                self,
+                "保留决策已应用",
+                f"已成功将所选正本保留，其余 {updated_count - 1} 份版本标记为建议归档至 [历史版本/{cluster.normalized_stem}] 目录。"
+            )
 
     def _locate_in_explorer(self, file_path: str):
         norm = os.path.normpath(file_path)

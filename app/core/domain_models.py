@@ -250,3 +250,183 @@ class ScanSessionSummary:
     duplicate_wasted_bytes: int = 0
     reclaimable_bytes: int = 0
     all_scanned_files: List[ScannedAsset] = field(default_factory=list)
+
+
+@dataclass
+class VersionClusterItem:
+    """
+    多版本聚类单项实体 (Multi-version Cluster Member Entity)
+    封装单份文件版本特征、脱敏文本指纹及保留裁决建议
+    """
+    path: str = ""
+    name: str = ""
+    size: int = 0
+    mtime: float = field(default_factory=time.time)
+    stem: str = ""
+    version_suffix: str = ""
+    category: str = "文档/多版本"
+    content_snippet: str = ""
+    is_recommended_keep: bool = False
+    retention_action: str = "建议归档"
+    decision_reason: str = ""
+    _extra: Dict[str, Any] = field(default_factory=dict)
+
+    def __getitem__(self, key: str) -> Any:
+        if hasattr(self, key):
+            return getattr(self, key)
+        if key in self._extra:
+            return self._extra[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if hasattr(self, key) and key != "_extra":
+            setattr(self, key, value)
+        else:
+            self._extra[key] = value
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            val = self[key]
+            return val if val is not None else default
+        except (KeyError, AttributeError):
+            return default
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = {
+            "path": self.path,
+            "name": self.name,
+            "size": self.size,
+            "mtime": self.mtime,
+            "stem": self.stem,
+            "version_suffix": self.version_suffix,
+            "category": self.category,
+            "content_snippet": self.content_snippet,
+            "is_recommended_keep": self.is_recommended_keep,
+            "retention_action": self.retention_action,
+            "decision_reason": self.decision_reason,
+        }
+        if self._extra:
+            d.update(self._extra)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> VersionClusterItem:
+        if isinstance(data, cls):
+            return data
+        known_fields = {
+            "path", "name", "size", "mtime", "stem", "version_suffix",
+            "category", "content_snippet", "is_recommended_keep",
+            "retention_action", "decision_reason"
+        }
+        kwargs = {}
+        extra = {}
+        for k, v in data.items():
+            if k in known_fields:
+                kwargs[k] = v
+            else:
+                extra[k] = v
+        obj = cls(**kwargs)
+        if extra:
+            obj._extra.update(extra)
+        return obj
+
+
+@dataclass
+class VersionClusterGroup:
+    """
+    同源多版本文件聚类实体组 (Multi-version Cluster Group)
+    用于同族文档/工程版本比对与 AI 统揽研判
+    """
+    group_id: str = ""
+    normalized_stem: str = ""
+    directory: str = ""
+    items: List[VersionClusterItem] = field(default_factory=list)
+    recommended_keep_path: str = ""
+    ai_summary: str = ""
+    ai_evaluated: bool = False
+    _extra: Dict[str, Any] = field(default_factory=dict)
+
+    def __getitem__(self, key: str) -> Any:
+        if hasattr(self, key):
+            return getattr(self, key)
+        if key in self._extra:
+            return self._extra[key]
+        raise KeyError(key)
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        if hasattr(self, key) and key != "_extra":
+            setattr(self, key, value)
+        else:
+            self._extra[key] = value
+
+    def get(self, key: str, default: Any = None) -> Any:
+        try:
+            val = self[key]
+            return val if val is not None else default
+        except (KeyError, AttributeError):
+            return default
+
+    def to_dict(self) -> Dict[str, Any]:
+        d = {
+            "group_id": self.group_id,
+            "normalized_stem": self.normalized_stem,
+            "directory": self.directory,
+            "items": [it.to_dict() for it in self.items],
+            "recommended_keep_path": self.recommended_keep_path,
+            "ai_summary": self.ai_summary,
+            "ai_evaluated": self.ai_evaluated,
+        }
+        if self._extra:
+            d.update(self._extra)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> VersionClusterGroup:
+        if isinstance(data, cls):
+            return data
+        known_fields = {
+            "group_id", "normalized_stem", "directory",
+            "recommended_keep_path", "ai_summary", "ai_evaluated"
+        }
+        kwargs = {}
+        extra = {}
+        for k, v in data.items():
+            if k == "items" and isinstance(v, list):
+                kwargs["items"] = [VersionClusterItem.from_dict(it) for it in v]
+            elif k in known_fields:
+                kwargs[k] = v
+            else:
+                extra[k] = v
+        obj = cls(**kwargs)
+        if extra:
+            obj._extra.update(extra)
+        return obj
+
+
+@dataclass
+class SemanticDiffDecision:
+    """
+    AI 语义差异比对与保留建议决策契约
+    """
+    recommended_path: str = ""
+    explanation: str = ""
+    version_comparison: List[Dict[str, Any]] = field(default_factory=list)
+    confidence: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "recommended_path": self.recommended_path,
+            "explanation": self.explanation,
+            "version_comparison": self.version_comparison,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> SemanticDiffDecision:
+        return cls(
+            recommended_path=data.get("recommended_path", ""),
+            explanation=data.get("explanation", ""),
+            version_comparison=data.get("version_comparison", []),
+            confidence=float(data.get("confidence", 1.0)),
+        )
+

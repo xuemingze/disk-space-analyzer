@@ -3,6 +3,7 @@ from app.ui.components.chart_widget import SpaceDistributionChartWidget
 from app.ui.components.data_table import FileDataGridWidget
 from app.ui.components.migration_dialog import MigrationDialog
 from app.ui.components.task_manager_widget import TaskManagerDialog
+from app.ui.components.version_diff_dialog import VersionDiffDialog
 
 __all__ = [
     "StatCard",
@@ -10,5 +11,6 @@ __all__ = [
     "SpaceDistributionChartWidget",
     "FileDataGridWidget",
     "MigrationDialog",
-    "TaskManagerDialog"
+    "TaskManagerDialog",
+    "VersionDiffDialog"
 ]

@@ -8,12 +8,14 @@ app/ui/dedup/review_table_step.py
 """
 import os
 import time
-from typing import List, Set, Optional, Dict
+from typing import List, Set, Optional, Dict, Any
 from PySide6.QtWidgets import (
+    QMenu, QMessageBox,
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget,
     QRadioButton, QButtonGroup, QFrame
 )
+from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt, Signal
 from app.dedup.models import DedupScanResult, DedupGroup, CollisionItem, DedupFileItem
 from app.utils.file_helper import format_size
@@ -103,6 +105,13 @@ class ReviewTableStep(QWidget):
         btn_batch_oldest.clicked.connect(lambda: self._apply_quick_preset("oldest"))
         bottom_bar.addWidget(btn_batch_oldest)
 
+        bottom_bar.addSpacing(10)
+        self.btn_ai_diff = QPushButton("🤖 AI 多版本语义比对与保留建议...")
+        self.btn_ai_diff.setFixedHeight(28)
+        self.btn_ai_diff.setStyleSheet("background-color: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 4px; padding: 0 10px; font-size: 11px; font-weight: bold;")
+        self.btn_ai_diff.clicked.connect(self._open_ai_version_diff)
+        bottom_bar.addWidget(self.btn_ai_diff)
+
         bottom_bar.addStretch()
 
         self.btn_next = QPushButton("下一步: 制定融合策略与预检 ➔")
@@ -121,6 +130,8 @@ class ReviewTableStep(QWidget):
         ])
         self.table_dups.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_dups.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_dups.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table_dups.customContextMenuRequested.connect(self._show_dup_context_menu)
 
         # 铁律 1: 锁死行高 44px
         vh = self.table_dups.verticalHeader()
@@ -152,6 +163,8 @@ class ReviewTableStep(QWidget):
         ])
         self.table_collisions.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_collisions.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_collisions.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table_collisions.customContextMenuRequested.connect(self._show_collision_context_menu)
 
         vh = self.table_collisions.verticalHeader()
         vh.setDefaultSectionSize(44)
@@ -285,6 +298,127 @@ class ReviewTableStep(QWidget):
                 if it.path in self.keep_paths:
                     self.keep_paths.remove(it.path)
             self.keep_paths.add(path)
+
+    def _open_ai_version_diff(self):
+        """为当前选中的重复组或冲突项打开 AI 多版本语义比对对话框"""
+        if not self.scan_result:
+            return
+
+        current_tab_idx = self.tabs.currentIndex()
+        if current_tab_idx == 0:
+            # 重复组 Tab
+            row = self.table_dups.currentRow()
+            target_group = self._get_dup_group_by_row(row) if row >= 0 else (self.scan_result.duplicate_groups[0] if self.scan_result.duplicate_groups else None)
+            if not target_group or not target_group.items:
+                QMessageBox.information(self, "提示", "当前没有可比对的重复文件组。")
+                return
+            self._launch_version_diff_for_group(target_group)
+        else:
+            # 冲突项 Tab
+            row = self.table_collisions.currentRow()
+            target_col = self._get_collision_by_row(row) if row >= 0 else (self.scan_result.collisions[0] if self.scan_result.collisions else None)
+            if not target_col or not target_col.files:
+                QMessageBox.information(self, "提示", "当前没有可比对的冲突项。")
+                return
+            self._launch_version_diff_for_collision(target_col)
+
+    def _show_dup_context_menu(self, pos):
+        row = self.table_dups.rowAt(pos.y())
+        if row < 0 or not self.scan_result:
+            return
+        group = self._get_dup_group_by_row(row)
+        if not group:
+            return
+
+        menu = QMenu(self)
+        action_diff = QAction(f"🔍 对此重复组 ({group.group_id}) 进行 AI 语义比对与保留建议...", self)
+        action_diff.triggered.connect(lambda: self._launch_version_diff_for_group(group))
+        menu.addAction(action_diff)
+        menu.exec(self.table_dups.viewport().mapToGlobal(pos))
+
+    def _show_collision_context_menu(self, pos):
+        row = self.table_collisions.rowAt(pos.y())
+        if row < 0 or not self.scan_result:
+            return
+        col = self._get_collision_by_row(row)
+        if not col:
+            return
+
+        menu = QMenu(self)
+        action_diff = QAction(f"🔍 对此同名冲突项 ({col.rel_path}) 进行 AI 语义比对与保留建议...", self)
+        action_diff.triggered.connect(lambda: self._launch_version_diff_for_collision(col))
+        menu.addAction(action_diff)
+        menu.exec(self.table_collisions.viewport().mapToGlobal(pos))
+
+    def _get_dup_group_by_row(self, target_row: int) -> Optional[DedupGroup]:
+        if not self.scan_result or target_row < 0:
+            return None
+        cur = 0
+        for grp in self.scan_result.duplicate_groups:
+            end = cur + len(grp.items)
+            if cur <= target_row < end:
+                return grp
+            cur = end
+        return None
+
+    def _get_collision_by_row(self, target_row: int) -> Optional[CollisionItem]:
+        if not self.scan_result or target_row < 0:
+            return None
+        cur = 0
+        for c in self.scan_result.collisions:
+            end = cur + len(c.files)
+            if cur <= target_row < end:
+                return c
+            cur = end
+        return None
+
+    def _launch_version_diff_for_group(self, group: DedupGroup):
+        from app.core.version_cluster import VersionClusterDetector
+        from app.core.domain_models import VersionClusterGroup
+        from app.ui.components.version_diff_dialog import VersionDiffDialog
+
+        items = [VersionClusterDetector.build_cluster_item(it.path) for it in group.items]
+        cluster = VersionClusterGroup(
+            group_id=group.group_id,
+            normalized_stem=items[0].stem,
+            directory=os.path.dirname(items[0].path),
+            items=items,
+            ai_evaluated=False
+        )
+        dlg = VersionDiffDialog(cluster, parent=self)
+        dlg.decision_applied.connect(self._on_version_diff_decision_applied)
+        dlg.exec()
+
+    def _launch_version_diff_for_collision(self, collision: CollisionItem):
+        from app.core.version_cluster import VersionClusterDetector
+        from app.core.domain_models import VersionClusterGroup
+        from app.ui.components.version_diff_dialog import VersionDiffDialog
+
+        items = [VersionClusterDetector.build_cluster_item(it.path) for it in collision.files]
+        cluster = VersionClusterGroup(
+            group_id=f"col_{os.path.basename(collision.rel_path)}",
+            normalized_stem=items[0].stem,
+            directory=os.path.dirname(items[0].path),
+            items=items,
+            ai_evaluated=False
+        )
+        dlg = VersionDiffDialog(cluster, parent=self)
+        dlg.decision_applied.connect(self._on_version_diff_decision_applied)
+        dlg.exec()
+
+    def _on_version_diff_decision_applied(self, cluster: Any, selected_keep_path: str):
+        """将 AI 研判选定的正本应用到当前保留集合中"""
+        cluster_paths = {it.path for it in cluster.items}
+        for p in list(self.keep_paths):
+            if p in cluster_paths:
+                self.keep_paths.remove(p)
+        self.keep_paths.add(selected_keep_path)
+        self._refresh_tables()
+        QMessageBox.information(
+            self,
+            "保留决策已同步",
+            f"已成功将正本 [{os.path.basename(selected_keep_path)}] 设为优先保留项。"
+        )
 
     def _apply_quick_preset(self, preset: str):
         if not self.scan_result:
