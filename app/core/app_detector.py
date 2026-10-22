@@ -10,7 +10,10 @@ from app.utils.logger import app_logger
 from app.core.organize_models import (
     OrganizeOptions, OrganizeMode, extract_file_content_sample, sanitize_subpath
 )
-from app.core.domain_models import ArchiveDestinationPath, HistorySuggestionProvider, ArchivePlanningUnit
+from app.core.domain_models import (
+    ArchiveDestinationPath, HistorySuggestionProvider, ArchivePlanningUnit,
+    TopologyRoutingTable, TopologyRole, TopologyPolicy, AIAssetPayloadBuilder
+)
 
 # 已知软件、工具链及生态的特征规则库
 KNOWN_APP_PATTERNS = [
@@ -1246,13 +1249,15 @@ class AppDetector:
         """规整源泛目录名称，去除末尾日期/版本后缀并归聚子级语义"""
         if not top_dir:
             return None
-        low = top_dir.lower()
-        COMMON_CONTAINERS = {"downloads", "desktop", "documents", "temp", "tmp", "misc", "recycle.bin", "recycler"}
-        if low in COMMON_CONTAINERS:
-            if sub_name:
+
+        topo_table = TopologyRoutingTable.instance()
+        # 若 top_dir 命中原材料/中转容器 (如 共用文件, Downloads 等)，绝不可作为业务泛目录
+        if topo_table.is_staging_bucket(top_dir):
+            if sub_name and not topo_table.is_staging_bucket(sub_name):
                 return cls._detect_umbrella_from_name(sub_name)
             return None
 
+        low = top_dir.lower()
         if "live2d" in low:
             return "live2D"
         if "发票" in top_dir:
@@ -1261,6 +1266,8 @@ class AppDetector:
         # 通用语义规整：去除末尾的日期、月份、版本号（如 '项目2025' -> '项目'，'发票9月' -> '发票'）
         base = re.sub(r'[\-_]?(?:20\d\d[-_]?\d*|v?\d+(?:\.\d+)*|\d+月).*$', '', top_dir, flags=re.I).strip()
         if base and len(base) >= 2:
+            if topo_table.is_staging_bucket(base):
+                return None
             return base
         return top_dir
 
@@ -1280,7 +1287,7 @@ class AppDetector:
         """
         p = Path(item_path)
         norm_p_str = os.path.normpath(item_path)
-        COMMON_CONTAINERS = {"downloads", "desktop", "documents", "temp", "tmp", "misc", "recycle.bin", "recycler"}
+        topo_table = TopologyRoutingTable.instance()
 
         # 1. 尝试匹配 scan_roots
         best_root = None
@@ -1303,6 +1310,8 @@ class AppDetector:
                     return cls._normalize_umbrella_name(top_dir, sub_name)
                 elif len(parts) == 1:
                     name = parts[0]
+                    if topo_table.is_staging_bucket(name):
+                        return None
                     detected = cls._detect_umbrella_from_name(name, known_umbrellas)
                     if detected:
                         return detected
@@ -1320,13 +1329,13 @@ class AppDetector:
             if detected:
                 return detected
             if p.parent and len(p.parent.parts) >= 1:
-                if p.parent.name.lower() in COMMON_CONTAINERS:
+                if topo_table.is_staging_bucket(p.parent.name) or topo_table.is_staging_bucket(str(p.parent)):
                     return None
                 detected_parent = cls._detect_umbrella_from_name(p.parent.name, known_umbrellas)
                 if detected_parent:
                     return detected_parent
                 if len(p.parents) >= 2:
-                    if p.parents[1].name.lower() in COMMON_CONTAINERS:
+                    if topo_table.is_staging_bucket(p.parents[1].name) or topo_table.is_staging_bucket(str(p.parents[1])):
                         return None
                     detected_grand = cls._detect_umbrella_from_name(p.parents[1].name, known_umbrellas)
                     if detected_grand:
@@ -1520,9 +1529,10 @@ class AppDetector:
 
         # 5. 综合整理模式 (Comprehensive)
         # 优先锚定源泛目录 (Source Umbrella Preservation): 若明确属于源泛目录 (如 live2D, 发票, 合同)，整盘保全该主干
-        if source_umbrella:
+        topo_table = TopologyRoutingTable.instance()
+        if source_umbrella and not topo_table.is_staging_bucket(source_umbrella):
             clean_umb = sanitize_subpath(source_umbrella)
-            if clean_umb:
+            if clean_umb and not topo_table.is_staging_bucket(clean_umb):
                 return clean_umb
 
         # 针对特定业务关键词智能细化（发票、合同、简历、日志等）
@@ -1530,7 +1540,8 @@ class AppDetector:
         names_text = (p_name + " " + " ".join([it.get("name", "") for it in items[:10]])).lower()
 
         # 父子语义广义容器佐证：若所在目录或父目录为广义容器（如 财务、设计、媒体、项目），结合上下文细分
-        parent_broad = cls.match_broad_container(p.name if p.is_dir() else p.parent.name)
+        parent_candidate = p.name if p.is_dir() else p.parent.name
+        parent_broad = cls.match_broad_container(parent_candidate) if not topo_table.is_staging_bucket(parent_candidate) else None
         if parent_broad:
             broad_key, broad_info = parent_broad
             prefix = broad_info["subpath_prefix"]
@@ -1792,12 +1803,17 @@ class AppDetector:
                 group_key = matched_tool_root
                 is_dir_group = True
             else:
-                is_in_common_container = (
-                    p.parent.name.lower() in common_container_names or
+                topo_table = TopologyRoutingTable.instance()
+                p_parent_str = str(p.parent)
+                p_parent_name = p.parent.name
+                is_in_staging_container = (
+                    topo_table.is_staging_bucket(p_parent_str, scan_roots=scan_roots_list) or
+                    topo_table.is_staging_bucket(p_parent_name) or
+                    p_parent_name.lower() in common_container_names or
                     len(p.parent.parts) <= 2 or
-                    (item_scan_root and str(p.parent).lower() == item_scan_root.lower())
+                    (item_scan_root and p_parent_str.lower() == item_scan_root.lower())
                 )
-                if not is_in_common_container and p.parent and len(p.parent.parts) > 1:
+                if not is_in_staging_container and p.parent and len(p.parent.parts) > 1:
                     group_key = str(p.parent)
                     is_dir_group = True
                 else:

@@ -17,7 +17,8 @@ from app.core.organize_models import (
     OrganizeOptions, OrganizeMode, sanitize_subpath, extract_file_content_sample
 )
 from app.core.domain_models import (
-    VersionClusterGroup, VersionClusterItem, SemanticDiffDecision, ArchiveDestinationPath
+    VersionClusterGroup, VersionClusterItem, SemanticDiffDecision, ArchiveDestinationPath,
+    TopologyRoutingTable, TopologyRole, TopologyPolicy, AIAssetPayloadBuilder
 )
 
 
@@ -948,14 +949,18 @@ class AIService:
         cls, cat_name: str, app_name: str, dest_root_p: Path, orig_root_p: Path, is_dir: bool, subpath: str = ""
     ) -> Path:
         clean_sub = sanitize_subpath(subpath)
-        
+        topo_table = TopologyRoutingTable.instance()
+        entity_name = app_name if app_name else orig_root_p.name
+        if topo_table.is_staging_bucket(entity_name):
+            entity_name = ""
+
         # 若提供了推荐的细粒度子目录层级，优先通过 ArchiveDestinationPath 构建 (彻底解决相邻与包含重复嵌套 Bug)
         if clean_sub:
             dest_obj = ArchiveDestinationPath.build(
                 dest_root=dest_root_p,
                 category=cat_name,
                 subpath=clean_sub,
-                entity_name=orig_root_p.name,
+                entity_name=entity_name,
                 is_dir=is_dir
             )
             return dest_obj.path
@@ -963,17 +968,20 @@ class AIService:
         active_cats = global_category_manager.get_active()
         for cat in active_cats:
             if cat["name"] == cat_name:
-                template = cat.get("target_path_template", "{archive_root}/{category_name}/{app_name}")
-                res = template.replace("{archive_root}", str(dest_root_p))
-                res = res.replace("{category_name}", cat_name)
-                res = res.replace("{app_name}", app_name if app_name else orig_root_p.name)
-                # 使用 ArchiveDestinationPath 折叠潜在重复段
-                return ArchiveDestinationPath(res).path
+                raw_entity = entity_name if is_dir else ""
+                dest_obj = ArchiveDestinationPath.build(
+                    dest_root=dest_root_p,
+                    category=cat_name,
+                    entity_name=raw_entity,
+                    is_dir=is_dir
+                )
+                return dest_obj.path
+
         # Fallback
         dest_obj = ArchiveDestinationPath.build(
             dest_root=dest_root_p,
             category=cat_name,
-            entity_name=orig_root_p.name,
+            entity_name=entity_name,
             is_dir=is_dir
         )
         return dest_obj.path
@@ -1614,6 +1622,8 @@ class AIService:
 
             sys_prefs = f"用户偏好：工作相关 {int(options.work_personal_ratio * 100)}%，私人相关 {100 - int(options.work_personal_ratio * 100)}%，最低接受置信度 {options.min_confidence}\n"
 
+            topo_ctx = TopologyRoutingTable.instance().export_ai_topology_context()
+
             system_prompt = (
                 "你是一个专业的文件系统治理与软件生态架构专家。请分析待处理的目录与文件聚合单元并制定归档分类方案。\n"
                 "【核心原则】\n"
@@ -1640,6 +1650,7 @@ class AIService:
                 f"{custom_prompt}"
                 f"{sys_prefs}"
                 f"{whitelist_prompt}\n"
+                f"{topo_ctx}\n"
                 "【输出格式约束】\n"
                 "请严格以 JSON 格式输出，必须且只能包含 groups 数组，且必须包含输入时给定的 stable group_id：\n"
                 "{\n"
@@ -1701,6 +1712,18 @@ class AIService:
                     else:
                         sub["target_path"] = str(new_target_base / Path(sub["name"]))
 
+                # 若 AI 判定为独立软件/绿色包集体，自学习沉淀拓扑路由
+                if g.get("is_directory_group") and g.get("original_root"):
+                    try:
+                        TopologyRoutingTable.instance().learn(
+                            g["original_root"],
+                            role=TopologyRole.APP_COLLECTIVE,
+                            policy=TopologyPolicy.PRESERVE_ATOMIC,
+                            source="ai"
+                        )
+                    except Exception:
+                        pass
+
             def _mark_as_sensitive_fallback(g: dict, detail: str = "") -> None:
                 g["source"] = "本地规则(涉敏降级)"
                 orig_rat = g.get("rationale", "")
@@ -1719,56 +1742,11 @@ class AIService:
 
                 batch_summaries = []
                 for g in sub_batch:
-                    c_info = g.get("collective_info") or {}
-                    summary_item = {
-                        "group_id": g["group_id"],
-                        "total_size_mb": round(g["total_size"] / (1024 * 1024), 2),
-                        "initial_suggested_category": g["suggested_category"],
-                        "initial_subpath": g.get("recommended_subpath", ""),
-                    }
-                    if g.get("source_umbrella"):
-                        summary_item["source_umbrella"] = g["source_umbrella"]
-                    meta = g.get("metadata") or {}
-                    norm_name = g.get("normalized_name") or meta.get("normalized_name") or ""
-                    if g.get("is_directory_group"):
-                        summary_item["unit_type"] = "软件/工程集体 (Directory Collective)"
-                        summary_item["directory_name"] = g["name"]
-                        summary_item["software_name"] = meta.get("software_name") or c_info.get("software_name") or g.get("app_name") or g["name"]
-                        if meta.get("product_version"):
-                            summary_item["product_version"] = meta["product_version"]
-                        if meta.get("morphology"):
-                            summary_item["morphology"] = meta["morphology"]
-                        if norm_name:
-                            summary_item["normalized_name"] = norm_name
-                        if c_info.get("primary_executable"):
-                            summary_item["primary_executable"] = c_info["primary_executable"]
-                        if c_info.get("product_title"):
-                            summary_item["product_title"] = c_info["product_title"]
-                        if c_info.get("manifest_project_name"):
-                            summary_item["manifest_project_name"] = c_info["manifest_project_name"]
-                        if c_info.get("signature_type"):
-                            summary_item["signature_type"] = c_info["signature_type"]
-                    else:
-                        summary_item["unit_type"] = "散装独立文件 (Single File)"
-                        summary_item["file_name"] = g["name"]
-                        summary_item["extension"] = Path(g["name"]).suffix.lower()
-                        summary_item["initial_detected_app"] = meta.get("software_name") or g.get("app_name", "")
-                        if meta.get("software_name"):
-                            summary_item["software_name"] = meta["software_name"]
-                        if meta.get("product_version"):
-                            summary_item["product_version"] = meta["product_version"]
-                        if meta.get("publisher"):
-                            summary_item["publisher"] = meta["publisher"]
-                        if meta.get("morphology"):
-                            summary_item["morphology"] = meta["morphology"]
-                        if meta.get("is_obfuscated_name"):
-                            summary_item["is_obfuscated_name"] = True
-                        if norm_name and norm_name != g["name"]:
-                            summary_item["normalized_name"] = norm_name
-                        if meta.get("file_description"):
-                            summary_item["file_description"] = meta["file_description"]
-                        if options.sample_content_enabled and g.get("content_samples"):
-                            summary_item["content_samples"] = g["content_samples"]
+                    summary_item = AIAssetPayloadBuilder.build_summary_item(
+                        g,
+                        is_directory_group=g.get("is_directory_group", False),
+                        options=options
+                    )
                     batch_summaries.append(summary_item)
 
                 payload = {
@@ -2069,56 +2047,12 @@ class AIService:
             # 严格筛选前 25 项最具治理价值的高权重资产（实体集体、大压缩包、核心单据）
             high_val = cls.filter_high_value_assets_for_ai(raw_redundant, max_items=25)
             for it in high_val:
-                is_c = bool(it.get("is_directory_collective") or it.get("is_collective"))
-                meta = it.get("metadata") or {}
-                norm_name = it.get("normalized_name") or meta.get("normalized_name") or ""
-                sw_name = meta.get("software_name") or it.get("software_name") or ""
-                ver = meta.get("product_version") or ""
-                morph = meta.get("morphology") or ("原子实体集体" if is_c else "独立单项")
-                item_dict = {
-                    "name": it.get("name", ""),
-                    "path": it.get("path", ""),
-                    "size_mb": round(it.get("size", 0) / (1024 * 1024), 2),
-                    "category": it.get("category", "未分类"),
-                    "morphology": morph,
-                    "file_count": it.get("file_count", 1) if is_c else 1,
-                    "reason": str(it.get("reason", ""))[:40]
-                }
-                if sw_name:
-                    item_dict["software_name"] = sw_name
-                if ver:
-                    item_dict["product_version"] = ver
-                if norm_name and norm_name != it.get("name"):
-                    item_dict["normalized_name"] = norm_name
-                if meta.get("is_obfuscated_name"):
-                    item_dict["is_obfuscated_name"] = True
-                cleaned_redundant.append(item_dict)
+                cleaned_redundant.append(AIAssetPayloadBuilder.build_summary_item(it))
 
         # 2. Top 15 大文件同样瘦身并注入真实铭牌元数据
         cleaned_top10 = []
         for tf in scan_summary.get("top_100_files", [])[:15]:
-            is_c = bool(tf.get("is_directory_collective") or tf.get("is_collective"))
-            meta = tf.get("metadata") or {}
-            norm_name = tf.get("normalized_name") or meta.get("normalized_name") or ""
-            sw_name = meta.get("software_name") or tf.get("software_name") or ""
-            ver = meta.get("product_version") or ""
-            morph = meta.get("morphology") or ("原子实体集体" if is_c else "独立单项")
-            top_dict = {
-                "name": tf.get("name", ""),
-                "path": tf.get("path", ""),
-                "size_mb": round(tf.get("size", 0) / (1024 * 1024), 2),
-                "morphology": morph,
-                "file_count": tf.get("file_count", 1) if is_c else 1
-            }
-            if sw_name:
-                top_dict["software_name"] = sw_name
-            if ver:
-                top_dict["product_version"] = ver
-            if norm_name and norm_name != tf.get("name"):
-                top_dict["normalized_name"] = norm_name
-            if meta.get("is_obfuscated_name"):
-                top_dict["is_obfuscated_name"] = True
-            cleaned_top10.append(top_dict)
+            cleaned_top10.append(AIAssetPayloadBuilder.build_summary_item(tf))
 
         c_cnt = scan_summary.get("collective_count", 0)
         s_cnt = scan_summary.get("standalone_file_count", 0)

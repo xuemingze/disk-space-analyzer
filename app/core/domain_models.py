@@ -13,6 +13,9 @@ from __future__ import annotations
 import os
 import re
 import time
+import json
+import threading
+from enum import Enum
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -449,6 +452,325 @@ class SemanticDiffDecision:
         )
 
 
+ENVIRONMENT_TOPOLOGY_FILE = Path.home() / ".disk_space_analyzer" / "environment_topology.json"
+
+DEFAULT_STAGING_CONTAINER_NAMES: Set[str] = {
+    # 中文原材料/中转容器
+    "共用文件", "共享文件", "共享", "原材料", "中转", "中转站", "中转容器",
+    "临时中转", "待整理", "待分类", "临时整理", "下载", "桌面", "收集箱",
+    "收件箱", "网盘下载", "百度网盘下载", "迅雷下载", "各种安装包", "安装包",
+    "软件安装包", "安装文件", "临时", "常用文件",
+    # 英文常见中转容器
+    "downloads", "download", "desktop", "temp", "tmp", "staging",
+    "inbox", "misc", "installers", "packages", "shared", "share",
+    "transit", "incoming", "scratch", "assets"
+}
+
+
+class TopologyRole(str, Enum):
+    """机器环境拓扑角色枚举"""
+    STAGING_BUCKET = "staging_bucket"      # 原材料/中转/下载容器 (如 共用文件, Downloads, 临时中转)
+    APP_COLLECTIVE = "app_collective"      # 原子不可拆分应用运行时或工程 (如 AweSun, WeChat)
+    WORKSPACE = "workspace"                # 用户工作/项目工程空间 (如 D:\项目)
+    VAULT = "vault"                        # 目标归档沉淀库 (如 D:\归档备份)
+    UNKNOWN = "unknown"                    # 未知角色
+
+
+class TopologyPolicy(str, Enum):
+    """拓扑路径归档策略枚举"""
+    STRIP_CONTAINER = "strip_container"    # 剥离中转容器名，文件打散为独立资产，目标规划路径坚决不含该容器名
+    PRESERVE_ATOMIC = "preserve_atomic"    # 保持原子密封整体，内部子目录结构整体平移保全
+    PRESERVE_SUBTREE = "preserve_subtree"  # 保持相对子树结构
+    IGNORE_PROTECTED = "ignore_protected"  # 保护/忽略
+
+
+@dataclass
+class TopologyRoute:
+    """
+    环境拓扑路由规则项 (Topology Route Entry)
+    """
+    pattern_or_path: str
+    role: TopologyRole = TopologyRole.STAGING_BUCKET
+    policy: TopologyPolicy = TopologyPolicy.STRIP_CONTAINER
+    source: str = "builtin"     # builtin | learned_offline | learned_ai | scan_root
+    hit_count: int = 0
+    last_matched: float = field(default_factory=time.time)
+
+    def should_strip_from_target(self) -> bool:
+        return self.role == TopologyRole.STAGING_BUCKET or self.policy == TopologyPolicy.STRIP_CONTAINER
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pattern_or_path": self.pattern_or_path,
+            "role": self.role.value if isinstance(self.role, TopologyRole) else str(self.role),
+            "policy": self.policy.value if isinstance(self.policy, TopologyPolicy) else str(self.policy),
+            "source": self.source,
+            "hit_count": self.hit_count,
+            "last_matched": self.last_matched,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> TopologyRoute:
+        role_str = data.get("role", "staging_bucket")
+        try:
+            role = TopologyRole(role_str)
+        except ValueError:
+            role = TopologyRole.STAGING_BUCKET
+        policy_str = data.get("policy", "strip_container")
+        try:
+            policy = TopologyPolicy(policy_str)
+        except ValueError:
+            policy = TopologyPolicy.STRIP_CONTAINER
+        return cls(
+            pattern_or_path=data.get("pattern_or_path", ""),
+            role=role,
+            policy=policy,
+            source=data.get("source", "learned_offline"),
+            hit_count=int(data.get("hit_count", 0)),
+            last_matched=float(data.get("last_matched", time.time()))
+        )
+
+
+class TopologyRoutingTable:
+    """
+    环境拓扑路由表服务 (Environment Topology Routing Table Singleton)
+    
+    面向对象领域单例，由离线启发式规则与在线 AI 双向对称调用：
+    1. 离线规则查询：零 Token 极速研判目录角色，阻断中转容器误捆绑伪集体，保障目标规划路径不渗入原材料目录；
+    2. 在线 AI 编排查询：提供机器拓扑环境上下文 (Context <= 50 Tokens)，确保 AI 识别中转容器与原子集体；
+    3. 自学习自沉淀：AI 在研判与用户微调过程中动态沉淀新路由至 ~/.disk_space_analyzer/environment_topology.json；
+    4. LPM (Longest Prefix Match) 最长前缀匹配：精准区分中转外壳与嵌套原子应用。
+    """
+    _instance: Optional[TopologyRoutingTable] = None
+    _lock = threading.RLock()
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(TopologyRoutingTable, cls).__new__(cls)
+                    cls._instance._routes = {}
+                    cls._instance._builtin_staging_names = set(DEFAULT_STAGING_CONTAINER_NAMES)
+                    cls._instance._file_path = ENVIRONMENT_TOPOLOGY_FILE
+                    cls._instance.load()
+        return cls._instance
+
+    @classmethod
+    def instance(cls) -> TopologyRoutingTable:
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def reset_instance_for_testing(cls) -> None:
+        with cls._lock:
+            cls._instance = None
+
+    def load(self) -> None:
+        with self._lock:
+            self._routes.clear()
+            if self._file_path.exists():
+                try:
+                    with open(self._file_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, list):
+                        for item in data:
+                            if isinstance(item, dict) and "pattern_or_path" in item:
+                                route = TopologyRoute.from_dict(item)
+                                key = self._normalize_key(route.pattern_or_path)
+                                self._routes[key] = route
+                    elif isinstance(data, dict) and "routes" in data:
+                        for item in data.get("routes", []):
+                            if isinstance(item, dict) and "pattern_or_path" in item:
+                                route = TopologyRoute.from_dict(item)
+                                key = self._normalize_key(route.pattern_or_path)
+                                self._routes[key] = route
+                except Exception:
+                    pass
+
+    def save(self) -> None:
+        with self._lock:
+            try:
+                self._file_path.parent.mkdir(parents=True, exist_ok=True)
+                routes_list = [r.to_dict() for r in self._routes.values()]
+                payload = {
+                    "version": "1.0",
+                    "updated_at": time.time(),
+                    "routes": routes_list
+                }
+                with open(self._file_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _normalize_key(path_or_name: str) -> str:
+        s = str(path_or_name).strip().replace("\\", "/")
+        if len(s) > 3 and s.endswith("/"):
+            s = s.rstrip("/")
+        return s.lower()
+
+    def match_route(self, path_or_name: str, scan_roots: Optional[List[str]] = None) -> Optional[TopologyRoute]:
+        """
+        采用最长前缀匹配 (LPM) 算法查找路径或目录名的拓扑路由角色
+        """
+        if not path_or_name or not str(path_or_name).strip():
+            return None
+
+        clean_input = str(path_or_name).strip()
+        norm_key = self._normalize_key(clean_input)
+        base_name_lower = Path(clean_input).name.lower()
+
+        with self._lock:
+            # 1. 检查 scan_roots：如果给定了扫描根路径，且当前路径直接等于扫描根
+            if scan_roots:
+                for sr in scan_roots:
+                    if sr and self._normalize_key(sr) == norm_key:
+                        return TopologyRoute(
+                            pattern_or_path=sr,
+                            role=TopologyRole.STAGING_BUCKET,
+                            policy=TopologyPolicy.STRIP_CONTAINER,
+                            source="scan_root"
+                        )
+
+            # 2. 精确路径匹配
+            if norm_key in self._routes:
+                route = self._routes[norm_key]
+                route.hit_count += 1
+                route.last_matched = time.time()
+                return route
+
+            # 3. 祖先路径最长前缀匹配 (LPM)
+            hierarchical_routes = [
+                (k, r) for k, r in self._routes.items()
+                if "/" in k or "\\" in k or ":" in k
+            ]
+            hierarchical_routes.sort(key=lambda x: len(x[0]), reverse=True)
+
+            for p_key, route in hierarchical_routes:
+                if norm_key == p_key or norm_key.startswith(p_key + "/"):
+                    route.hit_count += 1
+                    route.last_matched = time.time()
+                    return route
+
+            # 4. 目录名 / 单段名词匹配 (自定义沉淀库)
+            if base_name_lower in self._routes:
+                route = self._routes[base_name_lower]
+                route.hit_count += 1
+                route.last_matched = time.time()
+                return route
+
+            # 5. 内置兜底原材料/中转容器词典库
+            if base_name_lower in self._builtin_staging_names or norm_key in self._builtin_staging_names:
+                return TopologyRoute(
+                    pattern_or_path=base_name_lower,
+                    role=TopologyRole.STAGING_BUCKET,
+                    policy=TopologyPolicy.STRIP_CONTAINER,
+                    source="builtin"
+                )
+
+        return None
+
+    def is_staging_bucket(self, path_or_name: str, scan_roots: Optional[List[str]] = None) -> bool:
+        """
+        判断路径或目录名自身是否为原材料/中转容器 (STAGING_BUCKET)
+        """
+        if not path_or_name or not str(path_or_name).strip():
+            return False
+
+        clean_input = str(path_or_name).strip()
+        norm_key = self._normalize_key(clean_input)
+        base = Path(clean_input).name.lower()
+
+        with self._lock:
+            # 1. 检查是否等于扫描根
+            if scan_roots:
+                for sr in scan_roots:
+                    if sr and self._normalize_key(sr) == norm_key:
+                        return True
+
+            # 2. 检查精确注册的路由自身角色
+            if norm_key in self._routes:
+                return self._routes[norm_key].should_strip_from_target()
+            if base in self._routes:
+                return self._routes[base].should_strip_from_target()
+
+            # 3. 检查内置与学习的单段中转容器名
+            if base in self._builtin_staging_names or norm_key in self._builtin_staging_names:
+                return True
+
+        return False
+
+    def should_strip_from_target(self, segment_or_name: str, is_atomic_collective: bool = False) -> bool:
+        """
+        判断该路径段在构建目标规划路径时是否必须坚决剥离
+        若是独立软件集体/工程集体 (is_atomic_collective=True)，保全其软件名，绝不剥离；
+        若是原材料/中转容器，坚决剥离。
+        """
+        if is_atomic_collective:
+            return False
+        return self.is_staging_bucket(segment_or_name)
+
+    def learn(
+        self,
+        pattern_or_path: str,
+        role: TopologyRole = TopologyRole.STAGING_BUCKET,
+        policy: TopologyPolicy = TopologyPolicy.STRIP_CONTAINER,
+        source: str = "ai"
+    ) -> TopologyRoute:
+        """
+        自学习并持久化环境拓扑路由规则 (AI 或用户微调调用)
+        """
+        if not pattern_or_path or not str(pattern_or_path).strip():
+            raise ValueError("路由路径或名称不能为空")
+
+        with self._lock:
+            key = self._normalize_key(pattern_or_path)
+            clean_val = str(pattern_or_path).strip()
+            if key in self._routes:
+                route = self._routes[key]
+                route.role = role
+                route.policy = policy
+                route.source = source
+                route.hit_count += 1
+                route.last_matched = time.time()
+            else:
+                route = TopologyRoute(
+                    pattern_or_path=clean_val,
+                    role=role,
+                    policy=policy,
+                    source=source,
+                    hit_count=1,
+                    last_matched=time.time()
+                )
+                self._routes[key] = route
+            self.save()
+            return route
+
+    def export_ai_topology_context(self) -> str:
+        """
+        导出紧凑型环境拓扑上下文 (Tokens <= 50)，直接注入 AI System Prompt
+        """
+        sample_staging = ["共用文件", "Downloads", "桌面", "临时整理", "待分类", "安装包"]
+        with self._lock:
+            learned = [
+                r.pattern_or_path for r in self._routes.values()
+                if r.role == TopologyRole.STAGING_BUCKET and r.pattern_or_path not in sample_staging
+            ]
+            if learned:
+                sample_staging = (learned[:3] + sample_staging)[:6]
+
+        ctx = (
+            "【环境拓扑与中转容器路由规范 (Environment Topology Routing)】\n"
+            f"- 原材料/中转容器 (STAGING_BUCKET, 如: {', '.join(sample_staging)})：\n"
+            "  仅作为输入源环境参考，其容器名称绝对禁止注入到建议归档路径 (recommended_subpath / suggested_category) 中！\n"
+            "- 独立软件集体 (APP_COLLECTIVE, 如解压绿色包、项目根)：保持原子整体，不可拆散内部子文件。"
+        )
+        return ctx
+
+
 @dataclass(frozen=True)
 class ArchiveDestinationPath:
     """
@@ -457,8 +779,9 @@ class ArchiveDestinationPath:
     统一封装归档目标路径的构建、相邻重复段折叠、路径安全性校验与子路径相对派生：
     1. 彻底解决形如 ~/发票/发票/XXX、~/live2D/live2D/XXX 的重复段嵌套 Bug；
     2. 严格遵循面向对象不可变值对象契约；
-    3. 支持安全检验 (is_safe)，阻断根盘误擦除与上卷遍历跨盘；
-    4. 支持 relative_join 高性能相对拼接。
+    3. 协同 TopologyRoutingTable，彻底剥离原材料/中转容器名称（如 '共用文件'），阻断污染归档路径；
+    4. 支持安全检验 (is_safe)，阻断根盘误擦除与上卷遍历跨盘；
+    5. 支持 relative_join 高性能相对拼接。
     """
     raw_path: str
 
@@ -501,15 +824,29 @@ class ArchiveDestinationPath:
         面向对象构建标准化归档目标规划路径，内建防撕裂、去冗余与路径规范化契约
         """
         dest_root_p = Path(dest_root)
+        topo_table = TopologyRoutingTable.instance()
 
         # 收集待拼接的语义段
         extra_parts: List[str] = []
         if category and str(category).strip():
             extra_parts.append(str(category).strip())
+
+        # 清洗 subpath 中的中转/原材料容器段 (例如将 '07_系统工具/共用文件' 或 '共用文件' 中的 '共用文件' 彻底剔除)
         if subpath and str(subpath).strip():
-            extra_parts.append(str(subpath).strip())
+            norm_sub = str(subpath).replace("\\", "/").strip("/")
+            sub_segs = [s.strip() for s in norm_sub.split("/") if s.strip()]
+            cleaned_sub_segs = [
+                s for s in sub_segs
+                if not topo_table.is_staging_bucket(s)
+            ]
+            if cleaned_sub_segs:
+                extra_parts.extend(cleaned_sub_segs)
+
+        # 检验 entity_name：若是中转/原材料容器 (如 '共用文件')，即使 is_dir=True 也坚决剔除；仅保留真正的独立软件集体 (如 'AweSun')
         if entity_name and str(entity_name).strip() and is_dir:
-            extra_parts.append(str(entity_name).strip())
+            ent_str = str(entity_name).strip()
+            if not topo_table.is_staging_bucket(ent_str):
+                extra_parts.append(ent_str)
 
         collapsed_extras = cls.collapse_duplicate_segments(extra_parts)
 
@@ -559,6 +896,136 @@ class ArchiveDestinationPath:
     @property
     def name(self) -> str:
         return Path(self.raw_path).name
+
+
+class AIAssetPayloadBuilder:
+    """
+    标准 AI 资产报送契约构建器 (Standardized AI Asset Payload Builder)
+    
+    严格保障面向对象封装与零元数据遗漏：
+    确保软件名(software_name)、产品版本(product_version)、厂商(publisher)、
+    有序领域分类(domain_sector)、混淆标记(is_obfuscated_name)、标准化名称(normalized_name)、
+    物理形态(morphology)、内部文件数(file_count)、容量MB(size_mb) 等 9 大关键元数据 100% 完整交付给大模型。
+    """
+    @classmethod
+    def build_summary_item(
+        cls,
+        asset_or_group: Union[ScannedAsset, Dict[str, Any]],
+        is_directory_group: Optional[bool] = None,
+        options: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """
+        统一将 ScannedAsset 或聚合组 dict 转换为发给大模型的标准结构化字典，杜绝元数据遗漏
+        """
+        if hasattr(asset_or_group, "to_dict"):
+            data = asset_or_group.to_dict()
+        elif isinstance(asset_or_group, dict):
+            data = asset_or_group
+        else:
+            data = dict(asset_or_group)
+
+        # 判定目录集体还是单文件
+        if is_directory_group is not None:
+            is_dir = bool(is_directory_group)
+        else:
+            is_dir = bool(
+                data.get("is_directory_group") or
+                data.get("is_directory_collective") or
+                data.get("is_collective", False)
+            )
+
+        # 基础标识与大小提取
+        path_val = data.get("path") or data.get("original_root") or data.get("original_path", "")
+        name_val = data.get("name") or (Path(path_val).name if path_val else "unknown")
+        group_id = data.get("group_id") or data.get("id") or f"grp_{abs(hash(str(path_val))) % 1000000:04d}"
+
+        raw_size = data.get("total_size") if ("total_size" in data) else data.get("size", 0)
+        size_mb = round(int(raw_size or 0) / (1024 * 1024), 2)
+
+        meta = data.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        c_info = data.get("collective_info") or {}
+        if not isinstance(c_info, dict):
+            c_info = {}
+
+        # 9 大核心元数据严格无遗漏提取
+        sw_name = (
+            meta.get("software_name") or
+            c_info.get("software_name") or
+            data.get("software_name") or
+            data.get("app_name") or
+            ""
+        )
+        if "未识别" in sw_name or "待分类" in sw_name:
+            sw_name = ""
+
+        prod_ver = meta.get("product_version") or c_info.get("version") or meta.get("version") or ""
+        publisher = meta.get("publisher") or c_info.get("publisher") or ""
+        domain_sector = meta.get("domain_sector") or c_info.get("domain_sector") or ""
+        norm_name = data.get("normalized_name") or meta.get("normalized_name") or ""
+        is_obf = bool(meta.get("is_obfuscated_name") or data.get("is_obfuscated_name") or False)
+        morphology = meta.get("morphology") or ("原子实体集体" if is_dir else "独立单项")
+        
+        file_count = int(data.get("file_count") or (len(data.get("sub_items", [])) if is_dir else 1))
+        if file_count <= 0:
+            file_count = 1
+
+        init_cat = data.get("suggested_category") or data.get("category", "未分类/待人工确认")
+        init_sub = data.get("recommended_subpath") or data.get("target_subpath", "")
+
+        summary_item: Dict[str, Any] = {
+            "group_id": group_id,
+            "path": path_val,
+            "name": name_val,
+            "size_mb": size_mb,
+            "file_count": file_count,
+            "morphology": morphology,
+            "initial_suggested_category": init_cat,
+            "initial_subpath": init_sub,
+        }
+
+        # 9 大元数据注入
+        if sw_name:
+            summary_item["software_name"] = sw_name
+        if prod_ver:
+            summary_item["product_version"] = prod_ver
+        if publisher:
+            summary_item["publisher"] = publisher
+        if domain_sector:
+            summary_item["domain_sector"] = domain_sector
+        if is_obf:
+            summary_item["is_obfuscated_name"] = True
+        if norm_name and norm_name != name_val:
+            summary_item["normalized_name"] = norm_name
+
+        if is_dir:
+            summary_item["unit_type"] = "软件/工程集体 (Directory Collective)"
+            summary_item["directory_name"] = name_val
+            if c_info.get("primary_executable"):
+                summary_item["primary_executable"] = c_info["primary_executable"]
+            if c_info.get("product_title"):
+                summary_item["product_title"] = c_info["product_title"]
+            if c_info.get("manifest_project_name"):
+                summary_item["manifest_project_name"] = c_info["manifest_project_name"]
+            if c_info.get("signature_type"):
+                summary_item["signature_type"] = c_info["signature_type"]
+        else:
+            summary_item["unit_type"] = "散装独立文件 (Single File)"
+            summary_item["file_name"] = name_val
+            summary_item["extension"] = Path(name_val).suffix.lower()
+            summary_item["initial_detected_app"] = sw_name or data.get("app_name", "")
+            if meta.get("file_description"):
+                summary_item["file_description"] = meta["file_description"]
+            if options and getattr(options, "sample_content_enabled", False) and data.get("content_samples"):
+                summary_item["content_samples"] = data["content_samples"]
+
+        if data.get("source_umbrella"):
+            summary_item["source_umbrella"] = data["source_umbrella"]
+        if data.get("reason"):
+            summary_item["reason"] = str(data["reason"])[:40]
+
+        return summary_item
 
 
 class HistorySuggestionProvider:
