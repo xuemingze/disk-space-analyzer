@@ -377,6 +377,8 @@ class AIService:
                     "max_tokens": 120, # 紧凑型输出限制 (<= 120 Tokens)
                     "extra_body": {"thinking": {"type": "disabled"}} # 关闭思考慢链
                 }
+                if not ("gpt" in model.lower() and "deepseek" not in model.lower()):
+                    payload["thinking"] = {"type": "disabled"}
                 session = cls.get_session()
                 resp = session.post(norm_url, headers=headers, json=payload, timeout=(0.2, 0.4))
                 if resp.status_code == 200:
@@ -810,6 +812,8 @@ class AIService:
                     "max_tokens": 800,
                     "extra_body": {"thinking": {"type": "disabled"}}
                 }
+                if not ("gpt" in model.lower() and "deepseek" not in model.lower()):
+                    payload["thinking"] = {"type": "disabled"}
                 session = cls.get_session()
                 resp = session.post(norm_url, headers=headers, json=payload, timeout=timeout)
                 if resp.status_code == 200:
@@ -1122,9 +1126,15 @@ class AIService:
             resp.final_text = content.strip()
             
             if not resp.final_text:
-                resp.parse_status = "MISSING_FINAL_TEXT"
-                resp.error_message = "缺少最终回复"
-                return resp
+                # 深度容错：若大模型将完整实质性内容（如 Markdown 报告或 JSON）全量输出在思考字段或 <think> 标签内
+                if reasoning and any(marker in reasoning for marker in ("#", "{", "[", "```", "建议", "分析", "报告")):
+                    from app.utils.logger import app_logger
+                    app_logger.warning("大模型未输出常规 content，但在 reasoning_content/think 中提取到实质内容，执行安全承接")
+                    resp.final_text = reasoning.strip()
+                else:
+                    resp.parse_status = "MISSING_FINAL_TEXT"
+                    resp.error_message = "缺少最终回复"
+                    return resp
                 
             return resp
         except Exception as e:
@@ -1677,9 +1687,11 @@ class AIService:
                         {"role": "user", "content": f"待分类目录聚合单元批次 [{batch_label}] (共 {len(sub_batch)} 项):\n{json.dumps(batch_summaries, ensure_ascii=False, indent=2)}"}
                     ],
                     "temperature": 0.2,
-                    "max_tokens": 2000,
+                    "max_tokens": 2500,
                     "extra_body": {"thinking": {"type": "disabled"}}
                 }
+                if not ("gpt" in model.lower() and "deepseek" not in model.lower()):
+                    payload["thinking"] = {"type": "disabled"}
                 if "gpt" in model.lower() or "deepseek" in model.lower():
                     payload["response_format"] = {"type": "json_object"}
 
@@ -1846,9 +1858,11 @@ class AIService:
                 {"role": "user", "content": f"候选清理文件列表: {json.dumps(summary_items, ensure_ascii=False, indent=2)}"}
             ],
             "temperature": 0.2,
-            "max_tokens": 1500,
+            "max_tokens": 2000,
             "extra_body": {"thinking": {"type": "disabled"}}
         }
+        if not ("gpt" in model.lower() and "deepseek" not in model.lower()):
+            payload["thinking"] = {"type": "disabled"}
         if "gpt" in model.lower() or "deepseek" in model.lower():
             payload["response_format"] = {"type": "json_object"}
 
@@ -1998,9 +2012,11 @@ class AIService:
                 {"role": "user", "content": f"扫描统计数据如下:\n{json.dumps(condensed, ensure_ascii=False, indent=2)}"}
             ],
             "temperature": 0.3,
-            "max_tokens": 2500,
+            "max_tokens": 4096,
             "extra_body": {"thinking": {"type": "disabled"}}
         }
+        if not ("gpt" in model.lower() and "deepseek" not in model.lower()):
+            payload["thinking"] = {"type": "disabled"}
         if "gpt" in model.lower() or "deepseek" in model.lower():
             payload["response_format"] = {"type": "json_object"}
 
