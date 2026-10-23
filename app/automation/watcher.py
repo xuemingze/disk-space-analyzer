@@ -279,8 +279,9 @@ class RuleWatcher(QThread):
                     "warn"
                 )
             else:
+                prefix = "🤖" if "AI" in plan.notes else "💡"
                 self.log_emitted.emit(
-                    f"💡 规则监控 [{rule.name}] 检测到 {len(settled_files)} 个文件沉淀稳定，已提议整理方案 (待审核)",
+                    f"{prefix} 规则监控 [{rule.name}] 检测到 {len(settled_files)} 个文件沉淀稳定，已提议整理方案 (待审核)",
                     "success"
                 )
             self.plan_proposed.emit(plan)

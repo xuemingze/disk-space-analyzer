@@ -409,28 +409,36 @@ def test_watcher_auto_archive_integration(tmp_path):
         propose_only=False  # 启用自动平移
     )
 
-    watcher = RuleWatcher(rules=[rule])
-    log_messages = []
-    watcher.log_emitted.connect(lambda msg, lvl: log_messages.append(msg))
+    from app.core.domain_models import AIAuditPolicyConfig
+    policy = AIAuditPolicyConfig.get_instance()
+    old_threshold = policy.confidence_threshold
+    policy.confidence_threshold = 0.2
 
-    # 创建待整理文件
-    test_pdf = watch_dir / "sample.pdf"
-    test_pdf.write_text("sample pdf content", encoding="utf-8")
+    try:
+        watcher = RuleWatcher(rules=[rule])
+        log_messages = []
+        watcher.log_emitted.connect(lambda msg, lvl: log_messages.append(msg))
 
-    # 首次检查：记录初始状态
-    t0 = time.time()
-    watcher._check_rule(rule, t0)
+        # 创建待整理文件
+        test_pdf = watch_dir / "sample.pdf"
+        test_pdf.write_text("sample pdf content", encoding="utf-8")
 
-    # 稳定沉淀后触发检查
-    t1 = t0 + 0.15
-    watcher._check_rule(rule, t1)
+        # 首次检查：记录初始状态
+        t0 = time.time()
+        watcher._check_rule(rule, t0)
 
-    # 验证原文件已被移动
-    assert not test_pdf.exists()
+        # 稳定沉淀后触发检查
+        t1 = t0 + 0.15
+        watcher._check_rule(rule, t1)
 
-    # 验证目标目录下已生成归档文件
-    archived_files = list(archive_dir.rglob("sample*.pdf"))
-    assert len(archived_files) == 1
+        # 验证原文件已被移动
+        assert not test_pdf.exists()
+
+        # 验证目标目录下已生成归档文件
+        archived_files = list(archive_dir.rglob("sample*.pdf"))
+        assert len(archived_files) == 1
+    finally:
+        policy.confidence_threshold = old_threshold
 
     # 验证防回环：再次检查不会重复移动或报错
     watcher._check_rule(rule, t1 + 0.1)

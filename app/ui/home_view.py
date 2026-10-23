@@ -1586,6 +1586,21 @@ class HomeView(QWidget):
 
         content = self.report_text_edit.toPlainText().strip()
         if content:
+            if '"markdown_report":' in content:
+                match = re.search(r'"markdown_report"\s*:\s*"((?:\\.|[^"\\])*)', content, re.DOTALL)
+                if match:
+                    extracted = match.group(1)
+                    if extracted.endswith('"'):
+                        extracted = extracted[:-1]
+                    try:
+                        md_part = json.loads(f'"{extracted}"')
+                    except Exception:
+                        md_part = extracted.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t")
+                    
+                    header_m = re.match(r'^(✅[^\n]*\n(?:[^\n]+\n){1,5})\s*\{', content)
+                    header_str = (header_m.group(1) + "\n\n") if header_m else ""
+                    content = header_str + md_part.strip()
+
             with open(save_path, "w", encoding="utf-8") as f:
                 f.write(content)
             QMessageBox.information(self, "导出成功", f"分析报告已成功保存至:\n{save_path}")

@@ -19,7 +19,7 @@ from app.core.organize_models import (
 from app.core.domain_models import (
     VersionClusterGroup, VersionClusterItem, SemanticDiffDecision, ArchiveDestinationPath,
     TopologyRoutingTable, TopologyRole, TopologyPolicy, AIAssetPayloadBuilder,
-    AIAuditPolicyConfig, AuditCorrectionRecord
+    AIAuditPolicyConfig, AuditCorrectionRecord, KnowledgeProvenance
 )
 
 
@@ -1687,16 +1687,35 @@ class AIService:
             batch_size = max(1, options.batch_size)
 
             def _apply_ai_prediction_to_group(g: dict, r: dict) -> None:
-                g["app_name"] = r.get("app_name", g["app_name"])
-                new_cat = r.get("suggested_category", g["suggested_category"])
-                g["suggested_category"] = new_cat
+                # 恪守原则四：用户确认规则享有绝对优先级，严禁 AI 建议篡改
+                routing_tbl = TopologyRoutingTable.instance()
+                user_match = routing_tbl.match_master_rule(g.get("name") or g.get("app_name", ""))
+                if not user_match and g.get("sub_items"):
+                    for sub in g["sub_items"]:
+                        sub_m = routing_tbl.match_master_rule(sub.get("name", ""))
+                        if sub_m and sub_m.provenance == KnowledgeProvenance.USER_CONFIRMED:
+                            user_match = sub_m
+                            break
 
-                # 推荐子路径规范化清洗
-                raw_sub = r.get("recommended_subpath", g.get("recommended_subpath", ""))
-                new_sub = sanitize_subpath(raw_sub)
-                g["recommended_subpath"] = new_sub
+                if user_match and user_match.provenance == KnowledgeProvenance.USER_CONFIRMED:
+                    new_cat = user_match.target_category
+                    new_sub = user_match.target_subpath_template or g.get("recommended_subpath", "")
+                    g["suggested_category"] = new_cat
+                    g["effective_category"] = new_cat
+                    g["recommended_subpath"] = new_sub
+                    g["rationale"] = f"命中主路由规则 (USER_CONFIRMED): {user_match.pattern}"
+                else:
+                    g["app_name"] = r.get("app_name", g["app_name"])
+                    new_cat = r.get("suggested_category", g["suggested_category"])
+                    g["suggested_category"] = new_cat
+                    g["effective_category"] = new_cat
 
-                g["rationale"] = r.get("rationale", g["rationale"])
+                    # 推荐子路径规范化清洗
+                    raw_sub = r.get("recommended_subpath", g.get("recommended_subpath", ""))
+                    new_sub = sanitize_subpath(raw_sub)
+                    g["recommended_subpath"] = new_sub
+
+                    g["rationale"] = r.get("rationale", g["rationale"])
                 conf = float(r.get("confidence", g["confidence"]))
                 g["confidence"] = conf
                 risk = r.get("risk_level", g["risk_level"])
@@ -2028,6 +2047,63 @@ class AIService:
         return []
 
     @classmethod
+    def _extract_markdown_report_from_response(cls, raw_text: str) -> Optional[Tuple[str, List[Dict[str, Any]], Dict[str, Any]]]:
+        """
+        鲁棒解析大模型全景报告响应：
+        1. 完整 JSON 解析；
+        2. 截断/不完整 JSON 提取 "markdown_report" 字符串并反转义；
+        3. 纯 Markdown 兜底。
+        """
+        if not raw_text:
+            return None
+
+        clean_str = cls._clean_json_response(raw_text)
+        parsed = None
+        if clean_str:
+            try:
+                parsed = json.loads(clean_str, strict=False)
+            except Exception:
+                parsed = None
+
+        if isinstance(parsed, dict) and "markdown_report" in parsed:
+            md_text = str(parsed.get("markdown_report", "")).strip()
+            exec_plan = parsed.get("execution_plan") or cls.parse_markdown_table_to_execution_plan(md_text)
+            return md_text, exec_plan, parsed
+
+        # 正则容错提取被末尾截断的 JSON 中的 markdown_report
+        search_target = clean_str if clean_str else raw_text
+        match = re.search(r'"markdown_report"\s*:\s*"((?:\\.|[^"\\])*)', search_target, re.DOTALL)
+        if match:
+            extracted = match.group(1)
+            if extracted.endswith('"'):
+                extracted = extracted[:-1]
+            try:
+                unescaped = json.loads(f'"{extracted}"')
+            except Exception:
+                unescaped = extracted.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t")
+            unescaped = unescaped.strip()
+            if len(unescaped) > 50:
+                exec_plan = cls.parse_markdown_table_to_execution_plan(unescaped)
+                struct = {
+                    "markdown_report": unescaped,
+                    "execution_plan": exec_plan,
+                    "chart_categories": []
+                }
+                return unescaped, exec_plan, struct
+
+        # 纯 Markdown 兜底
+        if len(raw_text) > 50 and (raw_text.startswith("#") or "##" in raw_text or "```" in raw_text or not raw_text.startswith("{")):
+            exec_plan = cls.parse_markdown_table_to_execution_plan(raw_text)
+            struct = {
+                "markdown_report": raw_text,
+                "execution_plan": exec_plan,
+                "chart_categories": []
+            }
+            return raw_text, exec_plan, struct
+
+        return None
+
+    @classmethod
     def generate_health_report_with_ai(
         cls,
         base_url: str,
@@ -2053,16 +2129,16 @@ class AIService:
         cat_ref_str = ", ".join(cat_names) if cat_names else "文档, 代码, 影音, 软件安装与程序, 缓存与临时数据"
 
         system_prompt = (
-            "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据（含原子实体集体与独立资产单元）与冗余列表，"
+            "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据（含原子实体集体、非软件多元资产集合与独立资产单元）与冗余列表，"
             "进行深度全景分析，并以 JSON 格式输出结果。\n"
             "输出 JSON 格式要求: {\n"
             '  "markdown_report": "完整的 Markdown 格式报告文本",\n'
             '  "execution_plan": [\n'
             '    {\n'
             '      "source_path": "原始绝对路径",\n'
-            '      "app_name": "所属软件或工具名称",\n'
-            '      "suggested_category": "归档分类（如业务单据、安装包等，全局分类仅作参考）",\n'
-            '      "target_subpath": "推荐的多级归档子目录（例如 业务单据/2026、06_办公与通讯 等）",\n'
+            '      "app_name": "所属软件或资产集合名称",\n'
+            '      "suggested_category": "归档分类（如财务单据、相册摄影、设计工程、安装包等，全局分类仅作参考）",\n'
+            '      "target_subpath": "推荐的多级归档子目录（例如 业务单据/2026、06_办公与通讯、相册摄影/旅游 等）",\n'
             '      "action": "归档/清理/保留",\n'
             '      "risk_level": "低风险/中风险/高风险",\n'
             '      "rationale": "研判理由（20字内）"\n'
@@ -2070,12 +2146,11 @@ class AIService:
             '  ],\n'
             '  "chart_categories": [{\"category\": \"分类名称\", \"bytes\": 1024, \"percent\": 10.0}]\n'
             "}\n"
-            "【全局分类参考说明】：系统现存基础分类有 [" + cat_ref_str + "]，仅供宏观参考，绝非硬性限制！"
-            "若资产具备强烈业务特征（如财务单据、发票凭证、模型训练、微服务、直播工程等），鼓励你自主提炼出高阶业务分类（例如直接归为'财务单据'，严禁机械地塞入'文档'）。\n"
-            "注意：在 JSON 中，markdown_report 字符串中的所有换行符必须转义为 \\n。若输出纯 Markdown，请确保包含标准 Markdown 表格。\n"
-            "【核心原则】：系统采用原子实体集体（软件/工程/模型/账套/缓存）防撕裂与聚合保全机制，对于目录集体资产必须作为一个整体提出治理建议，严禁建议拆散其内部子文件。\n"
-            "【八大有序业务领域治理规范（Ordered Domain Sectors）】：\n"
-            "当面对软件安装包、工具池及解压运行时目录治理时，必须将归档目标规范收敛至以下 8 大业务领域子目录中：\n"
+            "【全景多元资产治理核心原则】：\n"
+            "1. 原子实体集体聚合保全机制：对软件程序包、业务账套、开发工程、游戏资产、相册摄影集合、影音剪辑工程、备份镜像等不可拆分实体集体，必须作为一个完整独立单元提出治理建议，严禁建议拆散其内部子文件！\n"
+            "2. 严禁只偏狭关注软件安装包！若扫描中包含相册摄影、媒体音视频工程、办公单据账套、游戏资产、代码工程等非软件类集合资产，必须全面呈现其集合形态、文件规模、领域归属与治理方案！\n"
+            "【全局分类参考说明】：系统现存基础分类有 [" + cat_ref_str + "]，仅供宏观参考，绝非硬性限制！若资产具备强烈业务特征（如财务单据、发票凭证、相册摄影、音视频工程、模型训练等），鼓励你自主提炼出高阶业务分类。\n"
+            "【八大有序业务领域治理规范（针对软件安装包、工具池及运行时目录）】：\n"
             "├── 01_AI与模型工具 (AI助手、提示词工程、Agent客户端、大模型代理与逆向工具)\n"
             "├── 02_云盘与同步 (百度网盘、夸克、Syncthing、坚果云、同步工具)\n"
             "├── 03_游戏工具与优化 (鸣潮/异环助手、游戏脚本、游戏调度与性能工具)\n"
@@ -2085,14 +2160,14 @@ class AIService:
             "├── 07_系统工具 (Everything检索、fatDuck优化、垃圾清理、系统运维)\n"
             "└── _已解压程序与归档 (混在安装包中的已释放绿色运行目录、解压文件夹)\n"
             "【智能解混淆重命名与多版本裁决】：\n"
-            "- 对于哈希/纯数字等下载代号乱码名（如 8799-...exe），必须结合 PE 元数据识别真实软件名并给出规范命名建议（如 钉钉_9.0.2.exe）；\n"
-            "- 若存在同一软件的多个版本（如夸克 7.3 与 7.4），明确建议保留最新版，将旧版标注为淘汰归档或清理。\n"
+            "- 对于哈希/纯数字等下载代号乱码名（如 8799-...exe），结合 PE 元数据识别真实软件名并给出规范命名建议；\n"
+            "- 若存在同一软件的多个版本，明确建议保留最新版，将旧版标注为淘汰归档或清理。\n"
             "报告必须包含：\n"
             "1. 磁盘现状与健康度评估(0-100分与等级，含资产单元总数、实体集体数与底层碎片聚合数)\n"
-            "2. 空间构成与类型特征\n"
-            "3. 大资产与冗余分布(Top 超大资产清单及形态)\n"
+            "2. 空间构成与类型特征(涵盖软件安装、实体集体、多媒体相册、开发工程、办公账套等各类资产比例)\n"
+            "3. 大资产与冗余分布(Top 超大资产清单及形态，必须包含实体集体)\n"
             "4. 重复资产浪费分析(含安装包多版本重复与解压绿色包冗余)\n"
-            "5. 分级治理与清理优化建议(按上述八大规范业务领域呈现分类治理蓝图)\n"
+            "5. 分级治理与清理优化建议(兼顾八大领域与非软件多元集合资产分类蓝图)\n"
             "6. 【核心执行清单】：必须输出一个 Markdown 表格，列出推荐处理的资产单元，表头必须包含：资产名称、治理形态、资产大小、类别、路径摘要、原始绝对路径、风险等级、建议操作(如归档/清理/保留)、分析建议。"
         )
 
@@ -2110,6 +2185,22 @@ class AIService:
         for tf in scan_summary.get("top_100_files", [])[:15]:
             cleaned_top10.append(AIAssetPayloadBuilder.build_summary_item(tf))
 
+        # 3. 收集原子实体集体资产 (最多 30 项，涵盖独立软件、游戏资产、相册集合、工程项目等)
+        cleaned_collectives = []
+        seen_coll_paths = set()
+        raw_all = scan_summary.get("all_scanned_files", []) or []
+        for pool in (raw_all, scan_summary.get("redundant_files", []), scan_summary.get("top_100_files", [])):
+            for it in pool:
+                if it.get("is_directory_collective") or it.get("is_collective"):
+                    p = it.get("path") or it.get("original_path")
+                    if p and p not in seen_coll_paths:
+                        seen_coll_paths.add(p)
+                        cleaned_collectives.append(AIAssetPayloadBuilder.build_summary_item(it))
+                        if len(cleaned_collectives) >= 30:
+                            break
+            if len(cleaned_collectives) >= 30:
+                break
+
         c_cnt = scan_summary.get("collective_count", 0)
         s_cnt = scan_summary.get("standalone_file_count", 0)
         condensed = {
@@ -2119,6 +2210,7 @@ class AIService:
             "total_assets_count": c_cnt + s_cnt,
             "total_bytes": scan_summary.get("total_bytes"),
             "category_stats": scan_summary.get("category_stats"),
+            "collective_assets": cleaned_collectives,
             "top_10_large_files": cleaned_top10,
             "redundant_files": cleaned_redundant,
             "duplicate_groups_count": scan_summary.get("duplicate_groups_count"),
@@ -2134,7 +2226,7 @@ class AIService:
                 {"role": "user", "content": f"扫描统计数据如下:\n{json.dumps(condensed, ensure_ascii=False, indent=2)}"}
             ],
             "temperature": 0.3,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "extra_body": {"thinking": {"type": "disabled"}}
         }
         if not ("gpt" in model.lower() and "deepseek" not in model.lower()):
@@ -2155,32 +2247,11 @@ class AIService:
             if not raw_text:
                 return False, "大模型未返回任何文本内容", None
 
-            # 1. 优先尝试按照 JSON 进行清洗与解析
-            clean_str = cls._clean_json_response(raw_text)
-            parsed = None
-            if clean_str:
-                try:
-                    parsed = json.loads(clean_str, strict=False)
-                except Exception:
-                    parsed = None
-                    
-            if isinstance(parsed, dict) and "markdown_report" in parsed:
-                ai_resp.structured_data = parsed
-                ai_resp.final_text = str(parsed.get("markdown_report", ""))
-                ai_resp.model = model
-                ai_resp.report_id = f"REP_{ai_resp.task_id}"
-                return True, "", ai_resp
-
-            # 2. 强力容错兜底：如果模型（如 MiniMax-M3, Qwen 等）直接输出了 Markdown 报告
-            # 只要文本包含 Markdown 标记或长度足够（说明是完整报告，而非报错），直接认定为有效 Markdown 报告
-            if len(raw_text) > 50 or raw_text.startswith("#") or "##" in raw_text or "```" in raw_text:
-                exec_plan = cls.parse_markdown_table_to_execution_plan(raw_text)
-                ai_resp.structured_data = {
-                    "markdown_report": raw_text,
-                    "execution_plan": exec_plan,
-                    "chart_categories": []
-                }
-                ai_resp.final_text = raw_text
+            extracted_res = cls._extract_markdown_report_from_response(raw_text)
+            if extracted_res:
+                md_text, exec_plan, struct = extracted_res
+                ai_resp.structured_data = struct
+                ai_resp.final_text = md_text
                 ai_resp.model = model
                 ai_resp.report_id = f"REP_{ai_resp.task_id}"
                 return True, "", ai_resp
@@ -2238,16 +2309,13 @@ class AIService:
         ai_resp = result.get("parsed_data")
         if ai_resp is None and "data" in result:
             ai_resp = cls._parse_ai_response(result.get("data", {}))
-            clean_str = cls._clean_json_response(ai_resp.final_text or "")
-            try:
-                parsed = json.loads(clean_str, strict=False)
-                if isinstance(parsed, dict) and "markdown_report" in parsed:
-                    ai_resp.structured_data = parsed
-                    ai_resp.final_text = parsed.get("markdown_report", "")
-                    ai_resp.model = model
-                    ai_resp.report_id = f"REP_{ai_resp.task_id}"
-            except Exception:
-                pass
+            extracted_res = cls._extract_markdown_report_from_response(ai_resp.final_text or "")
+            if extracted_res:
+                md_text, exec_plan, struct = extracted_res
+                ai_resp.structured_data = struct
+                ai_resp.final_text = md_text
+                ai_resp.model = model
+                ai_resp.report_id = f"REP_{ai_resp.task_id}"
 
         # 确保结构化 execution_plan 就绪：若 JSON 中未包含，自动从最终 Markdown 文本表格提取
         if ai_resp and ai_resp.structured_data:

@@ -22,6 +22,8 @@ import os
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
+from app.config import app_config
+from app.core.ai_service import AIService
 from app.core.app_detector import AppDetector
 from app.core.organize_models import OrganizeOptions, OrganizeMode
 from app.core.domain_models import (
@@ -63,8 +65,34 @@ class AutomationPlanResolver:
 
         options = OrganizeOptions(mode=mode_enum)
 
-        # 1. 基础拓扑分组
-        groups = AppDetector.group_files_by_parent_or_tool(settled_files, target_root, options)
+        # 1. 优先调用在线 AI 核心编排器，无模型或异常时安全平滑降级至本地拓扑引擎
+        llm_cfg = app_config.get("llm", default={})
+        api_key = str(llm_cfg.get("api_key", "")).strip()
+        base_url = str(llm_cfg.get("base_url", "")).strip()
+        model = str(llm_cfg.get("model", "")).strip()
+
+        groups = None
+        is_ai_powered = False
+
+        if api_key and base_url and model and settled_files:
+            try:
+                app_logger.info("自动化中心: 启动在线 AI 核心编排器为 %d 个沉淀资产制定归档方案...", len(settled_files))
+                groups = AIService.classify_files_with_ai(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=model,
+                    file_items=settled_files,
+                    destination_root=target_root,
+                    options=options
+                )
+                if groups:
+                    is_ai_powered = True
+                    app_logger.info("自动化中心: AI 核心编排成功完成，提炼出 %d 个聚合单元", len(groups))
+            except Exception as e:
+                app_logger.warning("自动化中心在线 AI 分类异常，平滑降级至离线拓扑引擎: %s", e)
+
+        if not groups:
+            groups = AppDetector.group_files_by_parent_or_tool(settled_files, target_root, options)
 
         # 2. 结合主路由表、元数据仲裁与 AI 审查策略执行全量审查与纠偏
         audit_policy = AIAuditPolicyConfig.get_instance()
@@ -92,15 +120,17 @@ class AutomationPlanResolver:
                 audit_policy=audit_policy
             )
 
-            # 若顶层组名未命中，进一步探测子项文件是否命中主路由规则
-            if not matched_rule and group.get("sub_items"):
+            # 探测子项文件是否有更高优先级的规则 (特别是 USER_CONFIRMED 绝对覆盖)
+            if group.get("sub_items"):
                 for sub in group["sub_items"]:
                     sub_name = sub.get("name", "")
                     sub_match = routing_table.match_master_rule(sub_name)
                     if sub_match:
-                        matched_rule = sub_match
                         if sub_match.provenance == KnowledgeProvenance.USER_CONFIRMED:
+                            matched_rule = sub_match
                             break
+                        elif not matched_rule:
+                            matched_rule = sub_match
 
             # 2.2 绝对纠偏 (原则二：纠偏绝不降级)
             if correction:
@@ -132,15 +162,17 @@ class AutomationPlanResolver:
                         group["target_subpath"] = matched_rule.target_subpath_template
 
             # 2.4 人为可操控的 AI 审查安全门禁 (原则五)
-            confidence = float(group.get("confidence", 1.0))
-            if confidence < audit_policy.confidence_threshold:
-                enforce_propose_only = True
-                downgrade_reasons.append(
-                    f"资产 [{app_name}] AI置信度 ({confidence:.2f}) 低于安全阈值 ({audit_policy.confidence_threshold:.2f})"
-                )
-            if group.get("risk_level") == "高风险":
-                enforce_propose_only = True
-                downgrade_reasons.append(f"资产 [{app_name}] 判定为高风险资产，严禁自动静默移动")
+            if audit_policy.enabled:
+                confidence = float(group.get("confidence", 1.0))
+                risk = group.get("risk_level", "低风险")
+                if confidence < audit_policy.confidence_threshold:
+                    enforce_propose_only = True
+                    downgrade_reasons.append(
+                        f"资产 [{candidate_name}] AI置信度 ({confidence:.2f}) 低于安全阈值 ({audit_policy.confidence_threshold:.2f})"
+                    )
+                elif risk in ["高风险", "需人工确认"]:
+                    enforce_propose_only = True
+                    downgrade_reasons.append(f"资产 [{candidate_name}] 判定为高风险资产，严禁自动静默移动")
 
         # 3. 分析完成即刻沉淀自学习写入主路由表 (原则三)
         precipitated_count = routing_table.precipitate_ai_decisions(
@@ -152,7 +184,8 @@ class AutomationPlanResolver:
 
         total_bytes = sum(f.get("size", 0) for f in settled_files)
 
-        notes = f"监控规则 [{rule.name}] 捕获到 {len(settled_files)} 个稳定文件，已生成整理候选计划"
+        plan_origin = "AI 核心编排" if is_ai_powered else "规则引擎"
+        notes = f"监控规则 [{rule.name}] 捕获到 {len(settled_files)} 个稳定文件，已由 {plan_origin} 生成整理候选计划"
         if is_plan_corrected:
             notes += f" (已由 AI 实施主动纠偏: 共 {len(correction_records)} 项)"
         if enforce_propose_only and not rule.propose_only:
