@@ -496,6 +496,18 @@ class TopologyRoute:
     hit_count: int = 0
     last_matched: float = field(default_factory=time.time)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.role, TopologyRole):
+            try:
+                self.role = TopologyRole(str(self.role))
+            except ValueError:
+                self.role = TopologyRole.STAGING_BUCKET
+        if not isinstance(self.policy, TopologyPolicy):
+            try:
+                self.policy = TopologyPolicy(str(self.policy))
+            except ValueError:
+                self.policy = TopologyPolicy.STRIP_CONTAINER
+
     def should_strip_from_target(self) -> bool:
         return self.role == TopologyRole.STAGING_BUCKET or self.policy == TopologyPolicy.STRIP_CONTAINER
 
@@ -564,6 +576,23 @@ class MasterRoutingRule:
     provenance: KnowledgeProvenance = KnowledgeProvenance.SYSTEM_BUILTIN
     hit_count: int = 0
     updated_at: float = field(default_factory=time.time)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.morphology, MorphologyType):
+            try:
+                self.morphology = MorphologyType(str(self.morphology))
+            except ValueError:
+                self.morphology = MorphologyType.INDEPENDENT_ASSET
+        if not isinstance(self.topology_role, TopologyRole):
+            try:
+                self.topology_role = TopologyRole(str(self.topology_role))
+            except ValueError:
+                self.topology_role = TopologyRole.STAGING_BUCKET
+        if not isinstance(self.provenance, KnowledgeProvenance):
+            try:
+                self.provenance = KnowledgeProvenance(str(self.provenance))
+            except ValueError:
+                self.provenance = KnowledgeProvenance.SYSTEM_BUILTIN
 
     def to_dict(self) -> Dict[str, Any]:
         return {

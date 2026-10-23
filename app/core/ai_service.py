@@ -653,7 +653,8 @@ class AIService:
 
         # 3. 组装极速微契约 Prompt (严格控制在 150 Tokens 以内, 字符总数 < 300)
         system_prompt = (
-            "审核手改路径合法性与规则抽象。若资产名为下载乱码/含版本号，规则必须抽象为通用软件名(如钉钉、百度网盘)，严禁数字乱码规则。输出紧凑JSON:\n"
+            "用户手改分类/路径具最高优先级(单级类名如'游戏'或跨类修改均合法valid=true，仅系统危险路径valid=false并附reason)。"
+            "提炼通用软件名作rule_pattern，纯乱码置空。输出JSON:\n"
             "{\"valid\":true,\"snapped_category\":\"分类\",\"rule_pattern\":\"规则\",\"subpath\":\"路径\"}"
         )
         user_prompt = f"资产:{asset_name}|真实软件:{software_name or app_name or '无'}|原类:{old_cat}|手改:{clean_path}|吸附:{snapped_cat}"
@@ -712,19 +713,29 @@ class AIService:
                 app_logger.warning("AI 手改审核微契约异常: %s", e)
                 ai_audited = False
 
-        # 5. 增量自沉淀决策 (严格恪守基本方针：AI 为核心，本地绝不抢功越权冒充 AI 审核)
+        # 5. 增量自沉淀决策 (严格恪守基本方针与原则四：用户修改优先 USER_CONFIRMED P1)
         is_valid = bool(audit_result.get("valid", True))
         elapsed = time.time() - start_time
 
         if not is_valid:
-            err_msg = str(audit_result.get("reason") or audit_result.get("error") or "AI审核未通过")
-            app_logger.warning(f"[SelfPrecipitation] 规划路径审核驳回: {clean_path}, 理由: {err_msg}")
-            return {
-                "valid": False,
-                "error": err_msg,
-                "ai_audited": ai_audited,
-                "elapsed": elapsed
-            }
+            raw_reason = str(audit_result.get("reason") or audit_result.get("error") or "").strip()
+            # 恪守原则四 (用户修改最高优先级)：物理合法的单级分类名(如"游戏"、"游戏娱乐")或跨类修改，
+            # 除非 AI 明确指出存在安全/越权/超出治理范围风险，否则绝不因“未提取出规则”或“语义分类分歧”驳回用户的显式手改！
+            security_reject_keywords = ("安全", "系统", "危险", "越权", "禁止", "非法", "超出", "AI驳回", "受保护", "注入")
+            if not raw_reason or not any(k in raw_reason for k in security_reject_keywords):
+                app_logger.info(
+                    f"[SelfPrecipitation] 尊重用户 P1 显式手改意志 ({clean_path})，修正 AI 非安全类误判驳回 (原由: {raw_reason or '无'})"
+                )
+                is_valid = True
+            else:
+                err_msg = raw_reason or "AI审核未通过"
+                app_logger.warning(f"[SelfPrecipitation] 规划路径审核驳回: {clean_path}, 理由: {err_msg}")
+                return {
+                    "valid": False,
+                    "error": err_msg,
+                    "ai_audited": ai_audited,
+                    "elapsed": elapsed
+                }
 
         final_cat = audit_result.get("snapped_category") or snapped_cat
         final_pat = audit_result.get("rule_pattern") or rule_pattern
@@ -761,6 +772,19 @@ class AIService:
                 "source": "manual_edit_ai_precipitated" if ai_audited else "manual_edit_local"
             }
             global_category_manager.add_precipitated_rule(new_rule)
+            # 同步以 USER_CONFIRMED (P1) 顶格锁定写入全局拓扑主路由表
+            try:
+                from app.core.domain_models import TopologyRoutingTable, MorphologyType
+                is_dir_item = bool(item.get("is_collective") or item.get("is_directory_collective"))
+                morph = MorphologyType.SEALED_COLLECTIVE if is_dir_item else MorphologyType.INDEPENDENT_ASSET
+                TopologyRoutingTable.instance().record_user_override(
+                    pattern_or_name=final_pat,
+                    new_cat=final_cat,
+                    new_target=target_template,
+                    morphology=morph
+                )
+            except Exception as sync_err:
+                app_logger.warning(f"[SelfPrecipitation] 同步写入主路由表异常: {sync_err}")
             mode_desc = "AI审核通过" if ai_audited else "本地自沉淀"
             app_logger.info(f"[SelfPrecipitation] {mode_desc}规则 (Pattern: {final_pat} -> {final_cat})，端到端耗时: {elapsed:.3f}s")
         else:

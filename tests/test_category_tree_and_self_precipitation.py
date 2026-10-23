@@ -33,13 +33,20 @@ def clean_rules_and_reload(tmp_path, monkeypatch):
         return orig_get(*args, **kwargs)
     monkeypatch.setattr(app_config, "get", mock_cfg_get)
     """确保每个测试前后分类树与自沉淀规则状态隔离"""
+    from app.core.domain_models import TopologyRoutingTable
     global_category_manager.load()
     orig_rules = list(global_category_manager._rules)
     orig_cats = list(global_category_manager._categories)
+    topo_table = TopologyRoutingTable.instance()
+    orig_master_rules = dict(topo_table._master_rules)
+    orig_routes = dict(topo_table._routes)
     yield
     global_category_manager._rules = orig_rules
     global_category_manager._categories = orig_cats
     global_category_manager.save()
+    topo_table._master_rules = orig_master_rules
+    topo_table._routes = orig_routes
+    topo_table.save()
 
 
 def test_r1_inplace_edit_f2_and_ai_audit_latency_and_safety():
@@ -1067,4 +1074,32 @@ def test_adversarial_cross_table_sync_with_different_slashes():
     assert dup_row["category"] == "新分类"
 
     home.close()
+
+def test_user_manual_single_segment_category_override_respected_over_ai_false_negative():
+    from app.core.domain_models import TopologyRoutingTable, KnowledgeProvenance
+    mock_session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        'choices': [{
+            'message': {
+                'content': json.dumps({'valid': False, 'snapped_category': '游戏娱乐', 'rule_pattern': 'SteamSetup', 'subpath': '游戏娱乐'})
+            }
+        }]
+    }
+    mock_session.post.return_value = mock_resp
+    game_item = {'name': 'SteamSetup.exe', 'path': 'D:/安装包/SteamSetup.exe', 'category': '软件安装与程序'}
+    with patch.object(AIService, 'get_session', return_value=mock_session):
+        res1 = AIService.audit_manual_path_and_precipitate(
+            game_item, '游戏娱乐', base_url='https://api.test-llm.com/v1', api_key='sk-test', model='MiniMax-M3'
+        )
+        assert res1['valid'] is True
+        assert '游戏' in res1['category']
+        res2 = AIService.audit_manual_path_and_precipitate(
+            game_item, '游戏', base_url='https://api.test-llm.com/v1', api_key='sk-test', model='MiniMax-M3'
+        )
+        assert res2['valid'] is True
+    matched = TopologyRoutingTable.instance().match_master_rule('SteamSetup')
+    assert matched is not None
+    assert matched.provenance == KnowledgeProvenance.USER_CONFIRMED
 

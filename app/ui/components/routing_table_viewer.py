@@ -358,15 +358,19 @@ class RoutingRuleEditDialog(QDialog):
         rule_id = self.rule.rule_id if self.rule else str(uuid.uuid4())[:8]
         hit_count = self.rule.hit_count if self.rule else 1
 
+        raw_morph = self.cbo_morph.currentData()
+        raw_role = self.cbo_role.currentData()
+        raw_prov = self.cbo_prov.currentData()
+
         self.result_rule = MasterRoutingRule(
             rule_id=rule_id,
             pattern=pat,
             pe_signature=self.edt_pe.text().strip(),
-            morphology=self.cbo_morph.currentData(),
-            topology_role=self.cbo_role.currentData(),
+            morphology=MorphologyType(raw_morph) if not isinstance(raw_morph, MorphologyType) else raw_morph,
+            topology_role=TopologyRole(raw_role) if not isinstance(raw_role, TopologyRole) else raw_role,
             target_category=cat,
             target_subpath_template=self.edt_tpl.text().strip(),
-            provenance=self.cbo_prov.currentData(),
+            provenance=KnowledgeProvenance(raw_prov) if not isinstance(raw_prov, KnowledgeProvenance) else raw_prov,
             hit_count=hit_count,
             updated_at=time.time()
         )
@@ -603,12 +607,16 @@ class RoutingTableViewerDialog(QDialog):
             else:
                 sys_builtin_count += 1
 
-            if prov_filter and r.provenance.value != prov_filter:
+            prov_val = r.provenance.value if isinstance(r.provenance, KnowledgeProvenance) else str(r.provenance)
+            morph_val = r.morphology.value if isinstance(r.morphology, MorphologyType) else str(r.morphology)
+            role_val = r.topology_role.value if isinstance(r.topology_role, TopologyRole) else str(r.topology_role)
+
+            if prov_filter and prov_val != prov_filter:
                 continue
-            if morph_filter and r.morphology.value != morph_filter:
+            if morph_filter and morph_val != morph_filter:
                 continue
             if search_kw:
-                matchable = f"{r.pattern} {r.target_category} {r.target_subpath_template} {r.pe_signature or ''} {r.topology_role.value}".lower()
+                matchable = f"{r.pattern} {r.target_category} {r.target_subpath_template} {r.pe_signature or ''} {role_val}".lower()
                 if search_kw not in matchable:
                     continue
             filtered_rules.append(r)
@@ -634,7 +642,8 @@ class RoutingTableViewerDialog(QDialog):
                 MorphologyType.SEALED_COLLECTIVE: "密封集合",
                 MorphologyType.LOOSE_MEDIA: "离散媒体"
             }
-            item_morph = QTableWidgetItem(morph_labels.get(r.morphology, r.morphology.value))
+            morph_fallback = r.morphology.value if isinstance(r.morphology, MorphologyType) else str(r.morphology)
+            item_morph = QTableWidgetItem(morph_labels.get(r.morphology, morph_fallback))
             item_morph.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row_idx, 1, item_morph)
 
@@ -643,7 +652,8 @@ class RoutingTableViewerDialog(QDialog):
                 TopologyRole.APP_COLLECTIVE: "软件集体",
                 TopologyRole.STAGING_BUCKET: "中转容器"
             }
-            item_role = QTableWidgetItem(role_labels.get(r.topology_role, r.topology_role.value))
+            role_fallback = r.topology_role.value if isinstance(r.topology_role, TopologyRole) else str(r.topology_role)
+            item_role = QTableWidgetItem(role_labels.get(r.topology_role, role_fallback))
             item_role.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row_idx, 2, item_role)
 

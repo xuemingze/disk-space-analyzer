@@ -363,12 +363,16 @@ class AiAuditRoutingPage(QWidget):
             else:
                 sys_builtin_count += 1
 
-            if prov_filter and r.provenance.value != prov_filter:
+            prov_val = r.provenance.value if isinstance(r.provenance, KnowledgeProvenance) else str(r.provenance)
+            morph_val = r.morphology.value if isinstance(r.morphology, MorphologyType) else str(r.morphology)
+            role_val = r.topology_role.value if isinstance(r.topology_role, TopologyRole) else str(r.topology_role)
+
+            if prov_filter and prov_val != prov_filter:
                 continue
-            if morph_filter and r.morphology.value != morph_filter:
+            if morph_filter and morph_val != morph_filter:
                 continue
             if search_kw:
-                matchable = f"{r.pattern} {r.target_category} {r.target_subpath_template} {r.pe_signature or ''} {r.topology_role.value}".lower()
+                matchable = f"{r.pattern} {r.target_category} {r.target_subpath_template} {r.pe_signature or ''} {role_val}".lower()
                 if search_kw not in matchable:
                     continue
             filtered_rules.append(r)
@@ -394,7 +398,8 @@ class AiAuditRoutingPage(QWidget):
                 MorphologyType.SEALED_COLLECTIVE: "密封集合",
                 MorphologyType.LOOSE_MEDIA: "离散媒体"
             }
-            item_morph = QTableWidgetItem(morph_labels.get(r.morphology, r.morphology.value))
+            morph_fallback = r.morphology.value if isinstance(r.morphology, MorphologyType) else str(r.morphology)
+            item_morph = QTableWidgetItem(morph_labels.get(r.morphology, morph_fallback))
             item_morph.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row_idx, 1, item_morph)
 
@@ -403,7 +408,8 @@ class AiAuditRoutingPage(QWidget):
                 TopologyRole.APP_COLLECTIVE: "软件集体",
                 TopologyRole.STAGING_BUCKET: "中转容器"
             }
-            item_role = QTableWidgetItem(role_labels.get(r.topology_role, r.topology_role.value))
+            role_fallback = r.topology_role.value if isinstance(r.topology_role, TopologyRole) else str(r.topology_role)
+            item_role = QTableWidgetItem(role_labels.get(r.topology_role, role_fallback))
             item_role.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row_idx, 2, item_role)
 

@@ -448,3 +448,58 @@ def test_ai_audit_routing_page_and_sidebar_integration(clean_topology_table):
     assert isinstance(win.automation_view.sub_stack.currentWidget(), AiAuditRoutingPage)
     win.close()
 
+
+def test_routing_rule_edit_dialog_enum_coercion_and_refresh_table_no_crash(clean_topology_table):
+    """
+    专项回归测试：
+    修复在 AiAuditRoutingPage / RoutingTableViewerDialog 中编辑主路由规则后，
+    因 QComboBox.currentData() 将 (str, Enum) 退化为纯 str 导致 refresh_table()
+    访问 r.morphology.value 抛出 AttributeError: 'str' object has no attribute 'value' 的崩溃。
+    """
+    table, _ = clean_topology_table
+    from app.ui.automation.ai_audit_routing_page import AiAuditRoutingPage
+    from app.ui.components.routing_table_viewer import RoutingRuleEditDialog, RoutingTableViewerDialog
+
+    # 1. 验证 MasterRoutingRule 对纯字符串参数的强类型 Enum 自动收敛
+    raw_rule = MasterRoutingRule(
+        rule_id="r_str_01",
+        pattern="SteamSetup*.exe",
+        morphology="independent_asset",
+        topology_role="staging_bucket",
+        target_category="游戏娱乐",
+        target_subpath_template="客户端",
+        provenance="USER_CONFIRMED"
+    )
+    assert isinstance(raw_rule.morphology, MorphologyType)
+    assert isinstance(raw_rule.topology_role, TopologyRole)
+    assert isinstance(raw_rule.provenance, KnowledgeProvenance)
+
+    table.upsert_master_rule(raw_rule, force_override=True)
+
+    # 2. 模拟通过 RoutingRuleEditDialog 编辑并确认保存
+    dlg = RoutingRuleEditDialog(raw_rule)
+    dlg.edt_cat.setText("游戏")
+    dlg._on_confirm()
+    assert hasattr(dlg, "result_rule")
+    assert isinstance(dlg.result_rule.morphology, MorphologyType)
+    assert isinstance(dlg.result_rule.topology_role, TopologyRole)
+    assert isinstance(dlg.result_rule.provenance, KnowledgeProvenance)
+
+    table.upsert_master_rule(dlg.result_rule, force_override=True)
+
+    # 3. 验证 AiAuditRoutingPage.refresh_table() 与 RoutingTableViewerDialog.refresh_table() 零异常刷新
+    page = AiAuditRoutingPage()
+    page.refresh_table()
+    assert page.table.rowCount() == 1
+    assert page.table.item(0, 1).text() == "独立资产"
+    assert page.table.item(0, 4).text() == "游戏"
+    page.close()
+
+    viewer = RoutingTableViewerDialog()
+    viewer.refresh_table()
+    assert viewer.table.rowCount() == 1
+    assert viewer.table.item(0, 1).text() == "独立资产"
+    viewer.close()
+    dlg.close()
+
+
