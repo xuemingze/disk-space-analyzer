@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import requests
@@ -2082,7 +2083,7 @@ class AIService:
             except Exception:
                 unescaped = extracted.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t")
             unescaped = unescaped.strip()
-            if len(unescaped) > 50:
+            if unescaped:
                 exec_plan = cls.parse_markdown_table_to_execution_plan(unescaped)
                 struct = {
                     "markdown_report": unescaped,
@@ -2091,15 +2092,16 @@ class AIService:
                 }
                 return unescaped, exec_plan, struct
 
-        # 纯 Markdown 兜底
-        if len(raw_text) > 50 and (raw_text.startswith("#") or "##" in raw_text or "```" in raw_text or not raw_text.startswith("{")):
-            exec_plan = cls.parse_markdown_table_to_execution_plan(raw_text)
+        # 纯 Markdown 兜底（非 JSON 结构且具备 Markdown 标题或代码块特征）
+        stripped_raw = raw_text.strip()
+        if not stripped_raw.startswith("{") and (stripped_raw.startswith("#") or "##" in stripped_raw or "```" in stripped_raw):
+            exec_plan = cls.parse_markdown_table_to_execution_plan(stripped_raw)
             struct = {
-                "markdown_report": raw_text,
+                "markdown_report": stripped_raw,
                 "execution_plan": exec_plan,
                 "chart_categories": []
             }
-            return raw_text, exec_plan, struct
+            return stripped_raw, exec_plan, struct
 
         return None
 

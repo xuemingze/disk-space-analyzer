@@ -127,3 +127,23 @@ def test_generate_health_report_timeout_graceful_degradation():
         assert "original_path" in first_item
         assert "suggested_category" in first_item
 
+
+def test_extract_markdown_report_from_response():
+    """测试从完整或截断的 JSON 响应中提取 markdown 报告（含反转义与正则抽取）"""
+    # 1. 模拟被截断的 JSON（结尾缺失闭合大括号）
+    truncated_json = '{"markdown_report": "# 治理报告\\n\\n## 资产分析\\n- 测试项\\n", "execution_plan": ['
+    result = AIService._extract_markdown_report_from_response(truncated_json)
+    assert result is not None
+    md_text, exec_plan, struct = result
+    assert md_text.startswith("# 治理报告")
+    assert "## 资产分析" in md_text
+    assert "\\n" not in md_text  # 验证反转义成功
+    assert isinstance(struct, dict)
+
+    # 2. 模拟普通 Markdown 文本
+    plain_md = "# 普通报告\n内容"
+    res_plain = AIService._extract_markdown_report_from_response(plain_md)
+    assert res_plain is not None
+    assert res_plain[0] == plain_md
+
+
