@@ -108,12 +108,14 @@ class MainWindow(QMainWindow):
         self.btn_sub_schedule = QPushButton("  ⏰ 计划任务")
         self.btn_sub_quick = QPushButton("  ⚡ 快速整理")
         self.btn_sub_cli = QPushButton("  💻 命令行与脚本")
+        self.btn_sub_ai_audit = QPushButton("  🌐 AI审查与拓扑路由")
 
         self.sub_nav_btns = [
             (self.btn_sub_monitor, 0),
             (self.btn_sub_schedule, 1),
             (self.btn_sub_quick, 2),
-            (self.btn_sub_cli, 3)
+            (self.btn_sub_cli, 3),
+            (self.btn_sub_ai_audit, 4)
         ]
 
         for btn, sub_idx in self.sub_nav_btns:
@@ -161,7 +163,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addStretch()
 
         # 底部状态信息
-        bottom_info = QLabel("v1.9.1 | Pro Edition\n全后台异步架构\nAI辅助文件归档引擎")
+        bottom_info = QLabel("v1.9.2 | Pro Edition\n全后台异步架构\nAI辅助文件归档引擎")
         bottom_info.setStyleSheet("color: #475569; font-size: 11px; padding-left: 20px; line-height: 140%;")
         sidebar_layout.addWidget(bottom_info)
 

@@ -243,9 +243,9 @@ def test_quick_organize_presets():
 
 def test_automation_center_ui_and_navigation(qapp, tmp_path):
     """测试自动化中心主视图与主窗口侧边栏导航联动"""
-    # 1. 自动化中心独立视图测试
+    # 1. 自动化中心独立视图测试 (包含 5 大子页面：规则监控、计划任务、快速整理、命令行与脚本、AI审查与拓扑路由)
     center_view = AutomationCenterView()
-    assert center_view.sub_stack.count() == 4
+    assert center_view.sub_stack.count() == 5
     # 测试子页面切换
     center_view.switch_subpage(1)
     assert center_view.sub_stack.currentIndex() == 1
@@ -258,6 +258,10 @@ def test_automation_center_ui_and_navigation(qapp, tmp_path):
     center_view.switch_subpage(3)
     assert center_view.sub_stack.currentIndex() == 3
     assert center_view.btn_sub_cli.isChecked()
+
+    center_view.switch_subpage(4)
+    assert center_view.sub_stack.currentIndex() == 4
+    assert center_view.btn_sub_ai_audit.isChecked()
 
     # 2. 主窗口整体导航与展开/折叠测试
     main_win = MainWindow()

@@ -38,6 +38,7 @@ class QuickOrganizePage(QWidget):
         main_layout.setSpacing(16)
 
         # 头部
+        header_layout = QHBoxLayout()
         top_box = QVBoxLayout()
         lbl_title = QLabel("⚡ 快速整理入口 (Quick Organize)")
         lbl_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #38BDF8;")
@@ -45,7 +46,30 @@ class QuickOrganizePage(QWidget):
         lbl_desc.setStyleSheet("color: #94A3B8; font-size: 12px;")
         top_box.addWidget(lbl_title)
         top_box.addWidget(lbl_desc)
-        main_layout.addLayout(top_box)
+        header_layout.addLayout(top_box)
+
+        header_layout.addStretch()
+
+        btn_routing = QPushButton("🌐 拓扑路由知识库")
+        btn_routing.setStyleSheet("""
+            QPushButton {
+                background-color: #1E293B;
+                color: #F8FAFC;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #334155;
+                border-color: #38BDF8;
+            }
+        """)
+        btn_routing.clicked.connect(self._open_routing_viewer)
+        header_layout.addWidget(btn_routing)
+
+        main_layout.addLayout(header_layout)
 
         # 卡片网格 (2x2)
         grid = QGridLayout()
@@ -175,4 +199,10 @@ class QuickOrganizePage(QWidget):
             allow_execute=True,
             parent=self
         )
+        dlg.exec()
+
+    def _open_routing_viewer(self):
+        """打开全局拓扑路由知识库对话框"""
+        from app.ui.components.routing_table_viewer import RoutingTableViewerDialog
+        dlg = RoutingTableViewerDialog(self)
         dlg.exec()

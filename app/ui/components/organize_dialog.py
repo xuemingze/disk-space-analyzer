@@ -18,7 +18,10 @@ from app.core.category_manager import global_category_manager
 from app.core.cleaner import ArchiveWorker
 from app.utils.file_helper import format_size
 from app.core.organize_models import sanitize_subpath
-from app.core.domain_models import ArchiveDestinationPath, HistorySuggestionProvider, ArchivePlanningUnit
+from app.core.domain_models import (
+    ArchiveDestinationPath, HistorySuggestionProvider, ArchivePlanningUnit,
+    TopologyRoutingTable, MorphologyType
+)
 
 
 class TreeInplaceItemDelegate(QStyledItemDelegate):
@@ -146,6 +149,13 @@ class OrganizePreviewDialog(QDialog):
         self.setModal(True)
 
         self.init_ui()
+
+        # 核心保证：分析完成进入弹窗预览即刻提炼沉淀入主路由表 (0 Token 本地秒级命中保证)
+        try:
+            TopologyRoutingTable.instance().precipitate_ai_decisions(self.classification_items)
+        except Exception:
+            pass
+
         self.populate_tree()
 
 
@@ -203,7 +213,13 @@ class OrganizePreviewDialog(QDialog):
         stats_layout.addWidget(self.stats_label)
         stats_layout.addStretch()
 
-        # 展开/折叠按钮
+        # 展开/折叠与知识库按钮
+        self.btn_routing_table = QPushButton("🌐 拓扑路由知识库")
+        self.btn_routing_table.setProperty("class", "SecondaryButton")
+        self.btn_routing_table.setToolTip("查看、编辑、导入/导出拓扑路由规则与配置 AI 审查策略")
+        self.btn_routing_table.clicked.connect(self._open_routing_table_viewer)
+        stats_layout.addWidget(self.btn_routing_table)
+
         self.btn_expand_all = QPushButton("📂 全部展开")
         self.btn_expand_all.setProperty("class", "SecondaryButton")
         self.btn_expand_all.clicked.connect(self._expand_all_with_progress)
@@ -315,6 +331,12 @@ class OrganizePreviewDialog(QDialog):
                 return
         super().keyPressEvent(event)
 
+    def _open_routing_table_viewer(self):
+        """打开全局拓扑路由知识库与自省管理对话框"""
+        from app.ui.components.routing_table_viewer import RoutingTableViewerDialog
+        dlg = RoutingTableViewerDialog(self)
+        dlg.exec()
+
     def populate_tree(self):
         self._is_updating_checks = True
         self.tree.setUpdatesEnabled(False)
@@ -392,10 +414,25 @@ class OrganizePreviewDialog(QDialog):
                 group_item.setForeground(col, folder_fg)
                 
             source = group.get("source", "离线规则")
-            group_item.setText(1, f"{group.get('app_name', '')} [{source}]")
+            correction_rec = group.get("correction_record")
+            is_corrected = bool(correction_rec or group.get("action") == "已纠偏")
+            corr_badge = " [AI已纠偏]" if is_corrected else ""
+            group_item.setText(1, f"{group.get('app_name', '')} [{source}]{corr_badge}")
             font = group_item.font(1)
             font.setBold(True)
-            if source == "AI":
+            if is_corrected:
+                group_item.setForeground(1, QBrush(QColor("#C084FC")))  # 高亮淡紫强调 AI 绝对纠偏
+                diag_msg = ""
+                if isinstance(correction_rec, dict):
+                    diag_msg = f"{correction_rec.get('diagnostic_tag', '[AI已纠偏]')}: {correction_rec.get('reason', '')}"
+                elif hasattr(correction_rec, "diagnostic_tag"):
+                    diag_msg = f"{correction_rec.diagnostic_tag}: {correction_rec.reason}"
+                elif correction_rec:
+                    diag_msg = str(correction_rec)
+                else:
+                    diag_msg = "已由 AI 核心审查引擎执行绝对纠偏并剔除中转污染目录"
+                group_item.setToolTip(1, f"【AI 绝对纠偏诊断】\n{diag_msg}")
+            elif source == "AI":
                 group_item.setForeground(1, QBrush(QColor("#38BDF8")))  # 高亮天蓝白字
             elif "涉敏" in source or "降级" in source:
                 group_item.setForeground(1, QBrush(QColor("#FBBF24")))  # 高亮琥珀橙字
@@ -423,15 +460,20 @@ class OrganizePreviewDialog(QDialog):
             group_item.setToolTip(3, "\n".join(tip_parts))
             
             # 第 4 列：研判依据
+            corr_prefix = ""
+            if is_corrected:
+                c_tag = correction_rec.get("diagnostic_tag") if isinstance(correction_rec, dict) else (getattr(correction_rec, "diagnostic_tag", "[AI已纠偏]") if correction_rec else "[AI已纠偏]")
+                corr_prefix = f"{c_tag} "
+
             if rec_subpath:
                 rationale_text = group.get("rationale", "")
                 if rec_subpath not in rationale_text:
-                    group_item.setText(4, f"[{rec_subpath}] {rationale_text}")
+                    group_item.setText(4, f"{corr_prefix}[{rec_subpath}] {rationale_text}")
                 else:
-                    group_item.setText(4, rationale_text)
+                    group_item.setText(4, f"{corr_prefix}{rationale_text}")
                 group_item.setToolTip(4, f"推荐细分子层级: {rec_subpath}\n识别依据: {rationale_text}")
             else:
-                group_item.setText(4, group.get("rationale", ""))
+                group_item.setText(4, f"{corr_prefix}{group.get('rationale', '')}")
             
             total_size = sum(s.get("size", 0) for s in sub_items)
             size_str = f"{len(sub_items)} 项 ({format_size(total_size)})"
@@ -445,8 +487,11 @@ class OrganizePreviewDialog(QDialog):
             group_item.setTextAlignment(7, Qt.AlignCenter)
             group_item.setForeground(7, QBrush(risk_color))
             
-            group_item.setText(8, group.get("action", ""))
+            action_text = group.get("action", "")
+            group_item.setText(8, action_text)
             group_item.setTextAlignment(8, Qt.AlignCenter)
+            if is_corrected or action_text == "已纠偏":
+                group_item.setForeground(8, QBrush(QColor("#C084FC")))
             
             task_info = f"R:{group.get('report_id','-')} | T:{group.get('task_id','-')}"
             group_item.setText(9, task_info)
@@ -596,6 +641,17 @@ class OrganizePreviewDialog(QDialog):
             # 记录历史路径
             HistorySuggestionProvider.record_path(str(dest_obj))
 
+            # 手动修改顶格覆盖主路由表 (USER_CONFIRMED 强制覆盖且永不被 AI 冲刷)
+            orig_root = group.get("original_root", "")
+            pattern_name = group.get("name", Path(orig_root).name if orig_root else "")
+            morph = MorphologyType.SEALED_COLLECTIVE if group.get("is_directory_group") else MorphologyType.INDEPENDENT_ASSET
+            TopologyRoutingTable.instance().record_user_override(
+                pattern_or_name=pattern_name,
+                new_cat=new_cat_name,
+                new_target=str(dest_obj),
+                morphology=morph
+            )
+
             # 级联更新已展开的子项
             for i in range(item.childCount()):
                 child = item.child(i)
@@ -626,6 +682,14 @@ class OrganizePreviewDialog(QDialog):
             sub = u_data["data"]
             sub["category"] = new_cat_name
             item.setText(2, new_cat_name)
+            sub_name = sub.get("name", "")
+            if sub_name:
+                TopologyRoutingTable.instance().record_user_override(
+                    pattern_or_name=sub_name,
+                    new_cat=new_cat_name,
+                    new_target=sub.get("target_path", ""),
+                    morphology=MorphologyType.INDEPENDENT_ASSET
+                )
             self.tree.viewport().update()
 
     def _on_path_edited(self, item: QTreeWidgetItem, new_path_str: str):
@@ -694,6 +758,17 @@ class OrganizePreviewDialog(QDialog):
                 else:
                     sub["target_path"] = dest_obj.relative_join(sub.get("name", Path(rel).name if rel else "unnamed"))
 
+            # 手动修改顶格覆盖主路由表 (USER_CONFIRMED 强制覆盖且永不被 AI 冲刷)
+            orig_root = group.get("original_root", "")
+            pattern_name = group.get("name", Path(orig_root).name if orig_root else "")
+            morph = MorphologyType.SEALED_COLLECTIVE if group.get("is_directory_group") else MorphologyType.INDEPENDENT_ASSET
+            TopologyRoutingTable.instance().record_user_override(
+                pattern_or_name=pattern_name,
+                new_cat=group.get("effective_category", group.get("suggested_category", "未分类/待人工确认")),
+                new_target=new_path_str,
+                morphology=morph
+            )
+
             self.tree.viewport().update()
 
         elif item_type == "file":
@@ -701,6 +776,14 @@ class OrganizePreviewDialog(QDialog):
             sub["target_path"] = new_path_str
             item.setData(0, Qt.UserRole, u_data)
             item.setText(3, new_path_str)
+            sub_name = sub.get("name", "")
+            if sub_name:
+                TopologyRoutingTable.instance().record_user_override(
+                    pattern_or_name=sub_name,
+                    new_cat=sub.get("category", "未分类/待人工确认"),
+                    new_target=new_path_str,
+                    morphology=MorphologyType.INDEPENDENT_ASSET
+                )
             self.tree.viewport().update()
 
     def _on_category_changed(self, group_item, new_cat_name):

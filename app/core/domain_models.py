@@ -531,6 +531,351 @@ class TopologyRoute:
         )
 
 
+class MorphologyType(str, Enum):
+    """资产物理形态枚举"""
+    INDEPENDENT_ASSET = "independent_asset"      # 散装独立单包资产 (如安装包、单份文档、孤立脚本)
+    SEALED_COLLECTIVE = "sealed_collective"      # 密封原子目录集体 (如绿色解压运行时、代码工程根)
+    LOOSE_MEDIA = "loose_media"                  # 散装多媒体 (照片相册、视频、录音等无PE元数据资产)
+
+
+class KnowledgeProvenance(str, Enum):
+    """知识溯源与优先级层级枚举 (USER_CONFIRMED > AI_LEARNED > SYSTEM_BUILTIN)"""
+    USER_CONFIRMED = "USER_CONFIRMED"            # P1: 用户人工确认/修改锁定，最高优先级，绝不可被 AI 自动覆盖
+    AI_LEARNED = "AI_LEARNED"                    # P2: AI 决策分析完成即时沉淀提炼，可覆盖系统预置
+    SYSTEM_BUILTIN = "SYSTEM_BUILTIN"            # P3: 系统初始内置兜底，最低优先级
+
+
+@dataclass
+class MasterRoutingRule:
+    """
+    主路由资产规则实体 (Master Routing Rule Entity)
+    
+    路由表为主导的核心资产映射模型：
+    强类型绑定资产形态 (MorphologyType) 与拓扑角色 (TopologyRole)，
+    记录特征模式、PE签名、目标分类、规划模板与溯源优先级。
+    """
+    rule_id: str
+    pattern: str                                 # 通配模式或特征名，如 "MotrixNext_*.exe", "AweSun"
+    pe_signature: Optional[str] = None           # 规范厂商或产品名称 (源自 PE 元数据)
+    morphology: MorphologyType = MorphologyType.INDEPENDENT_ASSET
+    topology_role: TopologyRole = TopologyRole.STAGING_BUCKET
+    target_category: str = ""                    # 建议分类
+    target_subpath_template: str = ""            # 建议细分子路径模板
+    provenance: KnowledgeProvenance = KnowledgeProvenance.SYSTEM_BUILTIN
+    hit_count: int = 0
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "rule_id": self.rule_id,
+            "pattern": self.pattern,
+            "pe_signature": self.pe_signature,
+            "morphology": self.morphology.value if isinstance(self.morphology, MorphologyType) else str(self.morphology),
+            "topology_role": self.topology_role.value if isinstance(self.topology_role, TopologyRole) else str(self.topology_role),
+            "target_category": self.target_category,
+            "target_subpath_template": self.target_subpath_template,
+            "provenance": self.provenance.value if isinstance(self.provenance, KnowledgeProvenance) else str(self.provenance),
+            "hit_count": self.hit_count,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MasterRoutingRule":
+        m_str = data.get("morphology", "independent_asset")
+        try:
+            morphology = MorphologyType(m_str)
+        except ValueError:
+            morphology = MorphologyType.INDEPENDENT_ASSET
+
+        r_str = data.get("topology_role", "staging_bucket")
+        try:
+            topology_role = TopologyRole(r_str)
+        except ValueError:
+            topology_role = TopologyRole.STAGING_BUCKET
+
+        p_str = data.get("provenance", "SYSTEM_BUILTIN")
+        try:
+            provenance = KnowledgeProvenance(p_str)
+        except ValueError:
+            provenance = KnowledgeProvenance.SYSTEM_BUILTIN
+
+        return cls(
+            rule_id=data.get("rule_id", ""),
+            pattern=data.get("pattern", ""),
+            pe_signature=data.get("pe_signature"),
+            morphology=morphology,
+            topology_role=topology_role,
+            target_category=data.get("target_category", ""),
+            target_subpath_template=data.get("target_subpath_template", ""),
+            provenance=provenance,
+            hit_count=int(data.get("hit_count", 0)),
+            updated_at=float(data.get("updated_at", time.time()))
+        )
+
+
+@dataclass
+class AuditCorrectionRecord:
+    """
+    审核纠偏诊断书 (Audit Correction Diagnostic Record - Value Object)
+    
+    严守「绝对纠偏而非静默降级」基本方针：
+    当 AI 审查或元数据仲裁发现规则不符或路径中转名污染时出具，
+    并在重新扫描与 AI 归档时自动纠偏闭环。
+    """
+    item_path: str
+    original_target: str
+    corrected_target: str
+    reason: str
+    is_absolute_correction: bool = True
+    requires_human_signoff: bool = False
+    correction_type: str = "STRIP_STAGING"  # STRIP_STAGING | METADATA_MISMATCH | UNSAFE_PATH | AI_SEMANTIC
+    created_at: float = field(default_factory=time.time)
+
+    def reason_tag(self) -> str:
+        if self.correction_type == "STRIP_STAGING":
+            return "AI已纠偏: 剥离中转名"
+        elif self.correction_type == "METADATA_MISMATCH":
+            return "AI已纠偏: 元数据仲裁"
+        elif self.correction_type == "UNSAFE_PATH":
+            return "AI已纠偏: 越权阻断"
+        return "AI已纠偏"
+
+    @property
+    def diagnostic_tag(self) -> str:
+        return f"[{self.reason_tag()}]"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "item_path": self.item_path,
+            "original_target": self.original_target,
+            "corrected_target": self.corrected_target,
+            "reason": self.reason,
+            "is_absolute_correction": self.is_absolute_correction,
+            "requires_human_signoff": self.requires_human_signoff,
+            "correction_type": self.correction_type,
+            "diagnostic_tag": self.diagnostic_tag,
+            "created_at": self.created_at
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AuditCorrectionRecord":
+        return cls(
+            item_path=data.get("item_path", ""),
+            original_target=data.get("original_target", ""),
+            corrected_target=data.get("corrected_target", ""),
+            reason=data.get("reason", ""),
+            is_absolute_correction=bool(data.get("is_absolute_correction", True)),
+            requires_human_signoff=bool(data.get("requires_human_signoff", False)),
+            correction_type=data.get("correction_type", "STRIP_STAGING"),
+            created_at=float(data.get("created_at", time.time()))
+        )
+
+
+AI_AUDIT_POLICY_FILE = Path.home() / ".disk_space_analyzer" / "ai_audit_policy.json"
+
+
+@dataclass
+class AIAuditPolicyConfig:
+    """
+    人为可操控的 AI 审查策略配置实体 (Human-Controllable AI Audit Policy)
+    """
+    enabled: bool = True
+    enforce_container_stripping: bool = True
+    confidence_threshold: float = 0.85
+    custom_instruction_prompt: str = ""
+    audit_override_mode: bool = False
+    updated_at: float = field(default_factory=time.time)
+
+    _instance: Optional["AIAuditPolicyConfig"] = None
+    _lock = threading.RLock()
+
+    @property
+    def strict_strip_staging_containers(self) -> bool:
+        return self.enforce_container_stripping
+
+    @strict_strip_staging_containers.setter
+    def strict_strip_staging_containers(self, val: bool):
+        self.enforce_container_stripping = bool(val)
+
+    @classmethod
+    def get_instance(cls) -> "AIAuditPolicyConfig":
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls.load()
+        return cls._instance
+
+    @classmethod
+    def load(cls) -> "AIAuditPolicyConfig":
+        p = AI_AUDIT_POLICY_FILE
+        if p.exists():
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return cls.from_dict(data)
+            except Exception:
+                pass
+        return cls()
+
+    def save(self) -> bool:
+        p = AI_AUDIT_POLICY_FILE
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            self.updated_at = time.time()
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(self.to_dict(), f, ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "enforce_container_stripping": self.enforce_container_stripping,
+            "strict_strip_staging_containers": self.strict_strip_staging_containers,
+            "confidence_threshold": self.confidence_threshold,
+            "custom_instruction_prompt": self.custom_instruction_prompt,
+            "audit_override_mode": self.audit_override_mode,
+            "updated_at": self.updated_at
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AIAuditPolicyConfig":
+        enforce_strip = bool(data.get("enforce_container_stripping", data.get("strict_strip_staging_containers", True)))
+        return cls(
+            enabled=bool(data.get("enabled", True)),
+            enforce_container_stripping=enforce_strip,
+            confidence_threshold=float(data.get("confidence_threshold", 0.85)),
+            custom_instruction_prompt=str(data.get("custom_instruction_prompt", "")),
+            audit_override_mode=bool(data.get("audit_override_mode", False)),
+            updated_at=float(data.get("updated_at", time.time()))
+        )
+
+
+class MasterConflictResolver:
+    """
+    主路由冲突仲裁与裁决服务 (Master Conflict Resolver)
+    
+    坚守三阶裁决阶梯与绝对纠偏：
+    1. 路由表为主导；
+    2. 冲突时以元数据为主 (PE 厂商/产品签名确证优先)；
+    3. 无元数据资产 (照片、相册、个人视频、散装文档)：彻底跳过死板离线词典，由 AI 判定！
+    4. 发现不符绝对纠偏出具 AuditCorrectionRecord，杜绝静默降级。
+    """
+    MEDIA_EXTENSIONS = {
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".raw", ".cr2", ".nef",
+        ".mp4", ".mkv", ".mov", ".avi", ".flv", ".wmv", ".webm",
+        ".mp3", ".wav", ".flac", ".aac", ".ogg",
+        ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".pdf", ".txt", ".md"
+    }
+
+    @classmethod
+    def resolve_candidate(
+        cls,
+        candidate_name: str,
+        original_root: str,
+        pe_metadata: Optional[Dict[str, Any]] = None,
+        is_directory_group: bool = False,
+        audit_policy: Optional[AIAuditPolicyConfig] = None
+    ) -> Tuple[str, Optional[MasterRoutingRule], Optional[AuditCorrectionRecord]]:
+        from app.core.domain_models import TopologyRoutingTable
+        table = TopologyRoutingTable.instance()
+
+        if audit_policy is None:
+            audit_policy = AIAuditPolicyConfig.get_instance()
+
+        # 1. 查询主路由表
+        matched_rule = table.match_master_rule(candidate_name, pe_metadata)
+
+        # 2. 检查候选资产是否具备强元数据
+        has_pe = bool(pe_metadata and (pe_metadata.get("publisher") or pe_metadata.get("software_name")))
+
+        # 3. 若命中主规则
+        if matched_rule:
+            # 3.1 强元数据冲突仲裁：以元数据为主
+            if has_pe and matched_rule.pe_signature:
+                pe_pub = str(pe_metadata.get("publisher", "")).strip().lower()
+                pe_name = str(pe_metadata.get("software_name", "")).strip().lower()
+                rule_sig = matched_rule.pe_signature.lower()
+                if pe_pub and rule_sig and pe_pub not in rule_sig and rule_sig not in pe_pub:
+                    correction = AuditCorrectionRecord(
+                        item_path=original_root,
+                        original_target=matched_rule.target_category,
+                        corrected_target=pe_metadata.get("software_name") or candidate_name,
+                        reason=f"规则签名 ({matched_rule.pe_signature}) 与 PE 厂商元数据 ({pe_pub}) 冲突，根据元数据绝对纠偏",
+                        is_absolute_correction=True,
+                        requires_human_signoff=False,
+                        correction_type="METADATA_MISMATCH"
+                    )
+                    return "METADATA_CORRECTED", matched_rule, correction
+
+            # 3.2 容器污染冲突审查
+            if audit_policy.enforce_container_stripping and table.is_staging_bucket(original_root):
+                if table.is_staging_bucket(matched_rule.target_category) or table.is_staging_bucket(matched_rule.target_subpath_template):
+                    correction = AuditCorrectionRecord(
+                        item_path=original_root,
+                        original_target=matched_rule.target_subpath_template or matched_rule.target_category,
+                        corrected_target="已安全剥离中转名",
+                        reason="检测到历史路由包含中转容器名称，AI审查引擎已强制绝对纠偏剥离",
+                        is_absolute_correction=True,
+                        requires_human_signoff=False,
+                        correction_type="STRIP_STAGING"
+                    )
+                    return "METADATA_CORRECTED", matched_rule, correction
+
+            # 3.3 无元数据媒体文件但有历史规则：若非用户锁定，标记需 AI 语义复核
+            ext = Path(candidate_name).suffix.lower()
+            if ext in cls.MEDIA_EXTENSIONS and not has_pe and matched_rule.provenance != KnowledgeProvenance.USER_CONFIRMED:
+                return "DELEGATE_TO_AI_SEMANTIC", matched_rule, None
+
+            return "DIRECT_HIT", matched_rule, None
+
+        # 4. 未命中主规则
+        # 4.1 强元数据资产位于中转容器 (如 共用文件/MotrixNext_Setup.exe)：
+        # 根据元数据推导建议，并出具绝对纠偏记录强制剥离中转容器名
+        if has_pe:
+            soft_name = pe_metadata.get("software_name") or candidate_name
+            parent_name = Path(original_root).parent.name
+            is_parent_staging = table.is_staging_bucket(parent_name) or table.is_staging_bucket(original_root)
+            correction = None
+            if is_parent_staging and audit_policy.enforce_container_stripping:
+                correction = AuditCorrectionRecord(
+                    item_path=original_root,
+                    original_target=f"{parent_name}/{soft_name}",
+                    corrected_target=f"软件安装与程序/{soft_name}",
+                    reason=f"资产位于中转容器 '{parent_name}' 中，AI审查引擎已强制绝对纠偏剥离中转名",
+                    is_absolute_correction=True,
+                    requires_human_signoff=False,
+                    correction_type="STRIP_STAGING"
+                )
+            return "METADATA_WINS", None, correction
+
+        # 4.2 无元数据资产 (照片、相册、个人视频、散装文档)：彻底跳过死板离线词典，由 AI 判断
+        ext = Path(candidate_name).suffix.lower()
+        if ext in cls.MEDIA_EXTENSIONS and not has_pe:
+            return "DELEGATE_TO_AI_SEMANTIC", None, None
+
+        return "UNKNOWN_NEED_AI", None, None
+
+    @classmethod
+    def resolve_asset_route(
+        cls,
+        candidate_name: str,
+        candidate_path: str,
+        pe_metadata: Optional[Dict[str, Any]] = None,
+        is_directory: bool = False,
+        audit_policy: Optional[AIAuditPolicyConfig] = None
+    ) -> Tuple[str, Optional[MasterRoutingRule], Optional[AuditCorrectionRecord]]:
+        """便捷别名方法，映射至 resolve_candidate"""
+        return cls.resolve_candidate(
+            candidate_name=candidate_name,
+            original_root=candidate_path,
+            pe_metadata=pe_metadata,
+            is_directory_group=is_directory,
+            audit_policy=audit_policy
+        )
+
+
 class TopologyRoutingTable:
     """
     环境拓扑路由表服务 (Environment Topology Routing Table Singleton)
@@ -550,6 +895,7 @@ class TopologyRoutingTable:
                 if cls._instance is None:
                     cls._instance = super(TopologyRoutingTable, cls).__new__(cls)
                     cls._instance._routes = {}
+                    cls._instance._master_rules = {}
                     cls._instance._builtin_staging_names = set(DEFAULT_STAGING_CONTAINER_NAMES)
                     cls._instance._file_path = ENVIRONMENT_TOPOLOGY_FILE
                     cls._instance.load()
@@ -571,6 +917,7 @@ class TopologyRoutingTable:
     def load(self) -> None:
         with self._lock:
             self._routes.clear()
+            self._master_rules.clear()
             if self._file_path.exists():
                 try:
                     with open(self._file_path, "r", encoding="utf-8") as f:
@@ -581,12 +928,16 @@ class TopologyRoutingTable:
                                 route = TopologyRoute.from_dict(item)
                                 key = self._normalize_key(route.pattern_or_path)
                                 self._routes[key] = route
-                    elif isinstance(data, dict) and "routes" in data:
+                    elif isinstance(data, dict):
                         for item in data.get("routes", []):
                             if isinstance(item, dict) and "pattern_or_path" in item:
                                 route = TopologyRoute.from_dict(item)
                                 key = self._normalize_key(route.pattern_or_path)
                                 self._routes[key] = route
+                        for m_item in data.get("master_rules", []):
+                            if isinstance(m_item, dict) and "pattern" in m_item:
+                                m_rule = MasterRoutingRule.from_dict(m_item)
+                                self._master_rules[m_rule.pattern.strip().lower()] = m_rule
                 except Exception:
                     pass
 
@@ -595,10 +946,12 @@ class TopologyRoutingTable:
             try:
                 self._file_path.parent.mkdir(parents=True, exist_ok=True)
                 routes_list = [r.to_dict() for r in self._routes.values()]
+                master_list = [m.to_dict() for m in self._master_rules.values()]
                 payload = {
-                    "version": "1.0",
+                    "version": "2.0",
                     "updated_at": time.time(),
-                    "routes": routes_list
+                    "routes": routes_list,
+                    "master_rules": master_list
                 }
                 with open(self._file_path, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -769,6 +1122,241 @@ class TopologyRoutingTable:
             "- 独立软件集体 (APP_COLLECTIVE, 如解压绿色包、项目根)：保持原子整体，不可拆散内部子文件。"
         )
         return ctx
+
+
+    # -------------------------------------------------------------
+    # 主路由资产规则管理与自沉淀 (Master Routing Rules & Self-Precipitation)
+    # -------------------------------------------------------------
+    def upsert_master_rule(self, rule: MasterRoutingRule, force_override: bool = False) -> bool:
+        """
+        根据最高优先级矩阵更新主路由规则：
+        USER_CONFIRMED (P1) > AI_LEARNED (P2) > SYSTEM_BUILTIN (P3)
+        """
+        with self._lock:
+            key = rule.pattern.strip().lower()
+            if not key:
+                return False
+
+            if not force_override and key in self._master_rules:
+                existing = self._master_rules[key]
+                if existing.provenance == KnowledgeProvenance.USER_CONFIRMED and rule.provenance != KnowledgeProvenance.USER_CONFIRMED:
+                    return False
+                if existing.provenance == KnowledgeProvenance.AI_LEARNED and rule.provenance == KnowledgeProvenance.SYSTEM_BUILTIN:
+                    return False
+
+            rule.updated_at = time.time()
+            self._master_rules[key] = rule
+            self.save()
+            return True
+
+    def match_master_rule(
+        self,
+        candidate_name_or_pattern: str,
+        pe_meta: Optional[Dict[str, Any]] = None
+    ) -> Optional[MasterRoutingRule]:
+        if not candidate_name_or_pattern:
+            return None
+        import fnmatch
+        cand_lower = candidate_name_or_pattern.strip().lower()
+        with self._lock:
+            # 1. 精确 pattern 匹配
+            if cand_lower in self._master_rules:
+                r = self._master_rules[cand_lower]
+                r.hit_count += 1
+                return r
+
+            # 2. 通配符 glob 匹配 (如 MotrixNext_*.exe)
+            for pat, r in self._master_rules.items():
+                if "*" in pat or "?" in pat:
+                    if fnmatch.fnmatch(cand_lower, pat):
+                        r.hit_count += 1
+                        return r
+
+            # 3. PE 软件规范名匹配
+            if pe_meta:
+                soft_name = str(pe_meta.get("software_name", "")).strip().lower()
+                if soft_name and soft_name in self._master_rules:
+                    r = self._master_rules[soft_name]
+                    r.hit_count += 1
+                    return r
+
+        return None
+
+    def precipitate_ai_decisions(
+        self,
+        grouped_units: List[Dict[str, Any]],
+        min_confidence: float = 0.8
+    ) -> int:
+        """
+        分析完成即刻写入主路由表（杜绝归档后才写造成的重复用工）
+        将高置信度的 AI 决策逆向抽象为通用模式规则
+        """
+        import re
+        import uuid
+        count = 0
+        with self._lock:
+            for g in grouped_units:
+                src = str(g.get("source", ""))
+                # 兼容各类 AI 分析源 (如 "AI", "AI (智能直出)", "AI-Heuristic" 等)
+                if not ("ai" in src.lower()):
+                    continue
+                conf = float(g.get("confidence", 0.0))
+                if conf < min_confidence or g.get("risk_level") == "高风险":
+                    continue
+
+                app_name = g.get("app_name", "").strip()
+                suggested_cat = (g.get("effective_category") or g.get("suggested_category") or "").strip()
+                rec_sub = (g.get("recommended_subpath") or g.get("target_subpath") or "").strip()
+                is_dir = bool(g.get("is_directory_group", False))
+                orig_root = g.get("original_root", "")
+                root_name = Path(orig_root).name if orig_root else (g.get("name") or app_name)
+
+                if not suggested_cat or not app_name or not root_name:
+                    continue
+
+                pattern = root_name
+                if not is_dir:
+                    base, ext = os.path.splitext(root_name)
+                    base_abstracted = re.sub(r'[\-_]v?\d+(\.\d+)+.*$', '_*', base, flags=re.IGNORECASE)
+                    if base_abstracted != base:
+                        pattern = f"{base_abstracted}{ext}"
+
+                pe_meta = g.get("high_value_metadata", {})
+                pub = pe_meta.get("publisher") or app_name
+
+                morphology = MorphologyType.SEALED_COLLECTIVE if is_dir else MorphologyType.INDEPENDENT_ASSET
+                role = TopologyRole.APP_COLLECTIVE if is_dir else TopologyRole.STAGING_BUCKET
+
+                rule = MasterRoutingRule(
+                    rule_id=str(uuid.uuid4())[:8],
+                    pattern=pattern,
+                    pe_signature=pub,
+                    morphology=morphology,
+                    topology_role=role,
+                    target_category=suggested_cat,
+                    target_subpath_template=rec_sub,
+                    provenance=KnowledgeProvenance.AI_LEARNED,
+                    hit_count=1,
+                    updated_at=time.time()
+                )
+                if self.upsert_master_rule(rule, force_override=False):
+                    count += 1
+
+            if count > 0:
+                self.save()
+        return count
+
+    def record_user_override(
+        self,
+        pattern_or_name: str,
+        new_cat: str,
+        new_target: str = "",
+        morphology: MorphologyType = MorphologyType.INDEPENDENT_ASSET
+    ) -> MasterRoutingRule:
+        """
+        用户手动就地修改的顶格覆盖机制：
+        直接赋予 USER_CONFIRMED (P1) 优先级强行覆盖入库，永不被 AI 自动覆盖。
+        """
+        import uuid
+        with self._lock:
+            rule_id = str(uuid.uuid4())[:8]
+            clean_pattern = str(pattern_or_name).strip()
+            rule = MasterRoutingRule(
+                rule_id=rule_id,
+                pattern=clean_pattern,
+                morphology=morphology,
+                topology_role=TopologyRole.APP_COLLECTIVE if morphology == MorphologyType.SEALED_COLLECTIVE else TopologyRole.STAGING_BUCKET,
+                target_category=new_cat,
+                target_subpath_template=new_target,
+                provenance=KnowledgeProvenance.USER_CONFIRMED,
+                hit_count=1,
+                updated_at=time.time()
+            )
+            self.upsert_master_rule(rule, force_override=True)
+            self.save()
+            return rule
+
+    def export_master_rules(self, file_path: Path) -> bool:
+        """导出全量主路由表与拓扑规则为标准 JSON 格式"""
+        with self._lock:
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "format": "DiskSpaceAnalyzer_MasterRoutingTable",
+                    "version": "2.0",
+                    "exported_at": time.time(),
+                    "routes": [r.to_dict() for r in self._routes.values()],
+                    "master_rules": [m.to_dict() for m in self._master_rules.values()]
+                }
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                return True
+            except Exception:
+                return False
+
+    def import_master_rules(self, file_path: Path, strategy: str = "merge") -> Tuple[int, int]:
+        """
+        导入外部主路由表规则 (strategy: 'merge' 增量合并 | 'overwrite' 完全覆盖)
+        返回 (导入成功数, 覆写数)
+        """
+        if not file_path.exists():
+            return 0, 0
+
+        with self._lock:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+
+                if strategy == "overwrite":
+                    self._master_rules.clear()
+                    self._routes.clear()
+
+                imported_count = 0
+                overwritten_count = 0
+
+                routes_raw = data.get("routes", [])
+                for r_item in routes_raw:
+                    if isinstance(r_item, dict) and "pattern_or_path" in r_item:
+                        r_obj = TopologyRoute.from_dict(r_item)
+                        k = self._normalize_key(r_obj.pattern_or_path)
+                        if k in self._routes:
+                            overwritten_count += 1
+                        else:
+                            imported_count += 1
+                        self._routes[k] = r_obj
+
+                rules_raw = data.get("master_rules", [])
+                for m_item in rules_raw:
+                    if isinstance(m_item, dict) and "pattern" in m_item:
+                        m_obj = MasterRoutingRule.from_dict(m_item)
+                        k = m_obj.pattern.strip().lower()
+                        if k in self._master_rules:
+                            overwritten_count += 1
+                        else:
+                            imported_count += 1
+                        self.upsert_master_rule(m_obj, force_override=(strategy == "overwrite"))
+
+                self.save()
+                return imported_count, overwritten_count
+            except Exception:
+                return 0, 0
+
+    def get_master_rules(self) -> List[MasterRoutingRule]:
+        with self._lock:
+            return list(self._master_rules.values())
+
+    def delete_master_rule(self, pattern_or_id: str) -> bool:
+        with self._lock:
+            target_key = None
+            for k, r in self._master_rules.items():
+                if k == pattern_or_id.lower() or r.rule_id == pattern_or_id:
+                    target_key = k
+                    break
+            if target_key:
+                del self._master_rules[target_key]
+                self.save()
+                return True
+            return False
 
 
 @dataclass(frozen=True)

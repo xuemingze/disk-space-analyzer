@@ -18,6 +18,7 @@ from app.ui.automation.rule_monitor_page import RuleMonitorPage
 from app.ui.automation.schedule_task_page import ScheduleTaskPage
 from app.ui.automation.quick_organize_page import QuickOrganizePage
 from app.ui.automation.cli_script_page import CliScriptPage
+from app.ui.automation.ai_audit_routing_page import AiAuditRoutingPage
 from app.automation.manager import AutomationManager
 
 
@@ -55,12 +56,14 @@ class AutomationCenterView(QWidget):
         self.btn_sub_schedule = QPushButton("⏰ 计划任务")
         self.btn_sub_quick = QPushButton("⚡ 快速整理")
         self.btn_sub_cli = QPushButton("💻 命令行与脚本")
+        self.btn_sub_ai_audit = QPushButton("🌐 AI审查与拓扑路由")
 
         sub_btns = [
             (self.btn_sub_monitor, 0),
             (self.btn_sub_schedule, 1),
             (self.btn_sub_quick, 2),
-            (self.btn_sub_cli, 3)
+            (self.btn_sub_cli, 3),
+            (self.btn_sub_ai_audit, 4)
         ]
 
         btn_qss = """
@@ -107,11 +110,13 @@ class AutomationCenterView(QWidget):
         self.page_schedule = ScheduleTaskPage()
         self.page_quick = QuickOrganizePage()
         self.page_cli = CliScriptPage()
+        self.page_ai_audit = AiAuditRoutingPage()
 
         self.sub_stack.addWidget(self.page_monitor)
         self.sub_stack.addWidget(self.page_schedule)
         self.sub_stack.addWidget(self.page_quick)
         self.sub_stack.addWidget(self.page_cli)
+        self.sub_stack.addWidget(self.page_ai_audit)
 
         main_layout.addWidget(self.sub_stack, 1)
 
@@ -126,6 +131,8 @@ class AutomationCenterView(QWidget):
             self.btn_sub_quick.setChecked(True)
         elif index == 3:
             self.btn_sub_cli.setChecked(True)
+        elif index == 4:
+            self.btn_sub_ai_audit.setChecked(True)
 
     def showEvent(self, event):
         super().showEvent(event)

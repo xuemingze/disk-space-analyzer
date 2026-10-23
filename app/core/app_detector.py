@@ -12,7 +12,8 @@ from app.core.organize_models import (
 )
 from app.core.domain_models import (
     ArchiveDestinationPath, HistorySuggestionProvider, ArchivePlanningUnit,
-    TopologyRoutingTable, TopologyRole, TopologyPolicy, AIAssetPayloadBuilder
+    TopologyRoutingTable, TopologyRole, TopologyPolicy, AIAssetPayloadBuilder,
+    KnowledgeProvenance, MasterConflictResolver, MorphologyType
 )
 
 # 已知软件、工具链及生态的特征规则库
@@ -1083,7 +1084,22 @@ class AppDetector:
                 "is_recognized": False
             }
 
-        # 1. 优先匹配已知 App 规则库
+        # 1. 优先匹配全局拓扑主路由表 (Master Routing Table - 遵循路由表主导准则)
+        topo_master = TopologyRoutingTable.instance().match_master_rule(p.name)
+        if topo_master:
+            is_user_lock = (topo_master.provenance == KnowledgeProvenance.USER_CONFIRMED)
+            return {
+                "app_name": topo_master.pe_signature or p.stem,
+                "suggested_category": topo_master.target_category,
+                "reason": f"命中主路由规则 ({topo_master.provenance.value}): {topo_master.pattern}",
+                "confidence": 0.98 if is_user_lock else 0.90,
+                "risk_level": "低风险",
+                "require_confirmation": False,
+                "is_recognized": True,
+                "recommended_subpath": topo_master.target_subpath_template
+            }
+
+        # 2. 其次匹配已知 App 规则库
         for rule in KNOWN_APP_PATTERNS:
             for pattern in rule["patterns"]:
                 pattern_norm = os.path.normpath(pattern).lower()

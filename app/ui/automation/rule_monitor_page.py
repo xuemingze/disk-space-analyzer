@@ -195,6 +195,11 @@ class RuleMonitorPage(QWidget):
 
         top_bar.addStretch()
 
+        self.btn_routing = QPushButton("🌐 拓扑路由知识库")
+        self.btn_routing.setStyleSheet("background-color: #1E293B; color: #F8FAFC; border: 1px solid #334155; font-weight: bold; padding: 8px 16px; border-radius: 4px;")
+        self.btn_routing.clicked.connect(self._open_routing_viewer)
+        top_bar.addWidget(self.btn_routing)
+
         self.btn_add_rule = QPushButton("➕ 添加监控规则")
         self.btn_add_rule.setStyleSheet("background-color: #0284C7; color: white; font-weight: bold; padding: 8px 16px; border-radius: 4px;")
         self.btn_add_rule.clicked.connect(self._add_rule)
@@ -461,6 +466,12 @@ class RuleMonitorPage(QWidget):
         layout.addLayout(btns)
 
         return frame
+
+    def _open_routing_viewer(self):
+        """打开全局拓扑路由知识库对话框"""
+        from app.ui.components.routing_table_viewer import RoutingTableViewerDialog
+        dlg = RoutingTableViewerDialog(self)
+        dlg.exec()
 
     def _add_rule(self):
         dlg = RuleEditDialog(parent=self)

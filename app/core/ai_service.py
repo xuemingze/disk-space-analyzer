@@ -18,7 +18,8 @@ from app.core.organize_models import (
 )
 from app.core.domain_models import (
     VersionClusterGroup, VersionClusterItem, SemanticDiffDecision, ArchiveDestinationPath,
-    TopologyRoutingTable, TopologyRole, TopologyPolicy, AIAssetPayloadBuilder
+    TopologyRoutingTable, TopologyRole, TopologyPolicy, AIAssetPayloadBuilder,
+    AIAuditPolicyConfig, AuditCorrectionRecord
 )
 
 
@@ -1281,6 +1282,7 @@ class AIService:
                 "symlink_target": "",
                 "app_name": app_name,
                 "suggested_category": cat_name,
+                "recommended_subpath": subpath,
                 "action": action,
                 "risk_level": item.get("risk_level", "低风险"),
                 "confidence": float(item.get("confidence", 0.95)),
@@ -1289,6 +1291,12 @@ class AIService:
                 "source": "AI (智能直出)"
             }
             grouped_units.append(group_unit)
+
+        # 分析完成即刻写入主路由表（杜绝重复用工）
+        try:
+            TopologyRoutingTable.instance().precipitate_ai_decisions(grouped_units)
+        except Exception as e:
+            app_logger.warning(f"[AIService] 分析完成写入主路由表时发生轻微异常: {e}")
 
         return grouped_units
 
@@ -1623,6 +1631,10 @@ class AIService:
             sys_prefs = f"用户偏好：工作相关 {int(options.work_personal_ratio * 100)}%，私人相关 {100 - int(options.work_personal_ratio * 100)}%，最低接受置信度 {options.min_confidence}\n"
 
             topo_ctx = TopologyRoutingTable.instance().export_ai_topology_context()
+            audit_policy = AIAuditPolicyConfig.get_instance()
+            audit_custom_prompt = ""
+            if audit_policy.custom_instruction_prompt.strip():
+                audit_custom_prompt = f"【用户自定义审查铁律与约束】:\n{audit_policy.custom_instruction_prompt.strip()}\n"
 
             system_prompt = (
                 "你是一个专业的文件系统治理与软件生态架构专家。请分析待处理的目录与文件聚合单元并制定归档分类方案。\n"
@@ -1651,6 +1663,7 @@ class AIService:
                 f"{sys_prefs}"
                 f"{whitelist_prompt}\n"
                 f"{topo_ctx}\n"
+                f"{audit_custom_prompt}"
                 "【输出格式约束】\n"
                 "请严格以 JSON 格式输出，必须且只能包含 groups 数组，且必须包含输入时给定的 stable group_id：\n"
                 "{\n"
@@ -1704,6 +1717,39 @@ class AIService:
                     dest_root_p, root_p, g.get("is_directory_group", False),
                     subpath=new_sub
                 )
+                
+                # 严守基本方针准则2：绝对纠偏机制而非静默降级 (Absolute Active Correction)
+                routing_tbl = TopologyRoutingTable.instance()
+                orig_root_str = str(g.get("original_root", ""))
+                if audit_policy.enforce_container_stripping and routing_tbl.is_staging_bucket(orig_root_str):
+                    dest_str = str(new_target_base)
+                    # 检查目标路径中是否仍然残留了原材料中转容器名称
+                    staging_name = Path(orig_root_str).name
+                    if staging_name and staging_name.lower() in dest_str.lower():
+                        # 执行绝对纠偏：强制重构安全无中转名的目标路径
+                        clean_dest = ArchiveDestinationPath.build(
+                            dest_root=destination_root,
+                            category=new_cat,
+                            subpath=new_sub,
+                            entity_name=g.get("app_name") or Path(orig_root_str).name,
+                            is_dir=g.get("is_directory_group", False)
+                        )
+                        corrected_path_str = str(clean_dest)
+                        if corrected_path_str != dest_str:
+                            correction = AuditCorrectionRecord(
+                                item_path=orig_root_str,
+                                original_target=dest_str,
+                                corrected_target=corrected_path_str,
+                                reason=f"检测到目标规划路径残留中转容器名称 '{staging_name}'，AI审查引擎已执行绝对纠偏剥离",
+                                is_absolute_correction=True,
+                                requires_human_signoff=False,
+                                correction_type="STRIP_STAGING"
+                            )
+                            g["correction_record"] = correction.to_dict()
+                            g["action"] = "已纠偏"
+                            g["rationale"] = f"[{correction.reason_tag()}] {g.get('rationale', '')}"
+                            new_target_base = Path(corrected_path_str)
+
                 g["target_root"] = str(new_target_base)
 
                 for sub in g["sub_items"]:
@@ -1880,6 +1926,16 @@ class AIService:
 
         # AI 规划完成后，执行本地泛目录共识收敛器，对同源泛目录进行强保全对齐（防止模型幻觉或批次差异导致同源分裂）
         grouped_units = AppDetector.reconcile_umbrella_consensus(grouped_units, destination_root, options=options)
+
+        # 核心写入时机：分析一完成，直接逆向提炼并写入主路由表，杜绝归档后才写造成的重复用工
+        try:
+            precipitated_count = TopologyRoutingTable.instance().precipitate_ai_decisions(
+                grouped_units, min_confidence=options.min_confidence
+            )
+            if precipitated_count > 0:
+                app_logger.info(f"AI 决策分析完成：已逆向提炼并沉淀 {precipitated_count} 条高置信度主路由规则入库")
+        except Exception as e:
+            app_logger.error(f"AI 决策分析完成即刻自沉淀异常: {e}")
 
         return grouped_units
 
