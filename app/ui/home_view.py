@@ -1329,11 +1329,8 @@ class HomeView(QWidget):
             cat_stats = { item["category"]: {"bytes": item["bytes"], "percent": item.get("percent", 0.0)} for item in cat_list }
             self.chart_widget.update_chart(cat_stats)
 
-        # 核心融合：直接接收 AI 创作的结构化执行清单，全量灌入全景表格
+        # 核心融合：直接接收 AI 原生创作的结构化执行清单，全量灌入全景表格（AI出列表，本地纯导入）
         exec_plan = (ai_response.structured_data or {}).get("execution_plan", [])
-        if not exec_plan:
-            from app.core.ai_service import AIService
-            exec_plan = AIService.parse_markdown_table_to_execution_plan(ai_response.final_text or "")
 
         if exec_plan:
             self.current_scan_result["ai_execution_plan"] = exec_plan

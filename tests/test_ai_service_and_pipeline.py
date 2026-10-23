@@ -163,3 +163,33 @@ def test_extract_markdown_report_from_response():
     assert res_broken[0].startswith("# 磁盘全景深度报告")
 
 
+def test_ai_first_execution_plan_direct_import():
+    """测试准则一：AI 原生出列表，本地纯导入。优先直接提取 execution_plan，绝不依赖文本反向截取"""
+    import json
+    payload = {
+        "execution_plan": [
+            {
+                "source_path": "D:/安装包/TestApp.exe",
+                "app_name": "TestApp",
+                "suggested_category": "01_AI与模型工具",
+                "target_subpath": "01_AI与模型工具/TestApp",
+                "action": "归档",
+                "risk_level": "低风险",
+                "rationale": "测试模型工具",
+                "confidence": 0.98
+            }
+        ],
+        "chart_categories": [{"category": "01_AI与模型工具", "bytes": 1024, "percent": 100.0}],
+        "markdown_report": "# 深度治理报告\n已生成执行清单。"
+    }
+    raw_text = json.dumps(payload, ensure_ascii=False)
+    result = AIService._extract_markdown_report_from_response(raw_text)
+    assert result is not None
+    md_text, exec_plan, struct = result
+    assert len(exec_plan) == 1
+    assert exec_plan[0]["app_name"] == "TestApp"
+    assert exec_plan[0]["suggested_category"] == "01_AI与模型工具"
+    assert struct["execution_plan"] == exec_plan
+
+
+

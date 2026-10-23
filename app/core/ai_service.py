@@ -2058,12 +2058,81 @@ class AIService:
         return []
 
     @classmethod
-    def _extract_markdown_report_from_response(cls, raw_text: str) -> Optional[Tuple[str, List[Dict[str, Any]], Dict[str, Any]]]:
+    def render_markdown_report_from_ai_plan(
+        cls,
+        exec_plan: List[Dict[str, Any]],
+        chart_categories: List[Dict[str, Any]],
+        scan_summary: Dict[str, Any],
+        model: str = "AI"
+    ) -> str:
         """
-        鲁棒解析大模型全景报告响应：
-        1. 完整 JSON 解析；
-        2. 截断/不完整 JSON 提取 "markdown_report" 字符串并反转义；
-        3. 纯 Markdown 兜底。
+        基于 AI 创作的核心执行清单与全景统计数据，渲染为标准专业全景深度治理报告 (纯展现渲染，无数据反向推断)
+        """
+        total_files = scan_summary.get("total_files", 0)
+        total_bytes = scan_summary.get("total_bytes", 0)
+        c_cnt = scan_summary.get("collective_count", 0)
+        s_cnt = scan_summary.get("standalone_file_count", 0)
+        target_paths = scan_summary.get("target_paths", [])
+
+        md = []
+        md.append("# 磁盘全景深度分析与生命周期治理报告\n")
+        md.append(f"> **分析模型**: {model} | **治理编排模式**: AI 原生结构化决策直出 | **生成状态**: 治理清单已就绪\n")
+        md.append("## 一、扫描范围与宏观摘要\n")
+        md.append(f"- **目标扫描路径**: {', '.join(target_paths) if target_paths else '自定义范围'}")
+        md.append(f"- **全量底层文件**: {total_files:,} 项")
+        md.append(f"- **提炼资产单元**: {c_cnt + s_cnt:,} 项 (其中实体集体: {c_cnt} 项, 独立资产: {s_cnt} 项)")
+        md.append(f"- **总占用空间**: {format_size(total_bytes)}\n")
+
+        md.append("## 二、空间构成与分类统计\n")
+        if chart_categories:
+            md.append("| 分类领域 | 占用容量 | 空间占比 |")
+            md.append("| :--- | :--- | :--- |")
+            for c in chart_categories:
+                b = c.get("bytes", 0)
+                pct = c.get("percent", 0.0)
+                md.append(f"| {c.get('category', '其他')} | {format_size(b)} | {pct:.1f}% |")
+            md.append("")
+        elif scan_summary.get("category_stats"):
+            md.append("| 分类领域 | 占用容量 | 空间占比 |")
+            md.append("| :--- | :--- | :--- |")
+            for cat, data in scan_summary["category_stats"].items():
+                md.append(f"| {cat} | {format_size(data.get('bytes', 0))} | {data.get('percent', 0.0):.1f}% |")
+            md.append("")
+
+        md.append("## 三、AI 核心治理执行清单 (Actionable Plan)\n")
+        md.append("| 资产名称 | 原始绝对路径 | 规划分类 | 推荐目标子路径 | 治理动作 | 风险等级 | 研判理由 |")
+        md.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
+        for item in exec_plan:
+            name = item.get("app_name") or item.get("name") or Path(item.get("source_path", "")).name
+            src = item.get("source_path") or item.get("original_path") or ""
+            cat = item.get("suggested_category", "通用分类")
+            sub = item.get("target_subpath") or item.get("recommended_subpath") or "-"
+            act = item.get("action", "归档")
+            risk = item.get("risk_level", "低风险")
+            rat = item.get("rationale", "AI 智能规划")
+            md.append(f"| {name} | `{src}` | {cat} | `{sub}` | **{act}** | {risk} | {rat} |")
+        md.append("")
+
+        md.append("## 四、治理与优化战略实施指导\n")
+        md.append("1. **全景明细表格直接导入联动**: 上述 AI 决策清单已由本地导入引擎 100% 同构灌入全景明细表格，用户可在表格中逐项勾选或复核；\n")
+        md.append("2. **原子实体完整性保障**: 软件安装包、工程项目与媒体工程保持不可分割性，严防散落；\n")
+        md.append("3. **主路由自沉淀**: 执行归档或确认后，AI 规划的分类模板将自动自沉淀进入主拓扑路由表，形成持久化企业级分类知识库。\n")
+
+        return "\n".join(md)
+
+    @classmethod
+    def _extract_markdown_report_from_response(
+        cls,
+        raw_text: str,
+        scan_summary: Optional[Dict[str, Any]] = None,
+        model: str = "AI"
+    ) -> Optional[Tuple[str, List[Dict[str, Any]], Dict[str, Any]]]:
+        """
+        AI 出列表，脚本只是导入：
+        1. 优先直接解析 AI 输出的结构化 JSON，提取 AI 创作的 execution_plan 列表（第一公民）与 chart_categories；
+        2. 绝不使用脚本从 Markdown 表格文本中反向正则“截取”数据；
+        3. 若 AI 输出了核心清单但 report 文本被截断，本地使用标准渲染器将 AI 的 execution_plan 渲染为完整报告展现给用户；
+        4. 若 AI 输出了纯 Markdown，提取并保留原始报告。
         """
         if not raw_text:
             return None
@@ -2076,67 +2145,75 @@ class AIService:
             except Exception:
                 parsed = None
 
-        if isinstance(parsed, dict) and "markdown_report" in parsed:
-            md_text = str(parsed.get("markdown_report", "")).strip()
-            exec_plan = parsed.get("execution_plan") or cls.parse_markdown_table_to_execution_plan(md_text)
-            return md_text, exec_plan, parsed
+        exec_plan = []
+        chart_cats = []
+        md_text = ""
 
-        # 正则容错提取被末尾截断的 JSON 中的 markdown_report
-        # 依次在 clean_str 和原始 raw_text 中探测，杜绝 clean_str 截断造成的漏探
-        candidate_targets = []
-        if clean_str:
-            candidate_targets.append(clean_str)
-        if raw_text and raw_text != clean_str:
-            candidate_targets.append(raw_text)
+        if isinstance(parsed, dict):
+            # 直接提取 AI 结构化创作的 execution_plan 列表（第一公民）
+            raw_plan = parsed.get("execution_plan")
+            if isinstance(raw_plan, list):
+                exec_plan = raw_plan
+            raw_cats = parsed.get("chart_categories")
+            if isinstance(raw_cats, list):
+                chart_cats = raw_cats
+            md_text = str(parsed.get("markdown_report") or parsed.get("panoramic_report") or "").strip()
 
-        for search_target in candidate_targets:
-            match = re.search(r'"markdown_report"\s*:\s*"((?:\\.|[^"\\])*)', search_target, re.DOTALL)
-            if match:
-                extracted = match.group(1)
+        # 容错：若 JSON 尾部受损，优先从 JSON 流中直接提取 AI 原生的 execution_plan 数组
+        if not exec_plan:
+            plan_match = re.search(r'"execution_plan"\s*:\s*(\[\s*\{.*?\}\s*\])', raw_text, re.DOTALL)
+            if plan_match:
+                try:
+                    p = json.loads(plan_match.group(1), strict=False)
+                    if isinstance(p, list):
+                        exec_plan = p
+                except Exception:
+                    pass
+
+        # 提取 markdown_report 字符串（若存在）
+        if not md_text:
+            md_match = re.search(r'"markdown_report"\s*:\s*"((?:\\.|[^"\\])*)', raw_text, re.DOTALL)
+            if md_match:
+                extracted = md_match.group(1)
                 if extracted.endswith('"'):
                     extracted = extracted[:-1]
                 try:
-                    unescaped = json.loads(f'"{extracted}"')
+                    md_text = json.loads(f'"{extracted}"')
                 except Exception:
-                    unescaped = extracted.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t")
-                unescaped = unescaped.strip()
-                if unescaped:
-                    exec_plan = cls.parse_markdown_table_to_execution_plan(unescaped)
-                    struct = {
-                        "markdown_report": unescaped,
-                        "execution_plan": exec_plan,
-                        "chart_categories": []
-                    }
-                    return unescaped, exec_plan, struct
+                    md_text = extracted.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t")
+                md_text = md_text.strip()
+            elif not raw_text.strip().startswith("{") and (raw_text.strip().startswith("#") or "##" in raw_text):
+                md_text = raw_text.strip()
+            elif raw_text.strip().startswith("{"):
+                hash_idx = raw_text.find("#")
+                if hash_idx != -1 and hash_idx < 200:
+                    cand = raw_text[hash_idx:].strip()
+                    if cand.endswith("}"):
+                        cand = cand[:-1].strip()
+                    if cand.endswith('"'):
+                        cand = cand[:-1].strip()
+                    md_text = cand
 
-        # 纯 Markdown 兜底（具备 Markdown 标题或代码块特征）
-        stripped_raw = raw_text.strip()
-        # 若以 { 开头但内部包含 Markdown 报告特征，剥离前缀尝试提取
-        if stripped_raw.startswith("{"):
-            hash_idx = stripped_raw.find("#")
-            if hash_idx != -1 and hash_idx < 200:
-                potential_md = stripped_raw[hash_idx:].strip()
-                if potential_md.endswith("}"):
-                    potential_md = potential_md[:-1].strip()
-                if potential_md.endswith('"'):
-                    potential_md = potential_md[:-1].strip()
-                potential_md = potential_md.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t").strip()
-                if len(potential_md) >= 20:
-                    exec_plan = cls.parse_markdown_table_to_execution_plan(potential_md)
-                    struct = {
-                        "markdown_report": potential_md,
-                        "execution_plan": exec_plan,
-                        "chart_categories": []
-                    }
-                    return potential_md, exec_plan, struct
-        elif stripped_raw.startswith("#") or "##" in stripped_raw or "```" in stripped_raw:
-            exec_plan = cls.parse_markdown_table_to_execution_plan(stripped_raw)
+        # 核心契约：AI 出列表，脚本只是导入！
+        # 若 AI 输出了核心清单 execution_plan，本地脚本负责组装展示报告（绝无反向截取）
+        if exec_plan:
+            if not md_text or len(md_text) < 20:
+                md_text = cls.render_markdown_report_from_ai_plan(exec_plan, chart_cats, scan_summary or {}, model)
             struct = {
-                "markdown_report": stripped_raw,
                 "execution_plan": exec_plan,
-                "chart_categories": []
+                "chart_categories": chart_cats,
+                "markdown_report": md_text
             }
-            return stripped_raw, exec_plan, struct
+            return md_text, exec_plan, struct
+
+        # 若 AI 未输出清单但输出了完整 Markdown 报告文本
+        if md_text:
+            struct = {
+                "execution_plan": [],
+                "chart_categories": chart_cats,
+                "markdown_report": md_text
+            }
+            return md_text, [], struct
 
         return None
 
@@ -2167,26 +2244,30 @@ class AIService:
 
         system_prompt = (
             "你是一位资深系统优化与存储架构专家。请根据提供的磁盘全景扫描统计数据（含原子实体集体、非软件多元资产集合与独立资产单元）与冗余列表，"
-            "进行深度全景分析，并以 JSON 格式输出结果。\n"
-            "输出 JSON 格式要求: {\n"
-            '  "markdown_report": "完整的 Markdown 格式报告文本",\n'
+            "进行深度全景分析，并以严格的 JSON 格式输出治理决策与全景报告。\n"
+            "【核心职责准则 · AI出列表，本地纯导入】：\n"
+            "你作为最高核心编排器，必须首当其冲输出完整的结构化治理执行清单 (execution_plan)，针对提报的每一项资产单元给出精准治理裁决！\n"
+            "输出 JSON 格式要求:\n"
+            "{\n"
             '  "execution_plan": [\n'
             '    {\n'
             '      "source_path": "原始绝对路径",\n'
             '      "app_name": "所属软件或资产集合名称",\n'
-            '      "suggested_category": "归档分类（如财务单据、相册摄影、设计工程、安装包等，全局分类仅作参考）",\n'
-            '      "target_subpath": "推荐的多级归档子目录（例如 业务单据/2026、06_办公与通讯、相册摄影/旅游 等）",\n'
+            '      "suggested_category": "归档分类（如 01_AI与模型工具、相册摄影、设计工程、办公账套等）",\n'
+            '      "target_subpath": "推荐的多级归档子目录（例如 01_AI与模型工具/工具名、业务单据/2026 等）",\n'
             '      "action": "归档/清理/保留",\n'
             '      "risk_level": "低风险/中风险/高风险",\n'
-            '      "rationale": "研判理由（20字内）"\n'
+            '      "rationale": "研判理由（20字内）",\n'
+            '      "confidence": 0.95\n'
             '    }\n'
             '  ],\n'
-            '  "chart_categories": [{\"category\": \"分类名称\", \"bytes\": 1024, \"percent\": 10.0}]\n'
+            '  "chart_categories": [{\"category\": \"分类名称\", \"bytes\": 1024, \"percent\": 10.0}],\n'
+            '  "markdown_report": "全景深度分析与治理战略分析报告文本（含扫描范围与结论摘要、空间全景透视、资产健康诊断、分级治理建议）"\n'
             "}\n"
             "【全景多元资产治理核心原则】：\n"
             "1. 原子实体集体聚合保全机制：对软件程序包、业务账套、开发工程、游戏资产、相册摄影集合、影音剪辑工程、备份镜像等不可拆分实体集体，必须作为一个完整独立单元提出治理建议，严禁建议拆散其内部子文件！\n"
             "2. 严禁只偏狭关注软件安装包！若扫描中包含相册摄影、媒体音视频工程、办公单据账套、游戏资产、代码工程等非软件类集合资产，必须全面呈现其集合形态、文件规模、领域归属与治理方案！\n"
-            "【全局分类参考说明】：系统现存基础分类有 [" + cat_ref_str + "]，仅供宏观参考，绝非硬性限制！若资产具备强烈业务特征（如财务单据、发票凭证、相册摄影、音视频工程、模型训练等），鼓励你自主提炼出高阶业务分类。\n"
+            "【全局分类参考说明】：系统现存基础分类有 [" + cat_ref_str + "]，仅供宏观参考，绝非硬性限制！若资产具备强烈业务特征，鼓励你自主提炼出高阶业务分类。\n"
             "【八大有序业务领域治理规范（针对软件安装包、工具池及运行时目录）】：\n"
             "├── 01_AI与模型工具 (AI助手、提示词工程、Agent客户端、大模型代理与逆向工具)\n"
             "├── 02_云盘与同步 (百度网盘、夸克、Syncthing、坚果云、同步工具)\n"
@@ -2199,13 +2280,6 @@ class AIService:
             "【智能解混淆重命名与多版本裁决】：\n"
             "- 对于哈希/纯数字等下载代号乱码名（如 8799-...exe），结合 PE 元数据识别真实软件名并给出规范命名建议；\n"
             "- 若存在同一软件的多个版本，明确建议保留最新版，将旧版标注为淘汰归档或清理。\n"
-            "报告必须包含：\n"
-            "1. 磁盘现状与健康度评估(0-100分与等级，含资产单元总数、实体集体数与底层碎片聚合数)\n"
-            "2. 空间构成与类型特征(涵盖软件安装、实体集体、多媒体相册、开发工程、办公账套等各类资产比例)\n"
-            "3. 大资产与冗余分布(Top 超大资产清单及形态，必须包含实体集体)\n"
-            "4. 重复资产浪费分析(含安装包多版本重复与解压绿色包冗余)\n"
-            "5. 分级治理与清理优化建议(兼顾八大领域与非软件多元集合资产分类蓝图)\n"
-            "6. 【核心执行清单】：必须输出一个 Markdown 表格，列出推荐处理的资产单元，表头必须包含：资产名称、治理形态、资产大小、类别、路径摘要、原始绝对路径、风险等级、建议操作(如归档/清理/保留)、分析建议。"
         )
 
         # 1. 冗余样本极简特征提炼与 0-Token 碎文件阻断 (Prompt 瘦身 80%+)
@@ -2284,7 +2358,7 @@ class AIService:
             if not raw_text:
                 return False, "大模型未返回任何文本内容", None
 
-            extracted_res = cls._extract_markdown_report_from_response(raw_text)
+            extracted_res = cls._extract_markdown_report_from_response(raw_text, scan_summary=scan_summary, model=model)
             if extracted_res:
                 md_text, exec_plan, struct = extracted_res
                 ai_resp.structured_data = struct
@@ -2293,7 +2367,7 @@ class AIService:
                 ai_resp.report_id = f"REP_{ai_resp.task_id}"
                 return True, "", ai_resp
 
-            return False, f"返回内容既非合法 JSON 也非完整 Markdown 报告: {raw_text[:100]}", None
+            return False, f"大模型未返回有效的 AI 决策数据或执行清单: {raw_text[:100]}", None
             
         if progress_callback:
             progress_callback("AI_ANALYZING: 正在发送数据与大模型进行分析...")
