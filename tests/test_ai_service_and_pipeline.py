@@ -146,4 +146,20 @@ def test_extract_markdown_report_from_response():
     assert res_plain is not None
     assert res_plain[0] == plain_md
 
+    # 3. 模拟未闭合 JSON 内部包含 Markdown 方括号语法（原正则曾被错误截断匹配 [804 个底层文件]）
+    truncated_with_brackets = (
+        '{\n  "markdown_report": "# 磁盘全景分析与治理报告\\n\\n## 一、扫描范围\\n\\n'
+        '本次扫描范围为 `D:\\\\安装包`，共识别 [804 个底层文件]、23 个顶层资产。'
+    )
+    res_brackets = AIService._extract_markdown_report_from_response(truncated_with_brackets)
+    assert res_brackets is not None
+    assert "磁盘全景分析与治理报告" in res_brackets[0]
+    assert "[804 个底层文件]" in res_brackets[0]
+
+    # 4. 模拟 JSON 外壳破损但包含 Markdown 标题的容错提取
+    broken_envelope = '{\n  # 磁盘全景深度报告\n\n## 章节一\n这里是测试内容，空间分析正常。'
+    res_broken = AIService._extract_markdown_report_from_response(broken_envelope)
+    assert res_broken is not None
+    assert res_broken[0].startswith("# 磁盘全景深度报告")
+
 

@@ -141,11 +141,13 @@ class AutomationPlanResolver:
                 # 若为剥离中转名或元数据纠偏，更新组内推荐路径与分类
                 if correction.correction_type == "STRIP_STAGING":
                     # 强力剥离中转名
-                    old_sub = group.get("recommended_subpath") or group.get("target_subpath") or ""
-                    cleaned_sub = routing_table.should_strip_from_target(old_sub)
-                    if cleaned_sub:
-                        group["recommended_subpath"] = cleaned_sub
-                        group["target_subpath"] = cleaned_sub
+                    old_sub = str(group.get("recommended_subpath") or group.get("target_subpath") or "")
+                    parts = [p for p in old_sub.replace("\\", "/").split("/") if p and not routing_table.should_strip_from_target(p)]
+                    cleaned_sub = "/".join(parts)
+                    if not cleaned_sub:
+                        cleaned_sub = f"软件安装与程序/{candidate_name}"
+                    group["recommended_subpath"] = cleaned_sub
+                    group["target_subpath"] = cleaned_sub
                     group["effective_category"] = "软件安装与程序 (Apps & Installers)"
                     group["suggested_category"] = "软件安装与程序 (Apps & Installers)"
                 elif correction.correction_type == "METADATA_MISMATCH":

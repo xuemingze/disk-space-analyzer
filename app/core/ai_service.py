@@ -1225,9 +1225,19 @@ class AIService:
             return match.group(1).strip()
             
         # 如果没有包裹，尝试寻找最外层的 {} 或 []
-        match = re.search(r'(\{.*\}|\[.*\])', text, flags=re.DOTALL)
-        if match:
-            return match.group(1).strip()
+        # 注意：若文本以 { 开头，优先且仅寻找外层 {}，严禁在未闭合的 { 中抢先错误截断匹配内部的 [...]
+        if text.startswith("{"):
+            match = re.search(r'(\{.*\})', text, flags=re.DOTALL)
+            if match:
+                return match.group(1).strip()
+        elif text.startswith("["):
+            match = re.search(r'(\[.*\])', text, flags=re.DOTALL)
+            if match:
+                return match.group(1).strip()
+        else:
+            match = re.search(r'(\{.*\}|\[.*\])', text, flags=re.DOTALL)
+            if match:
+                return match.group(1).strip()
             
         return text
 
@@ -2072,29 +2082,54 @@ class AIService:
             return md_text, exec_plan, parsed
 
         # 正则容错提取被末尾截断的 JSON 中的 markdown_report
-        search_target = clean_str if clean_str else raw_text
-        match = re.search(r'"markdown_report"\s*:\s*"((?:\\.|[^"\\])*)', search_target, re.DOTALL)
-        if match:
-            extracted = match.group(1)
-            if extracted.endswith('"'):
-                extracted = extracted[:-1]
-            try:
-                unescaped = json.loads(f'"{extracted}"')
-            except Exception:
-                unescaped = extracted.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t")
-            unescaped = unescaped.strip()
-            if unescaped:
-                exec_plan = cls.parse_markdown_table_to_execution_plan(unescaped)
-                struct = {
-                    "markdown_report": unescaped,
-                    "execution_plan": exec_plan,
-                    "chart_categories": []
-                }
-                return unescaped, exec_plan, struct
+        # 依次在 clean_str 和原始 raw_text 中探测，杜绝 clean_str 截断造成的漏探
+        candidate_targets = []
+        if clean_str:
+            candidate_targets.append(clean_str)
+        if raw_text and raw_text != clean_str:
+            candidate_targets.append(raw_text)
 
-        # 纯 Markdown 兜底（非 JSON 结构且具备 Markdown 标题或代码块特征）
+        for search_target in candidate_targets:
+            match = re.search(r'"markdown_report"\s*:\s*"((?:\\.|[^"\\])*)', search_target, re.DOTALL)
+            if match:
+                extracted = match.group(1)
+                if extracted.endswith('"'):
+                    extracted = extracted[:-1]
+                try:
+                    unescaped = json.loads(f'"{extracted}"')
+                except Exception:
+                    unescaped = extracted.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t")
+                unescaped = unescaped.strip()
+                if unescaped:
+                    exec_plan = cls.parse_markdown_table_to_execution_plan(unescaped)
+                    struct = {
+                        "markdown_report": unescaped,
+                        "execution_plan": exec_plan,
+                        "chart_categories": []
+                    }
+                    return unescaped, exec_plan, struct
+
+        # 纯 Markdown 兜底（具备 Markdown 标题或代码块特征）
         stripped_raw = raw_text.strip()
-        if not stripped_raw.startswith("{") and (stripped_raw.startswith("#") or "##" in stripped_raw or "```" in stripped_raw):
+        # 若以 { 开头但内部包含 Markdown 报告特征，剥离前缀尝试提取
+        if stripped_raw.startswith("{"):
+            hash_idx = stripped_raw.find("#")
+            if hash_idx != -1 and hash_idx < 200:
+                potential_md = stripped_raw[hash_idx:].strip()
+                if potential_md.endswith("}"):
+                    potential_md = potential_md[:-1].strip()
+                if potential_md.endswith('"'):
+                    potential_md = potential_md[:-1].strip()
+                potential_md = potential_md.replace("\\n", "\n").replace('\\"', '"').replace("\\\\", "\\").replace("\\t", "\t").strip()
+                if len(potential_md) >= 20:
+                    exec_plan = cls.parse_markdown_table_to_execution_plan(potential_md)
+                    struct = {
+                        "markdown_report": potential_md,
+                        "execution_plan": exec_plan,
+                        "chart_categories": []
+                    }
+                    return potential_md, exec_plan, struct
+        elif stripped_raw.startswith("#") or "##" in stripped_raw or "```" in stripped_raw:
             exec_plan = cls.parse_markdown_table_to_execution_plan(stripped_raw)
             struct = {
                 "markdown_report": stripped_raw,
