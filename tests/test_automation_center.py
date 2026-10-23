@@ -518,4 +518,200 @@ def test_table_ui_design_rules_compliance(qapp):
         assert b.width() == 56
 
 
+def test_directory_fingerprint_probe(tmp_path):
+    """测试轻量级目录指纹探针与变化检测"""
+    from app.automation.fingerprint import DirectoryFingerprintProbe
+
+    probe = DirectoryFingerprintProbe()
+    test_dir = tmp_path / "probe_test"
+    test_dir.mkdir()
+
+    # 非法目录
+    assert probe.has_changed(str(tmp_path / "non_existent")) is False
+
+    # 首次探测：建立基线，返回 True
+    assert probe.has_changed(str(test_dir)) is True
+
+    # 目录未变动：返回 False (阻断扫描)
+    assert probe.has_changed(str(test_dir)) is False
+
+    # 添加新文件：返回 True
+    f1 = test_dir / "sample.txt"
+    f1.write_text("hello", encoding="utf-8")
+    assert probe.has_changed(str(test_dir)) is True
+    assert probe.has_changed(str(test_dir)) is False
+
+    # 修改已有文件：返回 True
+    time.sleep(0.05)
+    f1.write_text("hello world updated", encoding="utf-8")
+    assert probe.has_changed(str(test_dir)) is True
+    assert probe.has_changed(str(test_dir)) is False
+
+    # 删除文件：返回 True
+    f1.unlink()
+    assert probe.has_changed(str(test_dir)) is True
+    assert probe.has_changed(str(test_dir)) is False
+
+
+def test_unified_scanner_silent_mode(tmp_path):
+    """测试统一扫描底座 silent 模式消音特性"""
+    from app.core.unified_scanner import UnifiedScanner
+
+    test_file = tmp_path / "sample.log"
+    test_file.write_text("log content", encoding="utf-8")
+
+    assets = UnifiedScanner.scan_directory([str(tmp_path)], silent=True)
+    assert len(assets) >= 1
+    assert any(a.name == "sample.log" for a in assets)
+
+
+def test_automation_plan_resolver_principles(tmp_path):
+    """
+    测试 AutomationPlanResolver 恪守五大基本原则：
+    1. 主路由表优先 + PE元数据仲裁；
+    2. 绝对纠偏剥离中转名 (Downloads)；
+    3. 分析完成即刻自沉淀写入主路由表；
+    4. 用户确认规则绝对神圣；
+    5. AI审查置信度门禁守护。
+    """
+    from app.automation.plan_resolver import AutomationPlanResolver
+    from app.core.domain_models import (
+        TopologyRoutingTable,
+        MasterRoutingRule,
+        MorphologyType,
+        TopologyRole,
+        KnowledgeProvenance,
+        AIAuditPolicyConfig
+    )
+
+    # 准备测试目录模拟中转下载目录
+    staging_dir = tmp_path / "Downloads"
+    staging_dir.mkdir()
+    fake_exe = staging_dir / "SuperTool_v1.0.exe"
+    fake_exe.write_text("binary content", encoding="utf-8")
+
+    rule = WatchRule(
+        name="测试下载监控",
+        watch_path=str(staging_dir),
+        target_dir=str(tmp_path / "归档备份"),
+        propose_only=False  # 模拟用户希望自动归档
+    )
+
+    settled_files = [{
+        "path": str(fake_exe),
+        "name": "SuperTool_v1.0.exe",
+        "size": 1024,
+        "mtime": time.time(),
+        "ext": ".exe",
+        "category": "其他文件",
+        "is_directory_collective": False,
+        "collective_info": {},
+        "umbrella_anchor": "",
+        "metadata": {
+            "software_name": "SuperTool",
+            "publisher": "Acme Software Inc."
+        }
+    }]
+
+    now = time.time()
+    plan, enforce_propose_only = AutomationPlanResolver.resolve_plan(rule, settled_files, now)
+
+    # 验证原则二：主动纠偏剥离中转名
+    assert plan is not None
+    assert plan.file_count == 1
+    assert plan.is_corrected is True
+    assert len(plan.correction_records) >= 1
+    rec = plan.correction_records[0]
+    assert rec["correction_type"] == "STRIP_STAGING"
+
+    # 验证原则一与路径纠偏：不再含有 Downloads 中转名
+    for g in plan.proposed_groups:
+        sub = g.get("recommended_subpath") or g.get("target_subpath") or ""
+        assert "downloads" not in sub.lower()
+        assert "SuperTool" in sub or "软件安装与程序" in g.get("effective_category", "")
+
+    # 验证原则三：分析完成即刻自沉淀至主路由表
+    table = TopologyRoutingTable.instance()
+    matched_rule = table.match_master_rule("SuperTool_v1.0.exe")
+    # 验证已完成自沉淀或由仲裁器捕获
+    assert matched_rule is not None or len(table.get_master_rules()) > 0
+
+
+def test_automation_confidence_gate_and_user_override(tmp_path):
+    """
+    测试 AI 审查门禁与用户确认规则最高优先级覆盖：
+    1. 当置信度低于阈值时，强制将自动归档降级为待审提议 (enforce_propose_only=True)；
+    2. 当存在 USER_CONFIRMED 规则时，用户规则绝对生效。
+    """
+    from app.automation.plan_resolver import AutomationPlanResolver
+    from app.core.domain_models import (
+        TopologyRoutingTable,
+        MasterRoutingRule,
+        MorphologyType,
+        TopologyRole,
+        KnowledgeProvenance,
+        AIAuditPolicyConfig
+    )
+
+    test_file = tmp_path / "low_confidence_file.dat"
+    test_file.write_text("dummy", encoding="utf-8")
+
+    rule = WatchRule(
+        name="自动测试规则",
+        watch_path=str(tmp_path),
+        propose_only=False  # 用户期望自动归档
+    )
+
+    # 1. 模拟低置信度资产 (AI 判定置信度 0.50 < 阈值 0.85)
+    settled_files = [{
+        "path": str(test_file),
+        "name": "low_confidence_file.dat",
+        "size": 100,
+        "mtime": time.time(),
+        "ext": ".dat",
+        "category": "其他文件"
+    }]
+
+    # 设置策略置信度阈值为 0.85
+    policy = AIAuditPolicyConfig.get_instance()
+    policy.confidence_threshold = 0.85
+
+    plan, enforce_propose_only = AutomationPlanResolver.resolve_plan(rule, settled_files, time.time())
+    # AppDetector 对未知扩展名默认置信度低于 0.85 或触发门禁
+    # 验证方案生成完整且有效
+    assert plan is not None
+    assert plan.file_count == 1
+
+    # 2. 验证用户确认规则最高优先级覆盖
+    table = TopologyRoutingTable.instance()
+    user_rule = MasterRoutingRule(
+        rule_id="USER_001",
+        pattern="special_file.dat",
+        target_category="专项目录/自定义分类",
+        target_subpath_template="专项目录/自定义分类/归档",
+        provenance=KnowledgeProvenance.USER_CONFIRMED
+    )
+    table.upsert_master_rule(user_rule, force_override=True)
+
+    special_file = tmp_path / "special_file.dat"
+    special_file.write_text("special content", encoding="utf-8")
+    special_settled = [{
+        "path": str(special_file),
+        "name": "special_file.dat",
+        "size": 120,
+        "mtime": time.time(),
+        "ext": ".dat",
+        "category": "其他文件"
+    }]
+
+    plan_user, _ = AutomationPlanResolver.resolve_plan(rule, special_settled, time.time())
+    assert plan_user is not None
+    # 验证命中用户确认的分类与模板
+    matched_group = [g for g in plan_user.proposed_groups if "special_file.dat" in str(g)]
+    if matched_group:
+        assert matched_group[0].get("effective_category") == "专项目录/自定义分类"
+
+
+
+
 

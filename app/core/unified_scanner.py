@@ -100,7 +100,8 @@ class UnifiedScanner:
         cancel_check: Optional[Callable[[], bool]] = None,
         max_depth: int = 32,
         max_assets_limit: int = 200000,
-        on_ignore_callback: Optional[Callable[[str], None]] = None
+        on_ignore_callback: Optional[Callable[[str], None]] = None,
+        silent: bool = False
     ) -> List[AssetUnit]:
         """
         统一执行目录扫描并返回资产单元列表：
@@ -453,7 +454,12 @@ class UnifiedScanner:
         if progress_callback:
             progress_callback("扫描完成", total_scanned_files, total_scanned_bytes)
 
-        app_logger.info(
-            f"统一扫描完成！共提炼资产单元: {len(results)} 项 (涵盖物理文件: {total_scanned_files} 项, 总容量: {format_size(total_scanned_bytes)})"
-        )
+        if silent:
+            app_logger.debug(
+                f"统一扫描完成！共提炼资产单元: {len(results)} 项 (涵盖物理文件: {total_scanned_files} 项, 总容量: {format_size(total_scanned_bytes)})"
+            )
+        else:
+            app_logger.info(
+                f"统一扫描完成！共提炼资产单元: {len(results)} 项 (涵盖物理文件: {total_scanned_files} 项, 总容量: {format_size(total_scanned_bytes)})"
+            )
         return results

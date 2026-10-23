@@ -434,8 +434,24 @@ class RuleMonitorPage(QWidget):
 
         info_box = QVBoxLayout()
         t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(plan.created_at))
+
+        header_layout = QHBoxLayout()
         header = QLabel(f"📦 提案 #{plan.id} · 来自 [{plan.source_name}] ({t_str})")
         header.setStyleSheet("font-weight: bold; color: #F8FAFC; font-size: 13px;")
+        header_layout.addWidget(header)
+
+        if plan.is_corrected:
+            badge_text = "🛡️ [AI已纠偏: 剥离中转名]"
+            if plan.correction_records:
+                first_rec = plan.correction_records[0]
+                if isinstance(first_rec, dict) and first_rec.get("diagnostic_tag"):
+                    badge_text = f"🛡️ {first_rec['diagnostic_tag']}"
+            badge = QLabel(badge_text)
+            badge.setStyleSheet("color: #F59E0B; font-size: 11px; font-weight: bold; background: rgba(245, 158, 11, 0.15); padding: 2px 6px; border-radius: 4px; border: 1px solid #F59E0B;")
+            header_layout.addWidget(badge)
+
+        header_layout.addStretch()
+        info_box.addLayout(header_layout)
 
         details = QLabel(
             f"目标路径: {plan.source_path}  |  文件数: {plan.file_count} 项  |  总体积: {format_size(plan.total_bytes)}  |  规划归属组: {len(plan.proposed_groups)} 组"
@@ -445,7 +461,6 @@ class RuleMonitorPage(QWidget):
         notes = QLabel(plan.notes)
         notes.setStyleSheet("color: #38BDF8; font-size: 11px;")
 
-        info_box.addWidget(header)
         info_box.addWidget(details)
         info_box.addWidget(notes)
         layout.addLayout(info_box)

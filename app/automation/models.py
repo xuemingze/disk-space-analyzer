@@ -73,6 +73,8 @@ class ProposedPlan:
     proposed_groups: List[Dict[str, Any]] = field(default_factory=list)
     status: str = "pending"                # pending (待审核) | applied (已执行) | dismissed (已忽略)
     notes: str = ""
+    is_corrected: bool = False
+    correction_records: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
