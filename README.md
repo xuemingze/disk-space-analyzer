@@ -1,153 +1,203 @@
 # 🚀 Disk Space Panorama Analyzer & AI Smart Governance System
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![PySide6 / Qt6](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-brightgreen.svg)](https://pypi.org/project/PySide6/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2B-blueviolet.svg)](https://www.microsoft.com/windows)
-[![Version: v1.9.2](https://img.shields.io/badge/Release-v1.9.2-blue.svg)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)
-[![Test Suite: 192 Passed](https://img.shields.io/badge/Tests-192%20Passed%20(100%25)-brightgreen.svg)](./tests/)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(64--bit)-blueviolet.svg)](https://www.microsoft.com/windows)
+[![Release: v1.9.3](https://img.shields.io/badge/Release-v1.9.3-brightgreen.svg)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GUI: PySide6 / Qt6](https://img.shields.io/badge/GUI-Modern%20Dark%20Qt6-blue.svg)](https://pypi.org/project/PySide6/)
+[![Test Suite: 100% Passed](https://img.shields.io/badge/Tests-100%25%20Passing-brightgreen.svg)](./tests/)
 
 > **A high-performance Windows desktop application built for deep disk space cleanup, AI-assisted file classification, and storage lifecycle governance**.  
-> Say goodbye to full C: drive anxiety, tens of thousands of scattered files slowing down your PC, and duplicated gigabytes eating your storage. **Utility-driven, easy to use, and lightning-fast.**
+> Say goodbye to full C: drive anxiety, tens of thousands of scattered files slowing down your PC, and duplicated gigabytes eating your storage.  
+> **Portable, instant-start, zero dependencies required. Runs 100% offline out-of-the-box.**
 
-[English Documentation](./README.md) | [中文说明文档](./README_ZH.md) | [Core Architecture & Theory Guide](./docs/Core_Architecture_Theory.md)
-
----
-
-## 📥 Quick Download & Installation
-
-**➡️ [Go to Latest Release (v1.9.2)](https://github.com/xuemingze/disk-space-analyzer/releases/latest)** · [Release Notes History](./docs/) · [Detailed Usage Guide (Chinese)](./docs/使用说明.md)
-
-| Package | Size | Highlights & Best For | Download |
-| :--- | ---: | :--- | :---: |
-| **`DiskSpaceAnalyzer-1.9.2-win64-portable.zip`** | ~80 MB | **⭐ Highly Recommended (Portable Zip)**. Extract to any folder and double-click `DiskSpaceAnalyzer.exe`. **No Python installation required.** Instant startup. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.2-win64-portable.zip) |
-| `DiskSpaceAnalyzer-1.9.2-win64.exe` | ~80 MB | **Single-file standalone executable**. Run directly without extraction. Fast automatic self-decompression on first boot. | [⬇️ Download](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.2-win64.exe) |
-| Run from Source (Developers) | — | Command-line execution: `pip install -r requirements.txt && python main.py` | [View GitHub Releases](https://github.com/xuemingze/disk-space-analyzer/releases/latest) |
-
-* 🖥️ **Operating System**: Windows 10 / 11 64-bit.
-* 🔒 **Safety & Privacy**: All cleanup operations safely move files to the **Recycle Bin** by default or support **atomic rollback**. Critical system directories are protected.
+[English Manual](./README.md) | [中文使用手册](./README_ZH.md)
 
 ---
 
-## 🎯 What It Does: Solving 5 Major Storage Headaches
+## 📥 Quick Download & 10-Second Setup
+
+No need to install Python or configure dependencies. Download and run directly:
+
+| Package Type | Highlights & Best For | Download |
+| :--- | :--- | :---: |
+| **`DiskSpaceAnalyzer-1.9.3-win64-portable.zip`** | **⭐ Highly Recommended (Portable Zip)**. Extract to any directory and double-click `DiskSpaceAnalyzer.exe`. Leaves no background clutter. | [⬇️ Download Portable Zip](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.3-win64-portable.zip) |
+| `DiskSpaceAnalyzer-1.9.3-win64.exe` | **Single-file Standalone Exe**. Double-click to run directly without extracting. Perfect for USB flash drives. | [⬇️ Download Standalone Exe](https://github.com/xuemingze/disk-space-analyzer/releases/latest/download/DiskSpaceAnalyzer-1.9.3-win64.exe) |
+
+* 🖥️ **Operating System**: Windows 10 / 11 64-bit;
+* 🔒 **Safety Guarantees**: Cleanup operations move files to the **Windows Recycle Bin** by default; app migrations feature **one-click atomic rollback**; critical system paths are permanently protected.
+
+---
+
+## 🎯 What Problems Does It Solve?
+
+Are you dealing with these common storage headaches?
+
+1. **C: drive constantly running low on space**: Unknown caches and temporary installers are eating up gigabytes, and you are afraid to delete files because of system crashes;
+2. **Messy Downloads and Desktop folders**: Thousands of unorganized installers, archives, screenshots, documents, and code fragments;
+3. **Duplicate files wasting storage**: Identical video files, documents, or installers duplicated across projects and disks;
+4. **Massive installed apps trapping C: drive**: You want to move them to D: drive, but manual copying breaks desktop shortcuts, registries, and launch paths;
+5. **Fear of accidentally modifying files currently in use**: Cleaning tools might accidentally touch an open Word/Excel document or an active development build.
+
+**Disk Space Panorama Analyzer** is specifically engineered to solve these problems safely and efficiently.
+
+---
+
+## 📖 Practical Step-by-Step User Guide (5 Core Scenarios)
+
+### Scenario 1: Panorama Scan & Safe Cleanup (Fixing Full C: Drive)
+
+When your C: drive turns red, use this feature to find storage hogs and clean them in seconds:
 
 ```text
- How Disk Space Analyzer solves common Windows storage issues:
- ─────────────────────────────────────────────────────────────────────────────
- 1. C: Drive running out of space ───► Instant disk snapshot, discover deep logs/caches, clean safely
- 2. Messy folders with 10,000+ files ─► AI understands real purposes (projects/tools) to organize hierarchy
- 3. Identical large files wasting GBs ─► Zero-space NTFS Hardlink merging: save storage, keep files usable
- 4. Afraid to move big installed apps ─► Lossless cross-drive migration with automatic Junction & registry sync
- 5. Files accidentally deleted in use ─► Automation Center with in-use lock protection to prevent file corruption
+Select Drive ──► Click "Quick Scan" ──► Inspect Sunburst Chart & Top 100 ──► Click "One-Click Cleanup"
 ```
 
-### 1. 🔍 Space Panorama Insight: Pinpoint Storage Eaters
-* **Sub-second streaming snapshots**: Rapid directory traversal paints interactive space distribution charts and file-type rankings;
-* **Top 100 Largest Files List**: Instantly find VM images, monolithic archives, obsolete installers, and video caches;
-* **Safe One-Click Cleanup**: Windows protection whitelist protects system files. Move redundant junk safely to the Recycle Bin.
-
-### 2. 🤖 AI Smart File Organization: From Chaos to Clarity
-* **Semantic business understanding**: Instead of dumb extensions (like lumping all `.zip` files together), the AI categorizes assets by actual workflow context (e.g., Development Toolchains, Financial Receipts, Live2D Models);
-* **Exemplar directory learning**: Point to a tidy folder you like (e.g. `D:\Tools`), and the AI adapts its categorization structure to mirror your organizational habits;
-* **Offline heuristic engine fallback**: Even without internet or API keys, the built-in offline rules engine works seamlessly with millisecond responsiveness.
-
-### 3. 🔗 Zero-Space Duplicate Merging (NTFS Hardlink)
-* **3-tier hash funnel**: Size pre-filtering + 8KB sample hash + full concurrent hashing finds identical files in seconds;
-* **NTFS Hardlink innovation**:
-  * Merges duplicated files on the same drive into a single physical data block, immediately reclaiming tens of gigabytes;
-  * Both file paths remain fully functional and can be opened as normal without disrupting your daily workflow.
-
-### 4. 📦 Lossless App & Toolchain Migration Across Drives
-* **NTFS Directory Junctions**: Relocate massive 50GB software or standalone toolchains from `C:` to `D:`, creating seamless junction points;
-* **Automatic shortcut and registry sync**: Desktop/Start Menu `.lnk` shortcuts and system registry paths are automatically updated;
-* **One-click atomic rollback**: If you ever want to revert, restore the entire directory with a single click.
-
-### 5. 🛡️ Automation Center: Safe In-Use Guard
-* **In-Use lock protection**: Detects process file handle locks before cleanup or archiving. Files currently being written or programs running are safely skipped to avoid data corruption;
-* **Scheduled silent scans**: Set periodic health checks to keep your disks clean over time.
+1. **Select a Drive**: Launch the app, click a drive card at the top (e.g. `C:\` or `D:\`), or click **"📁 Select Path"** on the right to choose any folder;
+2. **Start Analysis**:
+   * Click **"⚡ Quick Scan"**: Streams directory traversal in seconds, rendering an interactive space distribution sunburst chart and storage usage dashboard;
+   * Click **"🔍 Deep Analysis"**: Extracts deep file metadata, PE signatures, and build artifacts to produce an exhaustive inventory;
+3. **Locate Large Files & Junk**:
+   * Look at the **"Top 100 Largest Files"** tab to immediately spot virtual machine images, forgotten installer packages, and hidden video caches;
+   * Browse assets by category (Installers, Media, Dev Dependencies, Temporary Logs);
+4. **Safe Cleanup**:
+   * Click **"📑 AI Deep Health Report"** to view health diagnostics and reclaimable space recommendations;
+   * Click **"🧹 One-Click Cleanup"**: Redundant junk files are safely sent to the **Recycle Bin**. If you ever change your mind, restore them directly from the Recycle Bin!
 
 ---
 
-## 🚀 Quick Step-by-Step Usage Guide
+### Scenario 2: Smart File Organization (From Cluttered Folders to Neat Hierarchies)
 
-### Scenario 1: Panorama Scan & Safe Cleanup
-1. Launch the app and select a drive card (e.g. `C:\` or `D:\`), or click **"📁 Select Path"**;
-2. Click **"⚡ Quick Scan"** or **"🔍 Deep Analysis"**;
-3. View the space distribution chart and Top 100 big files list;
-4. Review the **"📑 AI Deep Health Report"** and click **"🧹 One-Click Cleanup"**.
+Have thousands of scattered files in your Downloads or Desktop folder? Use AI-assisted organization to clean them up:
 
-### Scenario 2: AI File Organization
-1. Switch to **"AI File Organizer"** in the sidebar;
-2. Select your disorganized source folder (e.g. `Downloads`, `Desktop`);
-3. Click **"🤖 Smart Analysis & Planning"**;
-4. In the preview dialog, review the 10-column planned directory tree. Double-click Column 3 to fine-tune paths in-place;
-5. Click **"🚀 Start Organizing"** to execute reorganization cleanly.
+```text
+Switch to "AI File Organizer" ──► Select Folder ──► Smart Planning ──► Preview/Edit ──► Execute
+```
 
-### Scenario 3: Duplicate File Deduplication & Merging
-1. Click **"Dedup & Merge"** in the sidebar;
-2. Pick directories to compare and click **"Next"** to run concurrent hash analysis;
-3. Review the duplicate groups table: the system automatically recommends keeping the best primary copy;
-4. Choose your preferred governance mode:
-   * **Mode 1: Safe Archive** (pack redundant copies into an archive);
-   * **Mode 2: NTFS Hardlink Merge (Recommended)** (reclaim storage while keeping both file paths valid);
-   * **Mode 3: Isolate & Recycle** (send duplicates to Recycle Bin);
-5. Click **"Execute"** to reclaim storage.
-
-### Scenario 4: Cross-Drive App Migration
-1. In the asset detail table, select an identified standalone software or dev project;
-2. Right-click and choose **"📦 Migrate Application"**;
-3. Choose the target drive (e.g. `D:\MigratedApps`) and check **"Sync Shortcuts & Registry"**;
-4. Click **"Start Migration"** to free up C: drive space while keeping apps fully usable.
+1. **Navigate to Organizer**: Click **"🤖 AI File Organizer"** on the left navigation bar;
+2. **Select Source Folder**: Pick the folder you want to tidy up (e.g., `Downloads` or `Desktop`);
+3. **Click "Smart Analysis & Planning"**:
+   * The system analyzes each file's real-world context (e.g., distinguishing between an office tool installer, AI model weights, or a receipt document);
+   * Automatically generates a clean 2~3 level directory structure;
+4. **Preview & Manual Fine-Tuning (Never moves files blindly)**:
+   * A preview confirmation window displays exactly where each file originated and where it is proposed to go;
+   * **In-Place Fine-Tuning**: If you want to change any proposed path, simply **double-click** or press **`F2`** in Column 3 (Planned Target Path) to edit directly. Hit Enter, and your custom rule will be saved;
+5. **Execute**: Click **"🚀 Start Organizing"** to neatly place all files into their designated folders.
 
 ---
 
-## 💡 Productivity Tips & Shortcuts
+### Scenario 3: Zero-Space Duplicate Merging (Reclaim Gigabytes While Keeping Files Usable)
 
-* ✏️ **In-Place Path Preserving Edit**:  
-  Double-click or press **`F2`** on Column 3 (Planned Target Path) to edit directly in the table. The original text is preserved and pre-selected. Press Enter to submit and save the rule to your personal library;
-* 📂 **Native Explorer Selection**:  
-  Double-click any column other than Column 3 (File Name, Category, Size, etc.) to instantly reveal and highlight the item in Windows File Explorer;
-* 📦 **Right-Click "Promote to Collective"**:  
-  Got a messy collection of thousands of tiny project files? Right-click in the table and choose **"📦 Promote to Collective"** to bundle them into an atomic single entity;
-* 🖥️ **Fullscreen Maximized Workspace**:  
-  Double-click any tab header to maximize the data grid to fullscreen for easier high-density viewing.
+When identical large files exist across projects, standard deletion breaks existing workflows. Our **NTFS Hardlink Merging** solves this:
+
+```text
+Click "Dedup & Merge" ──► Select Comparison Folders ──► Review Duplicates ──► Select "Hardlink Merge" ──► Execute
+```
+
+1. **Navigate to Dedup**: Click **"🔗 Dedup & Merge"** in the left sidebar;
+2. **Select Folders**: Add the directories you want to scan for duplicates and click **"Next"**;
+3. **3-Tier Concurrent Hashing**: Size pre-filtering ➔ 8KB sampling ➔ full concurrent hashing identifies exact duplicate file groups in seconds;
+4. **Recommended Primary Copy**: The engine automatically suggests the best primary copy based on creation date, modification time, and directory hierarchy;
+5. **Select Governance Solution**:
+   * **⭐ Solution 2: NTFS Hardlink Merge (Highly Recommended)**:  
+     Leverages Windows NTFS filesystem capabilities to point duplicate files to the exact same physical storage blocks. **Physical storage is halved immediately, but files in both paths remain completely intact and functional!**
+   * **Solution 1: Safe Archive** (packages duplicates into a backup directory);
+   * **Solution 3: Recycle Bin Isolation** (moves redundant copies to the Recycle Bin).
+6. **Click "Execute"** to instantly reclaim disk space.
+
+---
+
+### Scenario 4: Lossless Cross-Drive App & Project Migration
+
+Have large applications or toolchains eating space on C: drive? Moving them manually breaks shortcuts and registries. Use automated migration:
+
+```text
+Find App in Table ──► Right-Click "Migrate Application" ──► Pick D: Target ──► Check Sync Shortcuts ──► Migrate
+```
+
+1. **Locate Target Application**: In the scanned asset list, find a standalone application, portable package, or dev project;
+2. **Initiate Migration**: Right-click the asset and select **"📦 Migrate Application"**;
+3. **Configure Destination**:
+   * Select a target directory on a drive with ample storage (e.g., `D:\MigratedApps`);
+   * **Check "Sync Desktop Shortcuts & Registry"**;
+4. **Execute Migration**:
+   * The app smoothly moves files to the target drive;
+   * Automatically creates an **NTFS Directory Junction** in the original C: location, allowing Windows and all programs to transparently access files at the original path;
+   * Updates desktop shortcuts (`.lnk`), Start Menu items, and registry keys;
+   * **One-Click Reversible**: A migration manifest is created so you can restore the app to its original location with a single click if needed.
+
+---
+
+### Scenario 5: Automation Center (Silent Background Health Checks & Protection)
+
+Open **"🤖 Automation Center"** on the left menu to access 5 convenient submodules:
+
+1. **⚡ Quick Organize**:  
+   Pre-configured one-click cards for **Desktop Cleanup**, **Downloads Organization**, **Documents Organizer**, and **Media & Pictures**. One click scans, plans, and prompts a confirmation dialog;
+2. **⏰ Scheduled Tasks**:  
+   Set daily, weekly, or hourly checks for key folders. By default, it generates proposals for your review;
+3. **🛡️ Directory Watcher**:  
+   Monitor specific folders (e.g., `Downloads`). When new files settle and are free of I/O locks, clean proposals are generated;
+4. **🔒 In-Use Lock Protection (In-Use Guard)**:  
+   Before moving any file, the system inspects process handle locks and Office/WPS temporary lock files. **Any file currently open or program running is safely skipped to prevent data corruption**;
+5. **🌐 AI Audit & Topology Routing**:  
+   Inspect the master knowledge base routing table. Rules are strictly prioritized: **User Manual Confirmations (P1, Top Priority) ➔ AI-Learned (P2) ➔ System Built-In (P3)**, with the most recently edited rules shown first.
+
+---
+
+## 💡 Keyboard Shortcuts & Pro Tips
+
+| Action / Shortcut | Where to Use | Description |
+| :--- | :--- | :--- |
+| **`F2`** or **Double-Click** | Table Column 3 (Planned Path) | **Edit planned path in-place**. The text is preserved and selected. Press Enter to save as a custom rule; |
+| **Double-Click** | Any column other than Column 3 | **Instantly reveal and highlight** the file in Windows File Explorer; |
+| **Right-Click** | Any row in data tables | Opens contextual actions (Migrate App, Promote to Collective, Open Folder, etc.); |
+| **Double-Click Tab** | Tab Headers / Workspace | **Maximize to fullscreen**, giving you maximum space for dense table viewing; |
+| **`Del` Key** | Scanned Asset Table | Directly sends the selected redundant junk item to the Windows Recycle Bin. |
 
 ---
 
 ## ⚙️ Optional LLM Configuration
 
-> 💡 **Notice**: The software includes a robust offline heuristic rules engine. **Even with no API Key configured, all scanning, deduplication, migration, and file organizing features remain 100% operational.**
+> 💡 **Notice**: The software includes a tuned **offline heuristic expert rules engine**.  
+> **Even without an internet connection or any API Key configured, all scanning, deduplication, migration, file organization, and automation features function 100% reliably!**
 
-To connect an online AI model for enhanced semantic clustering:
-1. Open **"Settings"** in the sidebar;
-2. Input your OpenAI-compatible **Base URL** (e.g. `https://api.openai.com/v1`, DeepSeek, MiniMax, Qwen, or local Ollama `http://localhost:11434/v1`);
-3. Enter your **API Key**;
-4. Click **"🔄 Fetch Available Models"** to select a model, test connection, and save.
+If you want to connect an online LLM for enhanced semantic clustering:
+
+```text
+Click "Settings" on sidebar ──► Enter Base URL & API Key ──► Fetch Models & Test ──► Save
+```
+
+1. Click **"⚙️ Settings"** on the left navigation bar;
+2. **Base URL**: Enter any OpenAI-compatible endpoint, such as:
+   * DeepSeek: `https://api.deepseek.com/v1`
+   * MiniMax: `https://api.minimaxi.com/v1`
+   * Qwen (DashScope): `https://dashscope.aliyuncs.com/compatible-mode/v1`
+   * Local Ollama: `http://localhost:11434/v1`
+   * Official OpenAI: `https://api.openai.com/v1`
+3. **API Key**: Enter your provider's API key;
+4. Click **"🔄 Fetch Available Models"** and pick your desired model;
+5. Click **"⚡ Test Connection"** and click **"Save Settings"**.
 
 ---
 
-## 📖 Architecture & Theory for Developers
+## ❓ Frequently Asked Questions (FAQ)
 
-This project is engineered upon core system principles including the **"AI-First Orchestration Contract"**, **"Three Core Organizing Principles"** (Atomic Collective Protection, Broad Category Semantic Inheritance, Source Umbrella Consistency), and **"GUI Invariable Law"** with sub-second micro-contracts.
+#### Q1: Is it safe to clean or move files with this software? Will it delete system files?
+> **A: Completely safe.**  
+> 1. The software enforces a strict Windows system whitelist (`C:\Windows`, `System32`, `WinSxS`, `Program Files` critical drivers, etc.);  
+> 2. Cleaned files default to the Windows Recycle Bin;  
+> 3. Organization requires preview confirmation before files are moved.
 
-For deep technical insights on algorithm designs, 0-Token fragment blocking, or concurrent hash caching:
+#### Q2: What is NTFS Hardlink Merging? Does it really save disk space?
+> **A: Yes, it is a native Windows NTFS filesystem capability.**  
+> When two files have 100% identical contents, a hardlink merges the two directory entries so they point to the exact same physical sectors on disk. Physical space is freed immediately while both file paths remain usable.
 
-👉 **[📄 Core Architecture & Theory Specification](./docs/Core_Architecture_Theory.md)**  
-👉 **[📜 Project Execution Journey & Architecture Evolution (Chinese)](./docs/项目全景执行历程与架构演化.md)**  
-👉 **[📑 Release Notes Changelog](./docs/)**
+#### Q3: After migrating an application across drives, will desktop shortcuts still work?
+> **A: Yes, completely normally.**  
+> The migration engine builds an NTFS Directory Junction at the original location so Windows transparently forwards calls to the new drive, and updates desktop `.lnk` shortcuts and registry keys automatically.
 
----
-
-## 🛠️ FAQ & Troubleshooting
-
-#### Q1: Is it safe to clean or migrate files with this tool?
-> **A**: Yes, strictly safe. Built-in Windows protection whitelists prevent touching critical system folders (`System32`, `WinSxS`, etc.). Cleanup defaults to the Windows Recycle Bin, and migrations support instant one-click rollback.
-
-#### Q2: What is NTFS Hardlink merging? Does it actually save space?
-> **A**: It is a native Windows NTFS filesystem capability. Two directory paths point to the exact same physical storage blocks on disk. Reclaim gigabytes without deleting files or breaking existing shortcuts.
-
-#### Q3: Where do I find runtime logs for debugging?
-> **A**: Unhandled exceptions and runtime traces are logged to the `logs/` directory inside the application folder (`logs/app.log` and `logs/error.log`).
+#### Q4: Where are error and runtime logs stored?
+> **A:** Logs and crash dumps are stored under the `logs/` directory inside the application folder (`logs/app.log`, `logs/error.log`).
 
 ---
 
