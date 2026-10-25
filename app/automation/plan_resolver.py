@@ -31,39 +31,54 @@ from app.core.domain_models import (
     MasterConflictResolver,
     AuditCorrectionRecord,
     AIAuditPolicyConfig,
-    KnowledgeProvenance
+    KnowledgeProvenance,
+    ArchiveDestinationPath
 )
-from app.automation.models import WatchRule, ProposedPlan
+from app.automation.models import WatchRule, ScheduledTask, ProposedPlan
 from app.utils.logger import app_logger
 
 
 class AutomationPlanResolver:
     """
     自动化整理方案解析器 (Automation Plan Resolver)
+    统一承载「规则监控」、「计划任务」、「快速整理」三大自动化场景的：
+    1. 主路由表秒级命中与 PE 元数据三阶冲突仲裁；
+    2. 在线 AI 核心编排器接入 (AIService.classify_files_with_ai)；
+    3. 中转容器污染主动纠偏 (AuditCorrectionRecord)；
+    4. 分析完成即刻沉淀入全局拓扑主路由表；
+    5. 人为可操控的 AI 审查置信度与风险安全门禁。
     """
 
     @classmethod
-    def resolve_plan(
+    def resolve_assets_plan(
         cls,
-        rule: WatchRule,
+        source_type: str,
+        source_name: str,
+        source_path: str,
+        target_root: str,
+        organize_mode: str,
+        propose_only: bool,
         settled_files: List[Dict[str, Any]],
         now: float
     ) -> Tuple[ProposedPlan, bool]:
         """
-        全量解析已沉淀文件集，生成携带 AI 纠偏诊断的 ProposedPlan，
-        并返回是否因安全审查机制强制转为仅提议 (enforce_propose_only)。
-
+        统一多态资产方案解析与 AI 编排审查核心方法
         Returns:
-            Tuple[ProposedPlan, bool]: (候选方案对象, 是否触发安全拦截转为提议)
+            Tuple[ProposedPlan, bool]: (候选方案对象, 是否触发安全拦截强制转为提议)
         """
-        target_root = rule.target_dir or "D:/归档备份"
-        mode_val = rule.organize_mode or "comprehensive"
+        dest_root = target_root or "D:/归档备份"
+        mode_val = organize_mode or "comprehensive"
         try:
             mode_enum = OrganizeMode(mode_val)
         except Exception:
             mode_enum = OrganizeMode.COMPREHENSIVE
 
-        options = OrganizeOptions(mode=mode_enum)
+        audit_policy = AIAuditPolicyConfig.get_instance()
+        options = OrganizeOptions(
+            mode=mode_enum,
+            min_confidence=audit_policy.confidence_threshold if audit_policy.enabled else 0.75,
+            custom_instructions=audit_policy.custom_instruction_prompt or ""
+        )
 
         # 1. 优先调用在线 AI 核心编排器，无模型或异常时安全平滑降级至本地拓扑引擎
         llm_cfg = app_config.get("llm", default={})
@@ -76,26 +91,31 @@ class AutomationPlanResolver:
 
         if api_key and base_url and model and settled_files:
             try:
-                app_logger.info("自动化中心: 启动在线 AI 核心编排器为 %d 个沉淀资产制定归档方案...", len(settled_files))
+                app_logger.info(
+                    "自动化中心 [%s-%s]: 启动在线 AI 核心编排器为 %d 个资产制定归档方案...",
+                    source_type, source_name, len(settled_files)
+                )
                 groups = AIService.classify_files_with_ai(
                     base_url=base_url,
                     api_key=api_key,
                     model=model,
                     file_items=settled_files,
-                    destination_root=target_root,
+                    destination_root=dest_root,
                     options=options
                 )
                 if groups:
                     is_ai_powered = True
-                    app_logger.info("自动化中心: AI 核心编排成功完成，提炼出 %d 个聚合单元", len(groups))
+                    app_logger.info(
+                        "自动化中心 [%s-%s]: AI 核心编排成功完成，提炼出 %d 个聚合单元",
+                        source_type, source_name, len(groups)
+                    )
             except Exception as e:
                 app_logger.warning("自动化中心在线 AI 分类异常，平滑降级至离线拓扑引擎: %s", e)
 
         if not groups:
-            groups = AppDetector.group_files_by_parent_or_tool(settled_files, target_root, options)
+            groups = AppDetector.group_files_by_parent_or_tool(settled_files, dest_root, options)
 
         # 2. 结合主路由表、元数据仲裁与 AI 审查策略执行全量审查与纠偏
-        audit_policy = AIAuditPolicyConfig.get_instance()
         routing_table = TopologyRoutingTable.instance()
 
         correction_records: List[AuditCorrectionRecord] = []
@@ -108,7 +128,7 @@ class AutomationPlanResolver:
             group["high_value_metadata"] = pe_meta
             group_name = group.get("name") or group.get("app_name") or ""
             candidate_name = pe_meta.get("software_name") or group_name
-            orig_root = group.get("original_root") or rule.watch_path
+            orig_root = group.get("original_root") or source_path
             is_dir = bool(group.get("is_directory_group", False))
 
             # 2.1 主冲突仲裁器判定 (原则一：主路由表为主 + 元数据仲裁)
@@ -136,11 +156,10 @@ class AutomationPlanResolver:
             if correction:
                 correction_records.append(correction)
                 is_plan_corrected = True
-                # 标记该组为 AI 审查/纠偏源，赋予沉淀凭证
                 group["source"] = "AI (主动纠偏)"
-                # 若为剥离中转名或元数据纠偏，更新组内推荐路径与分类
+                group["action"] = "已纠偏"
+                group["correction_record"] = correction.to_dict()
                 if correction.correction_type == "STRIP_STAGING":
-                    # 强力剥离中转名
                     old_sub = str(group.get("recommended_subpath") or group.get("target_subpath") or "")
                     parts = [p for p in old_sub.replace("\\", "/").split("/") if p and not routing_table.should_strip_from_target(p)]
                     cleaned_sub = "/".join(parts)
@@ -162,6 +181,24 @@ class AutomationPlanResolver:
                     if matched_rule.target_subpath_template:
                         group["recommended_subpath"] = matched_rule.target_subpath_template
                         group["target_subpath"] = matched_rule.target_subpath_template
+                    if matched_rule.provenance == KnowledgeProvenance.USER_CONFIRMED:
+                        group["confidence"] = 1.0
+                        group["risk_level"] = "低风险"
+                        group["require_confirmation"] = False
+                        group["rationale"] = f"命中用户锁定主路由规则 (P1): {matched_rule.pattern}"
+
+            # 同步重算标准化归档目标路径 target_root
+            eff_cat = group.get("effective_category") or group.get("suggested_category") or ""
+            eff_sub = group.get("recommended_subpath") or group.get("target_subpath") or ""
+            if eff_cat:
+                dest_obj = ArchiveDestinationPath.build(
+                    dest_root=dest_root,
+                    category=eff_cat,
+                    subpath=eff_sub,
+                    entity_name=Path(orig_root).name if orig_root else candidate_name,
+                    is_dir=is_dir
+                )
+                group["target_root"] = str(dest_obj.path)
 
             # 2.4 人为可操控的 AI 审查安全门禁 (原则五)
             if audit_policy.enabled:
@@ -170,7 +207,7 @@ class AutomationPlanResolver:
                 if confidence < audit_policy.confidence_threshold:
                     enforce_propose_only = True
                     downgrade_reasons.append(
-                        f"资产 [{candidate_name}] AI置信度 ({confidence:.2f}) 低于安全阈值 ({audit_policy.confidence_threshold:.2f})"
+                        f"资产 [{candidate_name}] 置信度 ({confidence:.2f}) 低于安全阈值 ({audit_policy.confidence_threshold:.2f})"
                     )
                 elif risk in ["高风险", "需人工确认"]:
                     enforce_propose_only = True
@@ -182,22 +219,27 @@ class AutomationPlanResolver:
             min_confidence=audit_policy.confidence_threshold
         )
         if precipitated_count > 0:
-            app_logger.info("自动化中心: 分析完成即刻自沉淀 %d 条新规则至全局主路由表", precipitated_count)
+            app_logger.info("自动化中心 [%s-%s]: 分析完成即刻自沉淀 %d 条新规则至全局主路由表", source_type, source_name, precipitated_count)
 
         total_bytes = sum(f.get("size", 0) for f in settled_files)
-
         plan_origin = "AI 核心编排" if is_ai_powered else "规则引擎"
-        notes = f"监控规则 [{rule.name}] 捕获到 {len(settled_files)} 个稳定文件，已由 {plan_origin} 生成整理候选计划"
+        scene_label = {
+            "rule_monitor": f"监控规则 [{source_name}]",
+            "scheduled_task": f"计划任务 [{source_name}]",
+            "quick_organize": f"快速整理 [{source_name}]"
+        }.get(source_type, f"[{source_name}]")
+
+        notes = f"{scene_label} 捕获到 {len(settled_files)} 个资产文件，已由 {plan_origin} 生成整理候选计划"
         if is_plan_corrected:
             notes += f" (已由 AI 实施主动纠偏: 共 {len(correction_records)} 项)"
-        if enforce_propose_only and not rule.propose_only:
+        if enforce_propose_only and not propose_only:
             notes += " [🛡️ 触发 AI 审查安全门禁: 转为人工审核提案]"
 
         plan = ProposedPlan(
-            source_type="rule_monitor",
-            source_name=rule.name,
-            source_path=rule.watch_path,
-            target_root=target_root,
+            source_type=source_type,
+            source_name=source_name,
+            source_path=source_path,
+            target_root=dest_root,
             created_at=now,
             file_count=len(settled_files),
             total_bytes=total_bytes,
@@ -209,3 +251,64 @@ class AutomationPlanResolver:
         )
 
         return plan, enforce_propose_only
+
+    @classmethod
+    def resolve_plan(
+        cls,
+        rule: WatchRule,
+        settled_files: List[Dict[str, Any]],
+        now: float
+    ) -> Tuple[ProposedPlan, bool]:
+        """规则监控场景方案解析"""
+        return cls.resolve_assets_plan(
+            source_type="rule_monitor",
+            source_name=rule.name,
+            source_path=rule.watch_path,
+            target_root=rule.target_dir or "D:/归档备份",
+            organize_mode=rule.organize_mode or "comprehensive",
+            propose_only=rule.propose_only,
+            settled_files=settled_files,
+            now=now
+        )
+
+    @classmethod
+    def resolve_scheduled_task_plan(
+        cls,
+        task: ScheduledTask,
+        scanned_files: List[Dict[str, Any]],
+        now: float
+    ) -> Tuple[ProposedPlan, bool]:
+        """计划任务场景方案解析"""
+        return cls.resolve_assets_plan(
+            source_type="scheduled_task",
+            source_name=task.name,
+            source_path=task.target_path,
+            target_root=task.target_dir or "D:/归档备份",
+            organize_mode=task.organize_mode or "comprehensive",
+            propose_only=task.propose_only,
+            settled_files=scanned_files,
+            now=now
+        )
+
+    @classmethod
+    def resolve_quick_organize_plan(
+        cls,
+        title: str,
+        target_dir: str,
+        dest_root: str,
+        scanned_files: List[Dict[str, Any]],
+        organize_mode: str = "comprehensive"
+    ) -> ProposedPlan:
+        """快速整理场景方案解析"""
+        import time
+        plan, _ = cls.resolve_assets_plan(
+            source_type="quick_organize",
+            source_name=title,
+            source_path=target_dir,
+            target_root=dest_root or "D:/归档备份",
+            organize_mode=organize_mode,
+            propose_only=True,
+            settled_files=scanned_files,
+            now=time.time()
+        )
+        return plan

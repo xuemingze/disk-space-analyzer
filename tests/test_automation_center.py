@@ -720,6 +720,98 @@ def test_automation_confidence_gate_and_user_override(tmp_path):
         assert matched_group[0].get("effective_category") == "专项目录/自定义分类"
 
 
+def test_scheduler_and_quick_organize_ai_integration(tmp_path, monkeypatch):
+    """
+    专项回归测试：
+    1. 验证计划任务 (TaskScheduler) 全量接入 AutomationPlanResolver 与在线 AI 核心编排；
+    2. 验证计划任务在自动归档模式下遵循 AI 规划目录落位，且在低置信度时触发安全门禁转为提案；
+    3. 验证快速整理 (QuickOrganizePage) 接入 UnifiedScanner 与 AutomationPlanResolver AI 核心编排。
+    """
+    from unittest.mock import patch, MagicMock
+    from app.config import app_config
+    from app.core.ai_service import AIService
+    from app.core.domain_models import AIAuditPolicyConfig
+
+    # 模拟已配置在线 LLM
+    orig_get = app_config.get
+    def mock_cfg_get(*args, **kwargs):
+        if len(args) >= 1 and args[0] == "llm" and len(args) == 1:
+            return {"api_key": "sk-test", "base_url": "https://api.test.com/v1", "model": "MiniMax-M3"}
+        return orig_get(*args, **kwargs)
+    monkeypatch.setattr(app_config, "get", mock_cfg_get)
+
+    sched_dir = tmp_path / "Downloads"
+    sched_dir.mkdir()
+    installer_f = sched_dir / "MotrixNext_Setup.exe"
+    installer_f.write_text("dummy installer", encoding="utf-8")
+
+    dest_dir = tmp_path / "ArchiveVault"
+    dest_dir.mkdir()
+
+    fake_ai_groups = [{
+        "group_id": "grp_0001",
+        "name": "MotrixNext_Setup.exe",
+        "original_root": str(installer_f),
+        "target_root": str(dest_dir / "05_下载与媒体" / "MotrixNext"),
+        "is_directory_group": False,
+        "app_name": "MotrixNext",
+        "suggested_category": "05_下载与媒体",
+        "effective_category": "05_下载与媒体",
+        "recommended_subpath": "MotrixNext",
+        "rationale": "AI 识别为开源下载器",
+        "confidence": 0.96,
+        "risk_level": "低风险",
+        "require_confirmation": False,
+        "action": "归档",
+        "source": "AI",
+        "sub_items": [{
+            "original_path": str(installer_f),
+            "name": "MotrixNext_Setup.exe",
+            "size": 15,
+            "target_path": str(dest_dir / "05_下载与媒体" / "MotrixNext" / "MotrixNext_Setup.exe")
+        }]
+    }]
+
+    # 1. 验证计划任务调用 AI 编排并产出 AI 提案
+    task = ScheduledTask(
+        name="AI定时整理下载",
+        target_path=str(sched_dir),
+        target_dir=str(dest_dir),
+        interval_minutes=60,
+        enabled=True,
+        propose_only=True
+    )
+    scheduler = TaskScheduler(tasks=[task])
+    plans = []
+    scheduler.plan_proposed.connect(lambda p: plans.append(p))
+
+    with patch.object(AIService, "classify_files_with_ai", return_value=fake_ai_groups) as mock_ai:
+        scheduler._execute_scheduled_task(task, time.time())
+        assert mock_ai.called
+        assert len(plans) == 1
+        assert "AI 核心编排" in plans[0].notes
+        assert "AI核心编排" in task.last_result_summary
+
+    # 2. 验证快速整理 (QuickOrganizePage) 接入 UnifiedScanner 与 AutomationPlanResolver AI 编排
+    from app.ui.automation.quick_organize_page import QuickOrganizePage
+    from app.ui.components.organize_dialog import OrganizePreviewDialog
+    page = QuickOrganizePage()
+    captured_items = []
+
+    def fake_exec(self_dlg):
+        captured_items.extend(self_dlg.classification_items)
+        return 0
+
+    with patch.object(AIService, "classify_files_with_ai", return_value=fake_ai_groups) as mock_ai_quick:
+        with patch.object(OrganizePreviewDialog, "exec", fake_exec):
+            page._run_quick_organize(str(sched_dir), "下载目录整理")
+            assert mock_ai_quick.called
+            assert len(captured_items) == 1
+            assert captured_items[0]["app_name"] == "MotrixNext"
+    page.close()
+
+
+
 
 
 

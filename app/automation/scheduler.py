@@ -3,8 +3,9 @@
 特点：
 1. 定时检查与调度计划任务；
 2. 周期性扫描目标目录并自动生成整理候选方案；
-3. 遵循安全准则：初期只生成整理计划/预览，绝不在用户不知情时自动移动文件；
-4. 记录每次执行状态、上次运行时间与下次触发时间。
+3. 统一接入 AutomationPlanResolver (主路由表优先、PE元数据仲裁、在线 AI 核心编排、主动纠偏与分析即沉淀)；
+4. 遵循安全准则：初期只生成整理计划/预览，或经由 AI 安全门禁审核后执行自动归档；
+5. 记录每次执行状态、上次运行时间与下次触发时间。
 """
 
 import os
@@ -15,6 +16,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.automation.models import ScheduledTask, ProposedPlan
 from app.automation.archive_executor import execute_safe_auto_archive
+from app.automation.plan_resolver import AutomationPlanResolver
 from app.core.unified_scanner import UnifiedScanner, AssetUnit
 from app.core.app_detector import AppDetector
 from app.core.organize_models import OrganizeOptions, OrganizeMode
@@ -93,7 +95,7 @@ class TaskScheduler(QThread):
         app_logger.info("自动化中心: 计划任务调度器已停止")
 
     def _execute_scheduled_task(self, task: ScheduledTask, now: float):
-        """执行具体的计划任务（扫描目标目录并生成提案）"""
+        """执行具体的计划任务（扫描目标目录并经由 AI 编排与主路由表生成提案或执行归档）"""
         target_dir = task.target_path
         if not target_dir or not os.path.isdir(target_dir):
             task.last_status = "目录不存在"
@@ -125,7 +127,8 @@ class TaskScheduler(QThread):
                     "category": asset.category,
                     "is_directory_collective": asset.is_collective,
                     "collective_info": asset.collective_info,
-                    "umbrella_anchor": asset.umbrella_anchor
+                    "umbrella_anchor": asset.umbrella_anchor,
+                    "metadata": asset.metadata
                 })
 
             if not scanned_files:
@@ -139,50 +142,47 @@ class TaskScheduler(QThread):
 
             dest_root = task.target_dir or "D:/归档备份"
 
-            if task.propose_only:
-                # 模式 1: 仅提议方案 (安全默认)
-                mode_val = task.organize_mode or "comprehensive"
-                try:
-                    mode_enum = OrganizeMode(mode_val)
-                except Exception:
-                    mode_enum = OrganizeMode.COMPREHENSIVE
+            # 统一委托 AutomationPlanResolver 执行主路由表匹配、PE元数据仲裁、在线 AI 核心编排、主动纠偏与分析即沉淀
+            plan, enforce_propose_only = AutomationPlanResolver.resolve_scheduled_task_plan(
+                task=task,
+                scanned_files=scanned_files,
+                now=now
+            )
+            is_ai_powered = "AI 核心编排" in (plan.notes or "")
 
-                options = OrganizeOptions(mode=mode_enum)
-                groups = AppDetector.group_files_by_parent_or_tool(scanned_files, dest_root, options)
-                total_bytes = sum(f.get("size", 0) for f in scanned_files)
+            # 若配置为仅提议，或在线 AI 审查门禁触发拦截（低置信度/高风险），则产出提案待人工确认
+            if task.propose_only or (is_ai_powered and enforce_propose_only):
+                if not task.propose_only and enforce_propose_only:
+                    task.last_status = "安全门禁转提案"
+                    task.last_result_summary = f"触发 AI 审查安全门禁，已转为人工审核提案 ({len(scanned_files)} 项)"
+                    self.log_emitted.emit(
+                        f"🛡️ 计划任务 [{task.name}] 触发 AI 审查安全门禁，已转为待确认提案",
+                        "warn"
+                    )
+                else:
+                    task.last_status = "已生成提案"
+                    origin_tag = "AI核心编排" if is_ai_powered else "拓扑规则"
+                    task.last_result_summary = f"成功生成方案 ({origin_tag}): 包含 {len(scanned_files)} 个文件，待用户确认"
+                    prefix = "🤖" if is_ai_powered else "🎯"
+                    self.log_emitted.emit(
+                        f"{prefix} 计划任务 [{task.name}] 已由 {origin_tag} 生成整理提案 (共 {len(scanned_files)} 个文件，待确认)",
+                        "success"
+                    )
 
-                # 生成提案
-                plan = ProposedPlan(
-                    source_type="scheduled_task",
-                    source_name=task.name,
-                    source_path=task.target_path,
-                    target_root=dest_root,
-                    created_at=now,
-                    file_count=len(scanned_files),
-                    total_bytes=total_bytes,
-                    proposed_groups=groups,
-                    status="pending",
-                    notes=f"计划任务 [{task.name}] 周期触发，提议 {len(scanned_files)} 个文件的整理计划待确认"
-                )
-
-                # 更新任务状态
-                task.last_status = "已生成提案"
                 task.last_run_time = now
                 task.next_run_time = now + task.interval_minutes * 60.0
-                task.last_result_summary = f"成功生成方案: 包含 {len(scanned_files)} 个文件，待用户确认"
-
                 self.task_updated.emit(task)
                 self.plan_proposed.emit(plan)
-                self.log_emitted.emit(f"🎯 计划任务 [{task.name}] 已成功生成整理提案 (共 {len(scanned_files)} 个文件，待确认)", "success")
             else:
-                # 模式 2: 自动归档平移 (需用户显式配置)
+                # 模式 2: 自动归档平移 (直接复用已通过 AI 编排与主路由表纠偏的 proposed_groups)
                 res = execute_safe_auto_archive(
                     files=scanned_files,
                     target_root=dest_root,
                     source_dir=task.target_path,
                     organize_mode=task.organize_mode or "comprehensive",
                     source_name=f"计划任务-{task.name}",
-                    log_callback=lambda msg, lvl: self.log_emitted.emit(msg, lvl)
+                    log_callback=lambda msg, lvl: self.log_emitted.emit(msg, lvl),
+                    proposed_groups=plan.proposed_groups
                 )
 
                 task.last_run_time = now

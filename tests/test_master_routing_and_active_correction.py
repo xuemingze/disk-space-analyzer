@@ -457,6 +457,7 @@ def test_routing_rule_edit_dialog_enum_coercion_and_refresh_table_no_crash(clean
     访问 r.morphology.value 抛出 AttributeError: 'str' object has no attribute 'value' 的崩溃。
     """
     table, _ = clean_topology_table
+    from PySide6.QtCore import Qt
     from app.ui.automation.ai_audit_routing_page import AiAuditRoutingPage
     from app.ui.components.routing_table_viewer import RoutingRuleEditDialog, RoutingTableViewerDialog
 
@@ -501,5 +502,78 @@ def test_routing_rule_edit_dialog_enum_coercion_and_refresh_table_no_crash(clean
     assert viewer.table.item(0, 1).text() == "独立资产"
     viewer.close()
     dlg.close()
+
+
+def test_master_routing_table_priority_and_updated_time_sorting(clean_topology_table):
+    """
+    专项回归测试：
+    验证 AI 审查页面与拓扑路由知识库对话框展示的主路由表严格按照：
+    1. 修改/溯源优先级排序: USER_CONFIRMED (P1) > AI_LEARNED (P2) > SYSTEM_BUILTIN (P3)；
+    2. 同一优先级内部按照最新修改时间 (updated_at) 降序排列。
+    """
+    table, _ = clean_topology_table
+    from PySide6.QtCore import Qt
+    from app.ui.automation.ai_audit_routing_page import AiAuditRoutingPage
+
+    # 故意以乱序插入不同优先级与不同修改时间的规则
+    r_builtin = MasterRoutingRule(
+        rule_id="b1",
+        pattern="builtin_tool.exe",
+        target_category="07_系统工具",
+        provenance=KnowledgeProvenance.SYSTEM_BUILTIN,
+        updated_at=5000.0
+    )
+    r_ai_old = MasterRoutingRule(
+        rule_id="a1",
+        pattern="ai_old_tool.exe",
+        target_category="05_下载与媒体",
+        provenance=KnowledgeProvenance.AI_LEARNED,
+        updated_at=2000.0
+    )
+    r_ai_new = MasterRoutingRule(
+        rule_id="a2",
+        pattern="ai_new_tool.exe",
+        target_category="05_下载与媒体",
+        provenance=KnowledgeProvenance.AI_LEARNED,
+        updated_at=4000.0
+    )
+    r_user_old = MasterRoutingRule(
+        rule_id="u1",
+        pattern="user_old_game.exe",
+        target_category="游戏娱乐",
+        provenance=KnowledgeProvenance.USER_CONFIRMED,
+        updated_at=1000.0
+    )
+    r_user_new = MasterRoutingRule(
+        rule_id="u2",
+        pattern="user_latest_game.exe",
+        target_category="游戏",
+        provenance=KnowledgeProvenance.USER_CONFIRMED,
+        updated_at=3000.0
+    )
+
+    table._master_rules["builtin_tool.exe"] = r_builtin
+    table._master_rules["ai_old_tool.exe"] = r_ai_old
+    table._master_rules["ai_new_tool.exe"] = r_ai_new
+    table._master_rules["user_old_game.exe"] = r_user_old
+    table._master_rules["user_latest_game.exe"] = r_user_new
+
+    sorted_rules = table.get_master_rules()
+    patterns_order = [r.pattern for r in sorted_rules]
+    assert patterns_order == [
+        "user_latest_game.exe",  # P1 (最新修改)
+        "user_old_game.exe",     # P1 (较早修改)
+        "ai_new_tool.exe",       # P2 (最新沉淀)
+        "ai_old_tool.exe",       # P2 (较早沉淀)
+        "builtin_tool.exe",      # P3 (系统内置)
+    ]
+
+    page = AiAuditRoutingPage()
+    page.refresh_table()
+    assert page.table.rowCount() == 5
+    ui_patterns = [page.table.item(i, 0).data(Qt.UserRole).pattern for i in range(5)]
+    assert ui_patterns == patterns_order
+    page.close()
+
 
 

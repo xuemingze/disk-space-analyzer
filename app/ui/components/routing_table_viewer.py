@@ -621,6 +621,9 @@ class RoutingTableViewerDialog(QDialog):
                     continue
             filtered_rules.append(r)
 
+        # 严格按照修改优先级 (USER_CONFIRMED P1 > AI_LEARNED P2 > SYSTEM_BUILTIN P3) 与最新修改时间降序排列
+        filtered_rules.sort(key=lambda item: item.priority_sort_key())
+
         self.lbl_stats.setText(
             f"主规则总计: <b>{len(rules)}</b> 条 (当前筛选呈现: {len(filtered_rules)} 条) | "
             f"<span style='color: #F59E0B;'>用户锁定: {user_conf_count}</span> | "

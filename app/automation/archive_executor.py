@@ -28,7 +28,8 @@ def execute_safe_auto_archive(
     source_name: str = "自动化归档",
     conflict_policy: str = "auto_rename",
     min_cooldown_seconds: float = 0.0,
-    log_callback: Optional[Callable[[str, str], None]] = None
+    log_callback: Optional[Callable[[str, str], None]] = None,
+    proposed_groups: Optional[List[Dict[str, Any]]] = None
 ) -> Dict[str, Any]:
     """
     执行高安全保底的自动归档平移：
@@ -79,22 +80,57 @@ def execute_safe_auto_archive(
         _log(f"❌ 写入归档清单失败: {e}", "error")
         return {"success": False, "error": str(e), "success_count": 0, "manifest_path": ""}
 
-    # 2. 规划组织拓扑结构
-    try:
-        mode_enum = OrganizeMode(organize_mode)
-    except Exception:
-        mode_enum = OrganizeMode.COMPREHENSIVE
+    # 2. 规划组织拓扑结构（优先直接采用上游 AI 编排与主路由表仲裁后的 proposed_groups）
+    if proposed_groups is not None:
+        groups = proposed_groups
+    else:
+        try:
+            mode_enum = OrganizeMode(organize_mode)
+        except Exception:
+            mode_enum = OrganizeMode.COMPREHENSIVE
 
-    options = OrganizeOptions(mode=mode_enum)
-    groups = AppDetector.group_files_by_parent_or_tool(files, target_root, options)
+        options = OrganizeOptions(mode=mode_enum)
+        groups = AppDetector.group_files_by_parent_or_tool(files, target_root, options)
 
     # 扁平化映射: source_file_path -> dest_dir
     file_target_map: Dict[str, str] = {}
     for g in groups:
-        cat_name = g.get("target_folder") or g.get("category") or "未分类"
-        cat_dir = os.path.join(target_root, cat_name)
+        cat_name = (
+            g.get("effective_category")
+            or g.get("suggested_category")
+            or g.get("target_folder")
+            or g.get("category")
+            or "未分类"
+        )
+        rec_sub = str(g.get("recommended_subpath") or g.get("target_subpath") or "").strip("/\\")
+        if g.get("target_root") and not g.get("is_directory_group", False):
+            # 单文件组 target_root 可能是建议目标目录或文件完整路径
+            tr_p = Path(g["target_root"])
+            cat_dir = str(tr_p.parent) if tr_p.suffix else str(tr_p)
+        elif g.get("target_root") and g.get("is_directory_group", False):
+            cat_dir = str(g["target_root"])
+        elif rec_sub:
+            cat_dir = os.path.join(target_root, cat_name, rec_sub)
+        else:
+            cat_dir = os.path.join(target_root, cat_name)
+
         for f in g.get("files", []):
-            file_target_map[os.path.normpath(f.get("path", ""))] = cat_dir
+            fpath_val = f.get("path") or f.get("original_path") or ""
+            if fpath_val:
+                file_target_map[os.path.normpath(fpath_val)] = cat_dir
+
+        for sub in g.get("sub_items", []):
+            orig_p_str = sub.get("original_path") or sub.get("path") or ""
+            if orig_p_str:
+                if sub.get("target_path"):
+                    file_target_map[os.path.normpath(orig_p_str)] = str(Path(sub["target_path"]).parent)
+                else:
+                    file_target_map[os.path.normpath(orig_p_str)] = cat_dir
+
+        if g.get("original_root"):
+            orig_root_norm = os.path.normpath(g["original_root"])
+            if orig_root_norm not in file_target_map:
+                file_target_map[orig_root_norm] = cat_dir
 
     success_count = 0
     locked_count = 0

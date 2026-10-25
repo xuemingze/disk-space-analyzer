@@ -295,7 +295,8 @@ class RuleWatcher(QThread):
             source_dir=rule.watch_path,
             organize_mode=rule.organize_mode or "comprehensive",
             source_name=f"规则监控-{rule.name}",
-            log_callback=lambda msg, lvl: self.log_emitted.emit(msg, lvl)
+            log_callback=lambda msg, lvl: self.log_emitted.emit(msg, lvl),
+            proposed_groups=plan.proposed_groups
         )
         for p in res.get("success_paths", []):
             self.record_system_action(p)

@@ -19,6 +19,8 @@ from PySide6.QtCore import Qt
 
 from app.automation.quick_organizer import QuickOrganizeManager
 from app.automation.models import QuickPreset
+from app.automation.plan_resolver import AutomationPlanResolver
+from app.core.unified_scanner import UnifiedScanner
 from app.core.app_detector import AppDetector
 from app.core.organize_models import OrganizeOptions, OrganizeMode
 from app.ui.components.organize_dialog import OrganizePreviewDialog
@@ -161,25 +163,32 @@ class QuickOrganizePage(QWidget):
             input_widget.setText(d)
 
     def _run_quick_organize(self, target_dir: str, title: str):
-        """执行快速分析并弹出预览审核对话框"""
+        """执行快速分析（接入 UnifiedScanner + AutomationPlanResolver AI 核心编排与主动纠偏）并弹出预览审核对话框"""
         if not target_dir or not os.path.exists(target_dir):
             QMessageBox.warning(self, "提示", f"指定的目录不存在: {target_dir}")
             return
 
-        scanned_files = []
+        scanned_files: List[Dict[str, Any]] = []
         try:
-            with os.scandir(target_dir) as it:
-                for entry in it:
-                    if entry.is_file():
-                        stat = entry.stat()
-                        scanned_files.append({
-                            "path": entry.path,
-                            "name": entry.name,
-                            "size": stat.st_size,
-                            "mtime": stat.st_mtime,
-                            "ext": os.path.splitext(entry.name)[1].lower(),
-                            "category": "其他"
-                        })
+            assets = UnifiedScanner.scan_directory(
+                root_paths=[target_dir],
+                prune_collectives=True,
+                skip_system_protected=True,
+                max_depth=3
+            )
+            for asset in assets:
+                scanned_files.append({
+                    "path": asset.path,
+                    "name": asset.name,
+                    "size": asset.size,
+                    "mtime": asset.mtime,
+                    "ext": asset.ext,
+                    "category": asset.category,
+                    "is_directory_collective": asset.is_collective,
+                    "collective_info": asset.collective_info,
+                    "umbrella_anchor": asset.umbrella_anchor,
+                    "metadata": asset.metadata
+                })
         except Exception as e:
             QMessageBox.critical(self, "扫描异常", f"扫描目录发生错误: {e}")
             return
@@ -189,11 +198,16 @@ class QuickOrganizePage(QWidget):
             return
 
         dest_root = "D:/归档备份"
-        options = OrganizeOptions(mode=OrganizeMode.COMPREHENSIVE)
-        groups = AppDetector.group_files_by_parent_or_tool(scanned_files, dest_root, options)
+        plan = AutomationPlanResolver.resolve_quick_organize_plan(
+            title=title,
+            target_dir=target_dir,
+            dest_root=dest_root,
+            scanned_files=scanned_files,
+            organize_mode="comprehensive"
+        )
 
         dlg = OrganizePreviewDialog(
-            classification_items=groups,
+            classification_items=plan.proposed_groups,
             destination_root=dest_root,
             conflict_policy="auto_rename",
             allow_execute=True,

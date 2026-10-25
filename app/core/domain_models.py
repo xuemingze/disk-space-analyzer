@@ -556,6 +556,15 @@ class KnowledgeProvenance(str, Enum):
     AI_LEARNED = "AI_LEARNED"                    # P2: AI 决策分析完成即时沉淀提炼，可覆盖系统预置
     SYSTEM_BUILTIN = "SYSTEM_BUILTIN"            # P3: 系统初始内置兜底，最低优先级
 
+    @property
+    def priority_rank(self) -> int:
+        """返回排序优先级权重 (数值越小优先级越高: P1=0, P2=1, P3=2)"""
+        if self == KnowledgeProvenance.USER_CONFIRMED:
+            return 0
+        if self == KnowledgeProvenance.AI_LEARNED:
+            return 1
+        return 2
+
 
 @dataclass
 class MasterRoutingRule:
@@ -593,6 +602,22 @@ class MasterRoutingRule:
                 self.provenance = KnowledgeProvenance(str(self.provenance))
             except ValueError:
                 self.provenance = KnowledgeProvenance.SYSTEM_BUILTIN
+
+    def priority_sort_key(self) -> Tuple[int, float, int, str]:
+        """
+        主路由表展示与检索优先级排序键：
+        1. 修改/溯源优先级: USER_CONFIRMED (P1=0) > AI_LEARNED (P2=1) > SYSTEM_BUILTIN (P3=2)
+        2. 最新修改时间倒序: -updated_at (最近修改/沉淀的规则置顶)
+        3. 命中频次倒序: -hit_count
+        4. 模式名升序: pattern.lower()
+        """
+        prov_rank = self.provenance.priority_rank if isinstance(self.provenance, KnowledgeProvenance) else 2
+        return (
+            prov_rank,
+            -float(self.updated_at or 0.0),
+            -int(self.hit_count or 0),
+            str(self.pattern or "").lower()
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1371,8 +1396,9 @@ class TopologyRoutingTable:
                 return 0, 0
 
     def get_master_rules(self) -> List[MasterRoutingRule]:
+        """返回按修改优先级 (USER_CONFIRMED > AI_LEARNED > SYSTEM_BUILTIN) 及最新修改时间倒序排列的主路由规则列表"""
         with self._lock:
-            return list(self._master_rules.values())
+            return sorted(self._master_rules.values(), key=lambda r: r.priority_sort_key())
 
     def delete_master_rule(self, pattern_or_id: str) -> bool:
         with self._lock:
